@@ -3,6 +3,7 @@ package com.glide.app
 import android.content.Intent
 import android.content.res.Configuration
 import android.os.Build
+import android.os.Bundle
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnabled
@@ -11,6 +12,14 @@ import com.facebook.react.bridge.ReactContext
 import com.glide.app.pip.PipModule
 
 class MainActivity : ReactActivity() {
+
+  /**
+   * Reset theme from SplashTheme to AppTheme once React Native loads
+   */
+  override fun onCreate(savedInstanceState: Bundle?) {
+    setTheme(R.style.AppTheme)
+    super.onCreate(savedInstanceState)
+  }
 
   /**
    * Returns the name of the main component registered from JavaScript. This is used to schedule

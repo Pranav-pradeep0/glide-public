@@ -1,14 +1,12 @@
-name: Android CI/CD (React Native - Split + Universal)
+name: Android CI/CD
 
-# Ensure token has the right permission to create releases
 permissions:
   contents: write
 
 on:
-  workflow_dispatch:   # allow manual runs from Actions -> Run workflow
+  workflow_dispatch:
   push:
     branches: [main, develop]
-  pull_request:
 
 jobs:
   build-android:
@@ -18,27 +16,47 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for proper versioning
+
+      - name: Get version and build info
+        id: build_info
+        run: |
+          # Get version from package.json
+          VERSION=$(node -p "require('./package.json').version")
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          BRANCH="${{ github.ref_name }}"
+          BUILD_DATE=$(date +'%Y-%m-%d')
+          
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+          echo "build_date=$BUILD_DATE" >> $GITHUB_OUTPUT
+          echo "tag=v${VERSION}-build.${{ github.run_number }}" >> $GITHUB_OUTPUT
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'npm'
 
       - name: Install JS dependencies
         run: npm ci --legacy-peer-deps
 
-      - name: Create .env file for Secrets
+      - name: Create .env file
         run: |
-          echo "SUBDL_API_KEY=${{ secrets.SUBDL_API_KEY }}" > .env
-          echo "SUBDL_API_URL=${{ secrets.SUBDL_API_URL }}" >> .env
-          echo "SUBDL_DOWNLOAD_URL=${{ secrets.SUBDL_DOWNLOAD_URL }}" >> .env
-          echo "OMDB_API_KEY=${{ secrets.OMDB_API_KEY }}" >> .env
-          echo "OMDB_API_URL=${{ secrets.OMDB_API_URL }}" >> .env
-          echo "GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}" >> .env
-          echo "GROQ_API_URL=${{ secrets.GROQ_API_URL }}" >> .env
-          echo "GROQ_CHAT_API_URL=${{ secrets.GROQ_CHAT_API_URL }}" >> .env
-          echo "STALLION_PROJECT_ID=${{ secrets.STALLION_PROJECT_ID }}" >> .env
-          echo "STALLION_APP_TOKEN=${{ secrets.STALLION_APP_TOKEN }}" >> .env
+          cat << EOF > .env
+          SUBDL_API_KEY=${{ secrets.SUBDL_API_KEY }}
+          SUBDL_API_URL=${{ secrets.SUBDL_API_URL }}
+          SUBDL_DOWNLOAD_URL=${{ secrets.SUBDL_DOWNLOAD_URL }}
+          OMDB_API_KEY=${{ secrets.OMDB_API_KEY }}
+          OMDB_API_URL=${{ secrets.OMDB_API_URL }}
+          GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}
+          GROQ_API_URL=${{ secrets.GROQ_API_URL }}
+          GROQ_CHAT_API_URL=${{ secrets.GROQ_CHAT_API_URL }}
+          STALLION_PROJECT_ID=${{ secrets.STALLION_PROJECT_ID }}
+          STALLION_APP_TOKEN=${{ secrets.STALLION_APP_TOKEN }}
+          EOF
 
       - name: Setup JDK 17
         uses: actions/setup-java@v4
@@ -47,7 +65,7 @@ jobs:
           java-version: 17
           cache: gradle
 
-      - name: Cache Gradle files
+      - name: Cache Gradle
         uses: actions/cache@v4
         with:
           path: |
@@ -56,91 +74,85 @@ jobs:
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: ${{ runner.os }}-gradle-
 
-      - name: Make Gradlew executable
-        run: chmod +x android/gradlew
-
-      - name: Build Android Release (Split + Universal + AAB)
+      - name: Build APKs
         working-directory: android
         run: |
-          ./gradlew clean
-          ./gradlew assembleRelease || true
-          ./gradlew bundleRelease || true
+          chmod +x gradlew
+          ./gradlew clean assembleRelease
 
-      - name: Collect build outputs
+      - name: Rename APKs
+        id: rename_apks
         run: |
-          mkdir -p build_artifacts
-          if [ -f android/app/build/outputs/bundle/release/app-release.aab ]; then
-            cp android/app/build/outputs/bundle/release/app-release.aab build_artifacts/ || true
+          VERSION="${{ steps.build_info.outputs.version }}"
+          APK_DIR="android/app/build/outputs/apk/release"
+          
+          ARM_SRC="$APK_DIR/app-armeabi-v7a-release.apk"
+          ARM64_SRC="$APK_DIR/app-arm64-v8a-release.apk"
+          
+          ARM_DEST="$APK_DIR/Glide-v${VERSION}-arm.apk"
+          ARM64_DEST="$APK_DIR/Glide-v${VERSION}-arm64.apk"
+          
+          if [ -f "$ARM_SRC" ]; then
+            mv "$ARM_SRC" "$ARM_DEST"
+            echo "arm_path=$ARM_DEST" >> $GITHUB_OUTPUT
+            echo "arm_name=Glide-v${VERSION}-arm.apk" >> $GITHUB_OUTPUT
+            echo "arm_exists=true" >> $GITHUB_OUTPUT
           fi
-          if compgen -G "android/app/build/outputs/apk/release/*.apk" > /dev/null; then
-            cp android/app/build/outputs/apk/release/*.apk build_artifacts/ || true
+          
+          if [ -f "$ARM64_SRC" ]; then
+            mv "$ARM64_SRC" "$ARM64_DEST"
+            echo "arm64_path=$ARM64_DEST" >> $GITHUB_OUTPUT
+            echo "arm64_name=Glide-v${VERSION}-arm64.apk" >> $GITHUB_OUTPUT
+            echo "arm64_exists=true" >> $GITHUB_OUTPUT
           fi
-          if [ -f android/app/build/outputs/apk/release/app-universal-release.apk ]; then
-            cp android/app/build/outputs/apk/release/app-universal-release.apk build_artifacts/ || true
-          fi
-          cd build_artifacts || exit 0
-          zip -r ../build-artifacts-${{ github.run_id }}.zip ./* || true
-          cd ..
-          ls -lha
 
-      - name: Check artifacts exist
-        id: check_artifacts
+      - name: Get commit message
+        id: commit_msg
         run: |
-          ZIP_FILE="./build-artifacts-${{ github.run_id }}.zip"
-          AAB_FILE="android/app/build/outputs/bundle/release/app-release.aab"
-          ZIP_EXISTS=false
-          AAB_EXISTS=false
-          if [ -f "$ZIP_FILE" ]; then ZIP_EXISTS=true; fi
-          if [ -f "$AAB_FILE" ]; then AAB_EXISTS=true; fi
-          echo "zip_exists=$ZIP_EXISTS" >> $GITHUB_OUTPUT
-          echo "aab_exists=$AAB_EXISTS" >> $GITHUB_OUTPUT
-          echo "zip: $ZIP_FILE exists? $ZIP_EXISTS"
-          echo "aab: $AAB_FILE exists? $AAB_EXISTS"
+          MSG=$(git log -1 --pretty=%B)
+          echo "message<<EOF" >> $GITHUB_OUTPUT
+          echo "$MSG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
-      # Release steps: run on push OR manual workflow_dispatch (skip for PRs/forks)
-      - name: Create CI Release (push or manual run)
+      - name: Create Release
         if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         id: create_release
         uses: actions/create-release@v1
         with:
-          tag_name: "ci-${{ github.run_id }}"
-          release_name: "CI Build ${{ github.run_id }} (${{ github.ref_name || github.ref }})"
+          tag_name: ${{ steps.build_info.outputs.tag }}
+          release_name: Glide ${{ steps.build_info.outputs.version }} (Build ${{ github.run_number }})
           body: |
-            Automated CI build
-            Repository: ${{ github.repository }}
-            Ref: ${{ github.ref }}
-            Run: ${{ github.run_id }}
-            Workflow: ${{ github.workflow }}
+            ${{ steps.commit_msg.outputs.message }}
+            
+            ---
+            **Build Info**
+            - Version: `${{ steps.build_info.outputs.version }}`
+            - Branch: `${{ steps.build_info.outputs.branch }}`
+            - Commit: `${{ steps.build_info.outputs.short_sha }}`
+            - Date: `${{ steps.build_info.outputs.build_date }}`
           draft: false
           prerelease: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload ZIP to Release (if exists)
-        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.check_artifacts.outputs.zip_exists == 'true' }}
+      - name: Upload ARM APK
+        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.rename_apks.outputs.arm_exists == 'true' }}
         uses: actions/upload-release-asset@v1
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./build-artifacts-${{ github.run_id }}.zip
-          asset_name: build-artifacts-${{ github.run_id }}.zip
-          asset_content_type: application/zip
+          asset_path: ${{ steps.rename_apks.outputs.arm_path }}
+          asset_name: ${{ steps.rename_apks.outputs.arm_name }}
+          asset_content_type: application/vnd.android.package-archive
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload raw AAB to Release (if exists)
-        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.check_artifacts.outputs.aab_exists == 'true' }}
+      - name: Upload ARM64 APK
+        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.rename_apks.outputs.arm64_exists == 'true' }}
         uses: actions/upload-release-asset@v1
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: android/app/build/outputs/bundle/release/app-release.aab
-          asset_name: app-release-${{ github.run_id }}.aab
-          asset_content_type: application/octet-stream
+          asset_path: ${{ steps.rename_apks.outputs.arm64_path }}
+          asset_name: ${{ steps.rename_apks.outputs.arm64_name }}
+          asset_content_type: application/vnd.android.package-archive
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Cleanup runner files
-        if: ${{ always() }}
-        run: |
-          rm -rf build_artifacts || true
-          rm -f build-artifacts-${{ github.run_id }}.zip || true
-          

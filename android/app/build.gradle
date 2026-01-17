@@ -4,6 +4,16 @@ apply plugin: "com.facebook.react"
 // Apply react-native-config plugin
 apply from: project(':react-native-config').projectDir.getPath() + "/dotenv.gradle"
 import java.net.URL
+// Read version from package.json (single source of truth)
+def getVersionFromPackageJson() {
+    def packageJsonFile = file("../../package.json")
+    def packageJsonText = packageJsonFile.text
+    def matcher = packageJsonText =~ /"version"\s*:\s*"([^"]+)"/
+    if (matcher.find()) {
+        return matcher.group(1)
+    }
+    return "0.0.0"
+}
 
 project.ext.vectoricons = [
     iconFontNames: [ 'Feather.ttf' ] // Name of the font files you want to copy
@@ -96,7 +106,7 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
-        versionName "1.0"
+        versionName getVersionFromPackageJson()
         
         // Inject Stallion keys from env
         resValue "string", "StallionProjectId", project.env.get("STALLION_PROJECT_ID")

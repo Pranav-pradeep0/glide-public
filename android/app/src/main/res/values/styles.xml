@@ -14,4 +14,10 @@
         <item name="android:navigationBarDividerColor">@android:color/transparent</item>
     </style>
 
+    <!-- Splash theme for cold start - shows dark background immediately -->
+    <style name="SplashTheme" parent="AppTheme">
+        <item name="android:windowBackground">@drawable/splash_background</item>
+    </style>
+
 </resources>
+
