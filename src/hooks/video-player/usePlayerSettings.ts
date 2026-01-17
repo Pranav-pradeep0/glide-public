@@ -47,7 +47,7 @@ const initialSettings: PlayerSettings = {
     subtitleDelay: 0,
 
     // Subtitle defaults
-    subtitleFontSize: 22,
+    subtitleFontSize: 20,
     subtitleColor: '#FFFFFF',
     subtitleFontWeight: 600, // Semi-bold default
     subtitleOutlineWidth: 2, // Default outline width

@@ -53,6 +53,7 @@ interface UsePlayerCoreOptions {
     sleepTimer?: number | null;
     onSleepTimerEnd?: () => void;
     onProgressSave?: () => void;
+    initialPaused?: boolean;
 }
 
 // ============================================================================
@@ -82,6 +83,7 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
         sleepTimer = null,
         onSleepTimerEnd,
         onProgressSave,
+        initialPaused = false
     } = options;
 
     // ========================================================================
@@ -110,7 +112,10 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
     // STATE
     // ========================================================================
 
-    const [state, setState] = useState<PlayerState>(initialPlayerState);
+    const [state, setState] = useState<PlayerState>({
+        ...initialPlayerState,
+        paused: initialPaused
+    });
 
     // ========================================================================
     // SHARED VALUES (for gesture worklets)

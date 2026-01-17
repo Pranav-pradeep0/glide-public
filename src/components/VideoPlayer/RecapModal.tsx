@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
     StyleSheet,
     View,
@@ -6,30 +6,138 @@ import {
     Modal,
     TouchableOpacity,
     ScrollView,
-    useWindowDimensions,
+    Dimensions,
 } from 'react-native';
 import { BlurView } from '@react-native-community/blur';
 import Feather from '@react-native-vector-icons/feather';
-import Animated, { FadeIn, FadeInDown, Layout } from 'react-native-reanimated';
+import Animated, {
+    FadeIn,
+    FadeInDown,
+    useAnimatedStyle,
+    useSharedValue,
+    withRepeat,
+    withTiming,
+    Easing,
+    interpolate,
+} from 'react-native-reanimated';
 import { RecapIcon } from './PlayerIcons';
 
 interface RecapModalProps {
     visible: boolean;
     onClose: () => void;
-    recapText: string;
+    recapText: string | null; // null means loading
     videoName: string;
+    isLoading?: boolean;
+    loadingMessage?: string;
 }
+
+// Get dimensions synchronously for initial render
+const getInitialDimensions = () => {
+    const { width, height } = Dimensions.get('window');
+    return { width, height, isLandscape: width > height };
+};
+
+// Skeleton line component with pulsating animation
+const SkeletonLine: React.FC<{ widthPercent: number; delay?: number }> = ({ widthPercent, delay = 0 }) => {
+    const pulse = useSharedValue(0);
+
+    useEffect(() => {
+        pulse.value = withRepeat(
+            withTiming(1, { duration: 1200, easing: Easing.inOut(Easing.ease) }),
+            -1,
+            true
+        );
+    }, []);
+
+    const animatedStyle = useAnimatedStyle(() => {
+        const opacity = interpolate(pulse.value, [0, 1], [0.3, 0.7]);
+        return { opacity };
+    });
+
+    return (
+        <Animated.View
+            style={[
+                styles.skeletonLine,
+                { width: `${widthPercent}%` as any },
+                animatedStyle
+            ]}
+        />
+    );
+};
+
+// Loading skeleton content
+const LoadingSkeleton: React.FC<{ message?: string }> = ({ message }) => {
+    return (
+        <View style={styles.skeletonContainer}>
+            {message && (
+                <Animated.Text
+                    entering={FadeIn}
+                    style={styles.loadingMessage}
+                >
+                    {message}
+                </Animated.Text>
+            )}
+            <View style={styles.skeletonContent}>
+                <SkeletonLine widthPercent={100} />
+                <SkeletonLine widthPercent={95} delay={100} />
+                <SkeletonLine widthPercent={88} delay={200} />
+                <SkeletonLine widthPercent={92} delay={300} />
+                <SkeletonLine widthPercent={60} delay={400} />
+            </View>
+        </View>
+    );
+};
 
 export const RecapModal: React.FC<RecapModalProps> = ({
     visible,
     onClose,
     recapText,
     videoName,
+    isLoading = false,
+    loadingMessage,
 }) => {
-    const { width, height } = useWindowDimensions();
-    const isLandscape = width > height;
+    // Use state to track dimensions and update on change
+    const [dimensions, setDimensions] = useState(getInitialDimensions);
+    const [isReady, setIsReady] = useState(false);
+
+    // Listen for dimension changes
+    useEffect(() => {
+        const subscription = Dimensions.addEventListener('change', ({ window }) => {
+            setDimensions({
+                width: window.width,
+                height: window.height,
+                isLandscape: window.width > window.height
+            });
+        });
+
+        return () => subscription?.remove();
+    }, []);
+
+    // Reset ready state when visibility changes, and set ready after a micro-task
+    // This ensures we have correct dimensions before animating
+    useEffect(() => {
+        if (visible) {
+            // Get fresh dimensions when modal opens
+            const fresh = getInitialDimensions();
+            setDimensions(fresh);
+            // Use requestAnimationFrame to wait for layout
+            requestAnimationFrame(() => {
+                setIsReady(true);
+            });
+        } else {
+            setIsReady(false);
+        }
+    }, [visible]);
+
+    const { width, height, isLandscape } = dimensions;
+    const showLoading = isLoading || recapText === null;
 
     if (!visible) return null;
+
+    // Calculate responsive dimensions
+    const contentWidth = isLandscape ? Math.min(width * 0.7, 600) : Math.min(width * 0.85, 500);
+    const contentMaxHeight = isLandscape ? height * 0.8 : height * 0.7;
+    const scrollMaxHeight = isLandscape ? height * 0.4 : 300;
 
     return (
         <Modal
@@ -37,7 +145,7 @@ export const RecapModal: React.FC<RecapModalProps> = ({
             statusBarTranslucent
             navigationBarTranslucent
             visible={visible}
-            animationType="fade"
+            animationType="none" // We handle animation ourselves
             onRequestClose={onClose}
         >
             <View style={styles.container}>
@@ -48,51 +156,69 @@ export const RecapModal: React.FC<RecapModalProps> = ({
                     reducedTransparencyFallbackColor="black"
                 />
 
-                <Animated.View
-                    entering={FadeInDown.springify()}
-                    style={[
-                        styles.content,
-                        {
-                            width: isLandscape ? Math.min(width * 0.7, 600) : Math.min(width * 0.85, 500),
-                            maxHeight: isLandscape ? height * 0.8 : height * 0.7
-                        }
-                    ]}
-                >
-                    <View style={styles.header}>
-                        <View style={styles.titleRow}>
-                            <View style={styles.iconContainer}>
-                                <RecapIcon size={20} color="#FFF" active={true} />
+                {isReady && (
+                    <Animated.View
+                        entering={FadeInDown.springify().damping(20)}
+                        style={[
+                            styles.content,
+                            {
+                                width: contentWidth,
+                                maxHeight: contentMaxHeight
+                            }
+                        ]}
+                    >
+                        <View style={styles.header}>
+                            <View style={styles.titleRow}>
+                                <View style={styles.iconContainer}>
+                                    <RecapIcon size={20} color="#FFF" active={true} />
+                                </View>
+                                <Text style={styles.title} numberOfLines={1}>{videoName}</Text>
                             </View>
-                            <Text style={styles.title} numberOfLines={1}>{videoName}</Text>
+                            <TouchableOpacity onPress={onClose} style={styles.closeButton}>
+                                <Feather name="x" size={24} color="#FFF" />
+                            </TouchableOpacity>
                         </View>
-                        <TouchableOpacity onPress={onClose} style={styles.closeButton}>
-                            <Feather name="x" size={24} color="#FFF" />
+
+                        <ScrollView
+                            style={[
+                                styles.scrollContainer,
+                                { maxHeight: scrollMaxHeight }
+                            ]}
+                            contentContainerStyle={styles.scrollContent}
+                            showsVerticalScrollIndicator={false}
+                        >
+                            {showLoading ? (
+                                <LoadingSkeleton message={loadingMessage} />
+                            ) : (
+                                <Animated.Text
+                                    entering={FadeIn.duration(300)}
+                                    style={styles.recapText}
+                                >
+                                    {recapText}
+                                </Animated.Text>
+                            )}
+                        </ScrollView>
+
+                        <TouchableOpacity
+                            onPress={onClose}
+                            activeOpacity={0.8}
+                            disabled={showLoading}
+                            style={[
+                                styles.resumeButton,
+                                isLandscape && { marginTop: 16, height: 48 },
+                                showLoading && styles.resumeButtonDisabled
+                            ]}
+                        >
+                            <Text style={[
+                                styles.resumeButtonText,
+                                showLoading && styles.resumeButtonTextDisabled
+                            ]}>
+                                {showLoading ? 'Generating Recap...' : 'Resume Playback'}
+                            </Text>
+                            {!showLoading && <Feather name="play" size={16} color="#000" />}
                         </TouchableOpacity>
-                    </View>
-
-                    <ScrollView
-                        style={[
-                            styles.scrollContainer,
-                            { maxHeight: isLandscape ? height * 0.4 : 300 }
-                        ]}
-                        contentContainerStyle={styles.scrollContent}
-                        showsVerticalScrollIndicator={false}
-                    >
-                        <Text style={styles.recapText}>{recapText}</Text>
-                    </ScrollView>
-
-                    <TouchableOpacity
-                        onPress={onClose}
-                        activeOpacity={0.8}
-                        style={[
-                            styles.resumeButton,
-                            isLandscape && { marginTop: 16, height: 48 }
-                        ]}
-                    >
-                        <Text style={styles.resumeButtonText}>Resume Playback</Text>
-                        <Feather name="play" size={16} color="#000" />
-                    </TouchableOpacity>
-                </Animated.View>
+                    </Animated.View>
+                )}
             </View>
         </Modal>
     );
@@ -168,9 +294,34 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         gap: 10,
     },
+    resumeButtonDisabled: {
+        backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    },
     resumeButtonText: {
         color: '#000',
         fontSize: 16,
         fontWeight: '700',
+    },
+    resumeButtonTextDisabled: {
+        color: 'rgba(255, 255, 255, 0.7)',
+    },
+    // Skeleton styles
+    skeletonContainer: {
+        paddingVertical: 8,
+    },
+    loadingMessage: {
+        color: 'rgba(255, 255, 255, 0.6)',
+        fontSize: 14,
+        marginBottom: 16,
+        textAlign: 'center',
+        fontStyle: 'italic',
+    },
+    skeletonContent: {
+        gap: 12,
+    },
+    skeletonLine: {
+        height: 16,
+        borderRadius: 8,
+        backgroundColor: 'rgba(255, 255, 255, 0.15)',
     },
 });

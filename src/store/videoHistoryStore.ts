@@ -160,7 +160,6 @@ export const useVideoHistoryStore = create<VideoHistoryState>((set, get) => ({
                     selectedAudioTrackId: audioTrackId,
                     selectedSubtitleTrackId: subtitleTrackIndex,
                     audioDelay: audioDelay,
-                    audioDelay: audioDelay,
                     subtitleDelay: subtitleDelay,
                     brightness: brightness,
                 });
@@ -175,7 +174,6 @@ export const useVideoHistoryStore = create<VideoHistoryState>((set, get) => ({
                     bookmarks: [],
                     selectedAudioTrackId: audioTrackId,
                     selectedSubtitleTrackId: subtitleTrackIndex,
-                    audioDelay: audioDelay,
                     audioDelay: audioDelay,
                     subtitleDelay: subtitleDelay,
                     brightness: brightness,

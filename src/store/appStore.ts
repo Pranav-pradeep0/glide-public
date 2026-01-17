@@ -42,7 +42,7 @@ export const useAppStore = create<AppStore>((set) => ({
         darkMode: false,
         hapticSettings: DEFAULT_HAPTIC_SETTINGS,
         autoDownloadSubtitles: true,
-        subtitleFontSize: 22,
+        subtitleFontSize: 20,
         subtitleColor: '#FFFFFF',
         subtitleFontWeight: 600,
         subtitleOutlineWidth: 2,
@@ -118,7 +118,7 @@ export const useAppStore = create<AppStore>((set) => ({
         set((state) => ({
             settings: {
                 ...state.settings,
-                subtitleFontSize: 22,
+                subtitleFontSize: 20,
                 subtitleColor: '#FFFFFF',
                 subtitleFontWeight: 600,
                 subtitleOutlineWidth: 2,

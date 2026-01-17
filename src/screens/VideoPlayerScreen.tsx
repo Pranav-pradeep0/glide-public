@@ -62,6 +62,7 @@ import {
 import { useHapticFeedback } from '@/hooks/useHapticFeedback';
 import { useTheme } from '@/hooks/useTheme';
 import { useAlbumVideos } from '@/hooks/useMediaService';
+import { findMatchingSubtitleTrack } from '@/utils/languages';
 
 // Services and stores
 import { VideoOrientationService } from '@/services/VideoOrientationService';
@@ -197,8 +198,7 @@ export default function VideoPlayerScreen({ route }: Props) {
     const [recapVisible, setRecapVisible] = React.useState(false);
     const [recapText, setRecapText] = React.useState<string | null>(null);
     const [isGeneratingRecap, setIsGeneratingRecap] = React.useState(false);
-
-    const [resumeModalVisible, setResumeModalVisible] = React.useState(false);
+    const [recapLoadingMessage, setRecapLoadingMessage] = React.useState<string | undefined>(undefined);
 
     const handleToggleOrientationLock = useCallback(() => {
         if (orientationLocked) {
@@ -267,6 +267,13 @@ export default function VideoPlayerScreen({ route }: Props) {
         return initialVideoBrightness;
     }, [settings.brightnessMode, settings.globalBrightness, initialVideoBrightness]);
 
+    // Calculate resume state upfront to avoid flash
+    const shouldResume = useMemo(() => {
+        return !!(resumePosition && resumePosition > 15);
+    }, [resumePosition]);
+
+    const [resumeModalVisible, setResumeModalVisible] = React.useState(shouldResume);
+
     // ========================================================================
     // PLAYER HOOKS (ORDER MATTERS - dependencies flow down)
     // ========================================================================
@@ -296,6 +303,7 @@ export default function VideoPlayerScreen({ route }: Props) {
         onAudioTracksLoaded: (tracks) => {
             (tracksHook as any).setAudioTracksFromVLC?.(tracks);
         },
+        initialPaused: shouldResume,
     });
 
     // PIP Mode State from native listener
@@ -308,6 +316,13 @@ export default function VideoPlayerScreen({ route }: Props) {
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isInPipMode]);
+
+    // Pause player immediately if it starts playing while resume modal is visible
+    useEffect(() => {
+        if (resumeModalVisible && player.state.isPlaying) {
+            player.pause();
+        }
+    }, [resumeModalVisible, player.state.isPlaying, player]);
 
 
 
@@ -332,8 +347,8 @@ export default function VideoPlayerScreen({ route }: Props) {
         videoPath,
         currentTimeRef: player.currentTimeRef,
         routeHapticCues,
-        initialAudioTrackId: undefined, // Maybe persisted later?
-        initialSubtitleTrackIndex: undefined,
+        initialAudioTrackId: initialAudioTrackId,
+        initialSubtitleTrackIndex: initialSubtitleTrackIndex,
         subtitleDelay: settingsHook.settings.subtitleDelay,
         defaultAudioLanguage: settings.defaultAudioLanguage,
     });
@@ -704,56 +719,190 @@ export default function VideoPlayerScreen({ route }: Props) {
         }, 500);
     }, [player, settings.autoPlayNext, hasNext, handleNext]);
 
-    // AI Recap Logic
+    // AI Recap Logic - shows modal immediately with skeleton loading
+    // Use a ref to get fresh subtitle cues during polling
+    const subtitleCuesRef = useRef(tracksHook.subtitleCues);
+    subtitleCuesRef.current = tracksHook.subtitleCues;
+
+    const subtitleTracksRef = useRef(tracksHook.subtitleTracks);
+    subtitleTracksRef.current = tracksHook.subtitleTracks;
+
     const handleRecapTrigger = useCallback(async () => {
+        // If we already have recap text, just show it
         if (recapText) {
             player.pause();
+            setResumeModalVisible(false);
             setRecapVisible(true);
             return;
         }
 
         if (!resumePosition) return;
 
-        // If cues aren't loaded yet but tracks exist, we might need to wait or inform the user
-        if (!tracksHook.subtitleCues.length) {
-            if (tracksHook.subtitleTracks.length > 0) {
-                bookmarksHook.showToastWithMessage('Analyzing dialogue... please try again in a moment', 'info');
-                return;
+        // Pause player and show RecapModal immediately with loading state
+        player.pause();
+        setResumeModalVisible(false);
+        setRecapVisible(true);
+        setIsGeneratingRecap(true);
+
+        // Helper function to wait for cues with polling
+        const waitForCues = async (maxWaitMs: number, intervalMs: number = 500): Promise<boolean> => {
+            const startTime = Date.now();
+
+            while (Date.now() - startTime < maxWaitMs) {
+                // Check fresh values from refs
+                if (subtitleCuesRef.current.length > 0) {
+                    return true;
+                }
+
+                // Update loading message based on progress
+                const elapsed = Date.now() - startTime;
+                if (elapsed < 3000) {
+                    setRecapLoadingMessage('Extracting dialogue from subtitles...');
+                } else if (elapsed < 6000) {
+                    setRecapLoadingMessage('Still analyzing...');
+                } else {
+                    setRecapLoadingMessage('Almost there...');
+                }
+
+                await new Promise(resolve => setTimeout(resolve, intervalMs));
             }
-            bookmarksHook.showToastWithMessage('Recap unavailable: No dialogue found', 'info');
-            return;
+
+            return subtitleCuesRef.current.length > 0;
+        };
+
+        // If cues aren't loaded yet, wait with polling
+        if (!subtitleCuesRef.current.length) {
+            if (subtitleTracksRef.current.length > 0) {
+                // Tracks exist, wait for cue extraction (up to 10 seconds)
+                const cuesLoaded = await waitForCues(10000);
+
+                if (!cuesLoaded) {
+                    setRecapText(null);
+                    setRecapVisible(false);
+                    setIsGeneratingRecap(false);
+                    setRecapLoadingMessage(undefined);
+                    bookmarksHook.showToastWithMessage('Subtitle extraction taking too long - please try again', 'info');
+                    return;
+                }
+            } else {
+                // No tracks yet - wait a bit for FFprobe to find them
+                setRecapLoadingMessage('Scanning for subtitles...');
+                await new Promise(resolve => setTimeout(resolve, 3000));
+
+                // Check if tracks appeared
+                if (subtitleTracksRef.current.length === 0) {
+                    setRecapText(null);
+                    setRecapVisible(false);
+                    setIsGeneratingRecap(false);
+                    setRecapLoadingMessage(undefined);
+                    bookmarksHook.showToastWithMessage('Recap unavailable: No subtitles found in video', 'info');
+                    return;
+                }
+
+                // Tracks found, now wait for cues
+                const cuesLoaded = await waitForCues(8000);
+                if (!cuesLoaded) {
+                    setRecapText(null);
+                    setRecapVisible(false);
+                    setIsGeneratingRecap(false);
+                    setRecapLoadingMessage(undefined);
+                    bookmarksHook.showToastWithMessage('Could not extract dialogue - please try again', 'info');
+                    return;
+                }
+            }
         }
 
         try {
-            player.pause();
-            setIsGeneratingRecap(true);
-            const dialogue = RecapService.getRecentDialogue(tracksHook.subtitleCues, resumePosition);
+            setRecapLoadingMessage('Analyzing recent dialogue...');
+            const dialogue = RecapService.getRecentDialogue(subtitleCuesRef.current, resumePosition);
             if (!dialogue) {
+                setRecapText(null);
+                setRecapVisible(false);
+                setIsGeneratingRecap(false);
+                setRecapLoadingMessage(undefined);
                 bookmarksHook.showToastWithMessage('Not enough dialogue for a recap', 'info');
                 return;
             }
 
+            setRecapLoadingMessage('Generating your recap...');
             const summary = await RecapService.generateRecap(dialogue, cleanTitle || videoName);
             if (summary) {
                 setRecapText(summary);
-                setRecapVisible(true);
+                setRecapLoadingMessage(undefined);
             } else {
+                setRecapText(null);
+                setRecapVisible(false);
+                setRecapLoadingMessage(undefined);
                 bookmarksHook.showToastWithMessage('Recap generation failed', 'error');
             }
         } catch (error) {
             console.error('[VideoPlayerScreen] Recap error:', error);
+            setRecapText(null);
+            setRecapVisible(false);
+            setRecapLoadingMessage(undefined);
+            bookmarksHook.showToastWithMessage('Recap generation error', 'error');
         } finally {
             setIsGeneratingRecap(false);
         }
-    }, [recapText, tracksHook.subtitleCues, resumePosition, bookmarksHook]);
+    }, [recapText, resumePosition, bookmarksHook, player, cleanTitle, videoName]);
 
-    // Auto-check for recap availability on mount/resume
+    // Auto-select subtitle track for recap preparation when resume modal is visible
+    // Prefers English subtitles for better recap quality, falls back to first available
+    // Also handles case where track is restored from history but cues need to be loaded
+    const cueLoadAttemptedRef = React.useRef(false);
+
     useEffect(() => {
-        if (resumePosition && resumePosition > 120 && (imdbId || albumName)) {
-            // No longer checking subtitleCues.length here to allow earlier preparation if needed
-            // The button visibility is now tied to subtitleTracks in the ResumeModal
+        // Reset the flag when modal is hidden
+        if (!resumeModalVisible) {
+            cueLoadAttemptedRef.current = false;
+            return;
         }
-    }, [resumePosition, imdbId, albumName, tracksHook.subtitleTracks, recapText, isGeneratingRecap]);
+
+        // Skip if no tracks available
+        if (tracksHook.subtitleTracks.length === 0) {
+            return;
+        }
+
+        // Cues already loaded - nothing to do
+        if (tracksHook.subtitleCues.length > 0) {
+            return;
+        }
+
+        // Don't re-attempt if we already tried once (prevents infinite loop)
+        if (cueLoadAttemptedRef.current) {
+            return;
+        }
+
+        cueLoadAttemptedRef.current = true;
+
+        // If no track selected yet, auto-select one (prefer English)
+        if (tracksHook.selectedSubtitleTrackIndex === null) {
+            const englishTrackIndex = findMatchingSubtitleTrack(tracksHook.subtitleTracks, 'English');
+
+            if (englishTrackIndex !== undefined) {
+                if (__DEV__) {
+                    console.log('[VideoPlayerScreen] Auto-selecting English subtitle track for recap:', englishTrackIndex);
+                }
+                tracksHook.selectSubtitleTrack(englishTrackIndex);
+            } else {
+                // Fallback to first available track
+                const firstTrack = tracksHook.subtitleTracks[0];
+                if (firstTrack) {
+                    if (__DEV__) {
+                        console.log('[VideoPlayerScreen] No English subtitle found, selecting first track for recap:', firstTrack.index);
+                    }
+                    tracksHook.selectSubtitleTrack(firstTrack.index);
+                }
+            }
+        } else {
+            // Track is selected (likely from history) but cues not loaded yet
+            // Re-trigger the track selection to force cue loading
+            if (__DEV__) {
+                console.log('[VideoPlayerScreen] Re-selecting subtitle track to load cues:', tracksHook.selectedSubtitleTrackIndex);
+            }
+            tracksHook.selectSubtitleTrack(tracksHook.selectedSubtitleTrackIndex);
+        }
+    }, [resumeModalVisible, tracksHook.selectedSubtitleTrackIndex, tracksHook.subtitleTracks, tracksHook.subtitleCues, tracksHook.selectSubtitleTrack]);
 
     // Inactivity Prompt Logic
     useEffect(() => {
@@ -776,26 +925,17 @@ export default function VideoPlayerScreen({ route }: Props) {
         }
     }, [player.state.paused, resumeModalVisible, recapVisible, player]);
 
-    // Show resume modal on mount if progress exists
-    useEffect(() => {
-        if (resumePosition && resumePosition > 15) {
-            // Small delay to ensure player is initialized and can be paused if needed
-            const timer = setTimeout(() => {
-                setResumeModalVisible(true);
-                player.pause();
-            }, 500);
-            return () => clearTimeout(timer);
-        }
-    }, [resumePosition]);
-
     const handleResumeModalAction = useCallback((action: 'resume' | 'restart' | 'recap') => {
-        setResumeModalVisible(false);
         if (action === 'resume') {
+            setResumeModalVisible(false);
             player.play();
         } else if (action === 'restart') {
+            setResumeModalVisible(false);
             player.seekImmediate(0);
             player.play();
         } else if (action === 'recap') {
+            // Don't close modal yet - handleRecapTrigger will show RecapModal or toast
+            // Modal will be hidden when recap is successful or on close button
             handleRecapTrigger();
         }
     }, [player, handleRecapTrigger]);
@@ -925,7 +1065,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                     decoder={settingsHook.settings.decoder}
                     paused={player.state.paused}
                     rate={hud.state.speed.rate}
-                    muted={settingsHook.settings.muted}
+                    muted={settingsHook.settings.muted || resumeModalVisible}
                     repeat={settingsHook.settings.repeat}
                     resizeMode={settingsHook.settings.resizeMode}
                     playInBackground={settingsHook.settings.backgroundPlayEnabled || isInPipMode}
@@ -950,6 +1090,17 @@ export default function VideoPlayerScreen({ route }: Props) {
                     onSeek={player.handleSeek}
                 />
             </GestureDetector>
+
+            {/* Black overlay to hide video when resume modal is visible */}
+            {resumeModalVisible && (
+                <View
+                    style={[
+                        StyleSheet.absoluteFill,
+                        { backgroundColor: '#000', zIndex: 0 }
+                    ]}
+                    pointerEvents="none"
+                />
+            )}
 
             {/* Floating Sync Panel */}
             {syncPanelType && (
@@ -1202,9 +1353,16 @@ export default function VideoPlayerScreen({ route }: Props) {
             <View style={styles.modalPortalWrapper} pointerEvents="box-none">
                 <RecapModal
                     visible={recapVisible}
-                    onClose={() => setRecapVisible(false)}
-                    recapText={recapText || ''}
+                    onClose={() => {
+                        setRecapVisible(false);
+                        setIsGeneratingRecap(false);
+                        setRecapLoadingMessage(undefined);
+                        player.play(); // Resume video playback
+                    }}
+                    recapText={recapText}
                     videoName={cleanTitle || albumName || videoName}
+                    isLoading={isGeneratingRecap}
+                    loadingMessage={recapLoadingMessage}
                 />
             </View>
 
@@ -1215,7 +1373,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                     videoName={videoName}
                     resumeTime={resumePosition || 0}
                     formattedResumeTime={formatTime(resumePosition || 0)}
-                    showRecapOption={!!resumePosition && resumePosition > 120 && (!!imdbId || !!albumName) && (tracksHook.subtitleTracks.length > 0 || tracksHook.subtitleCues.length > 0)}
+                    showRecapOption={!!resumePosition && resumePosition > 120 && (!!imdbId || !!albumName)}
                     isGeneratingRecap={isGeneratingRecap}
                     onResume={() => handleResumeModalAction('resume')}
                     onRestart={() => handleResumeModalAction('restart')}

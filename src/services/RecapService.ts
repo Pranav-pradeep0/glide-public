@@ -45,7 +45,15 @@ export class RecapService {
      * Summarizes the dialogue using Groq Llama 3.
      */
     static async generateRecap(dialogue: string, videoTitle?: string): Promise<string | null> {
-        if (!dialogue || !GROQ_API_KEY) return null;
+        if (!dialogue) {
+            console.warn('[RecapService] No dialogue provided');
+            return null;
+        }
+
+        if (!GROQ_API_KEY) {
+            console.error('[RecapService] GROQ_API_KEY is not configured. Please add it to your .env file.');
+            return null;
+        }
 
         try {
             const contextInput = videoTitle ? `Movie/Show Title: "${videoTitle}"\n\n` : '';
@@ -80,7 +88,7 @@ GUIDELINES:
                         'Authorization': `Bearer ${GROQ_API_KEY}`,
                         'Content-Type': 'application/json',
                     },
-                    timeout: 10000, // 10s timeout
+                    timeout: 15000, // 15s timeout for slower networks
                 }
             );
 
@@ -88,7 +96,16 @@ GUIDELINES:
             return recap || null;
         } catch (error) {
             if (axios.isAxiosError(error)) {
-                console.error('[RecapService] API Error:', error.response?.status, error.response?.data);
+                if (error.response) {
+                    // Server responded with error status
+                    console.error('[RecapService] API Error:', error.response.status, error.response.data);
+                } else if (error.request) {
+                    // Request was made but no response received (network error)
+                    console.error('[RecapService] Network Error: No response from server. Check internet connection.');
+                } else {
+                    // Error setting up the request
+                    console.error('[RecapService] Request Error:', error.message);
+                }
             } else {
                 console.error('[RecapService] Unexpected Error:', error);
             }
