@@ -1,0 +1,9 @@
+pluginManagement { includeBuild("../node_modules/@react-native/gradle-plugin") }
+plugins { id("com.facebook.react.settings") }
+extensions.configure(com.facebook.react.ReactSettingsExtension){ ex -> ex.autolinkLibrariesFromCommand() }
+rootProject.name = 'Glide'
+include ':app'
+include ':ffmpeg-lib'
+include ':react-native-simple-thumbnail'
+project(':react-native-simple-thumbnail').projectDir = new File(rootProject.projectDir, '../libs/react-native-simple-thumbnail/android')
+includeBuild('../node_modules/@react-native/gradle-plugin')

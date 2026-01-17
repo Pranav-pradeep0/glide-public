@@ -1,0 +1,367 @@
+/**
+ * usePlayerTracks Hook
+ * 
+ * Manages audio and subtitle track selection, subtitle cue parsing,
+ * and external subtitle handling.
+ */
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { SubtitleParser } from '@/utils/SubtitleParser';
+import { SubtitleExtractor, SubtitleTrack } from '@/utils/SubtitleExtractor';
+import { SubtitleCue } from '@/types';
+import {
+    NativeAudioTrack,
+    ExternalSubtitle,
+    UsePlayerTracksOptions,
+    UsePlayerTracksReturn,
+} from './types';
+import { findMatchingAudioTrack } from '@/utils/languages';
+
+// ============================================================================
+// TYPES
+// ============================================================================
+
+interface UsePlayerTracksOptions {
+    videoPath: string;
+    currentTimeRef: React.MutableRefObject<number>;
+
+    routeHapticCues?: SubtitleCue[];
+    initialAudioTrackId?: number;
+    initialSubtitleTrackIndex?: number;
+
+    subtitleDelay?: number; // in milliseconds
+    defaultAudioLanguage?: string | null;
+}
+
+// ============================================================================
+// HOOK
+// ============================================================================
+
+/**
+ * Hook for managing audio and subtitle tracks.
+ * 
+ * Features:
+ * - Audio track loading from VLC
+ * - Embedded subtitle track extraction via FFmpeg
+ * - External subtitle file loading
+ * - API subtitle support
+ * - Current cue tracking for display
+ * - SDH cues for haptic feedback
+ */
+export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTracksReturn {
+    const { videoPath, currentTimeRef, routeHapticCues, initialAudioTrackId, initialSubtitleTrackIndex, subtitleDelay = 0, defaultAudioLanguage } = options;
+
+    // ========================================================================
+    // STATE
+    // ========================================================================
+
+    // Audio
+    const [audioTracks, setAudioTracks] = useState<NativeAudioTrack[]>([]);
+    const [selectedAudioTrackId, setSelectedAudioTrackId] = useState<number | undefined>(initialAudioTrackId);
+
+    // Sync initial audio track when it becomes available (hydration)
+    useEffect(() => {
+        if (initialAudioTrackId !== undefined && selectedAudioTrackId === undefined) {
+            setSelectedAudioTrackId(initialAudioTrackId);
+        }
+    }, [initialAudioTrackId]);
+
+    // Subtitles
+    const [subtitleTracks, setSubtitleTracks] = useState<SubtitleTrack[]>([]);
+    const [selectedSubtitleTrackIndex, setSelectedSubtitleTrackIndex] = useState<number | null>(initialSubtitleTrackIndex ?? null);
+
+    // Sync initial subtitle track when it becomes available (hydration)
+    useEffect(() => {
+        if (initialSubtitleTrackIndex !== undefined && selectedSubtitleTrackIndex === null) {
+            setSelectedSubtitleTrackIndex(initialSubtitleTrackIndex);
+        }
+    }, [initialSubtitleTrackIndex]);
+
+    const [subtitleCues, setSubtitleCues] = useState<SubtitleCue[]>([]);
+    const [currentSubtitleCue, setCurrentSubtitleCue] = useState<SubtitleCue | null>(null);
+
+    // External subtitles
+    const [externalSubtitles, setExternalSubtitles] = useState<ExternalSubtitle[]>([]);
+    const [currentExternalName, setCurrentExternalName] = useState<string | null>(null);
+
+    // Haptic cues
+    const [hapticCues, setHapticCues] = useState<SubtitleCue[]>(routeHapticCues || []);
+
+    // Refs
+    const extractedSubtitlePathRef = useRef<string | null>(null);
+
+    // ========================================================================
+    // AUDIO TRACK HANDLING
+    // ========================================================================
+
+    /**
+     * Set audio tracks from VLC onLoad event.
+     * Called by parent component when VLC reports available tracks.
+     */
+    const setAudioTracksFromVLC = useCallback((tracks: NativeAudioTrack[]) => {
+        setAudioTracks(tracks);
+        // Select first track by default if not already selected AND no initial selection was provided
+        // (If initialAudioTrackId was provided, selectedAudioTrackId is already set to it)
+        if (selectedAudioTrackId === undefined && tracks.length > 0) {
+            // Check for preferred language using smart matching
+            if (defaultAudioLanguage) {
+                const matchedTrackId = findMatchingAudioTrack(tracks, defaultAudioLanguage);
+                if (matchedTrackId !== undefined) {
+                    if (__DEV__) console.log('[usePlayerTracks] Auto-selecting audio track:', matchedTrackId, 'for preference:', defaultAudioLanguage);
+                    setSelectedAudioTrackId(matchedTrackId);
+                    return;
+                }
+            }
+
+            // Fallback to first track
+            setSelectedAudioTrackId(tracks[0].id);
+        }
+    }, [selectedAudioTrackId, defaultAudioLanguage]);
+
+    const selectAudioTrack = useCallback((trackId: number | null) => {
+        setSelectedAudioTrackId(trackId === null ? undefined : trackId);
+        if (__DEV__) {
+            console.log('[usePlayerTracks] Audio track selected:', trackId);
+        }
+    }, []);
+
+    // ========================================================================
+    // EMBEDDED SUBTITLE HANDLING
+    // ========================================================================
+
+    // Load embedded subtitle tracks on mount
+    useEffect(() => {
+        let mounted = true;
+
+        const loadSubtitleTracks = async () => {
+            try {
+                const tracks = await SubtitleExtractor.getSubtitleTracks(videoPath);
+                if (mounted && tracks.length > 0) {
+                    setSubtitleTracks(tracks);
+                    if (__DEV__) {
+                        console.log('[usePlayerTracks] Extracted subtitle tracks:', tracks.length);
+                    }
+                }
+            } catch (error) {
+                if (__DEV__) {
+                    console.error('[usePlayerTracks] Failed to load subtitle tracks:', error);
+                }
+            }
+        };
+
+        loadSubtitleTracks();
+
+        return () => {
+            mounted = false;
+        };
+    }, [videoPath]);
+
+    // Extract and parse selected subtitle track
+    useEffect(() => {
+        let mounted = true;
+
+        const extractSubtitle = async () => {
+            // No subtitle selected
+            if (selectedSubtitleTrackIndex === null) {
+                setSubtitleCues([]);
+                setCurrentSubtitleCue(null);
+                return;
+            }
+
+            // External subtitle (special index -999)
+            if (selectedSubtitleTrackIndex === -999) {
+                // Cues already set by loadExternalCues
+                return;
+            }
+
+            try {
+                const extractedPath = await SubtitleExtractor.extractSubtitle(
+                    videoPath,
+                    selectedSubtitleTrackIndex,
+                    'srt'
+                );
+
+                if (!extractedPath || !mounted) return;
+
+                extractedSubtitlePathRef.current = extractedPath;
+
+                const content = await SubtitleExtractor.readSubtitleFile(extractedPath);
+                if (!content || !mounted) return;
+
+                const cues = SubtitleParser.parse(content, 'srt');
+                if (mounted) {
+                    setSubtitleCues(cues);
+                    if (__DEV__) {
+                        console.log(`[usePlayerTracks] Subtitle loaded: ${cues.length} cues`);
+                    }
+                }
+            } catch (error) {
+                if (__DEV__) {
+                    console.error('[usePlayerTracks] Failed to extract/parse subtitle:', error);
+                }
+                if (mounted) {
+                    setSubtitleCues([]);
+                    setCurrentSubtitleCue(null);
+                }
+            }
+        };
+
+        extractSubtitle();
+
+        return () => {
+            mounted = false;
+        };
+    }, [selectedSubtitleTrackIndex, videoPath]);
+
+    // Track current subtitle cue based on playback time
+    useEffect(() => {
+        if (subtitleCues.length === 0) {
+            setCurrentSubtitleCue(null);
+            return;
+        }
+
+        const interval = setInterval(() => {
+            // Apply subtitle delay offset (convert ms to seconds)
+            const effectiveTime = currentTimeRef.current - (subtitleDelay / 1000);
+
+            const cue = SubtitleParser.findActiveCue(subtitleCues, effectiveTime);
+            setCurrentSubtitleCue(prevCue => {
+                // Only update if cue actually changed
+                if (prevCue?.text === cue?.text && prevCue?.startTime === cue?.startTime) {
+                    return prevCue;
+                }
+                return cue;
+            });
+        }, 250); // 4x/sec is sufficient for subtitle display, saves battery
+
+        return () => clearInterval(interval);
+    }, [subtitleCues, currentTimeRef, subtitleDelay]);
+
+    // Cleanup extracted subtitle files on unmount
+    useEffect(() => {
+        return () => {
+            SubtitleExtractor.cleanupSubtitleFiles().catch((err: any) => {
+                if (__DEV__) console.warn('[usePlayerTracks] Failed to cleanup subtitles:', err);
+            });
+        };
+    }, []);
+
+    const selectSubtitleTrack = useCallback((trackIndex: number | null) => {
+        setSelectedSubtitleTrackIndex(trackIndex);
+        // Clear external name if selecting embedded track
+        if (trackIndex !== -999) {
+            setCurrentExternalName(null);
+        }
+        if (__DEV__) {
+            console.log('[usePlayerTracks] Subtitle track selected:', trackIndex);
+        }
+    }, []);
+
+    // ========================================================================
+    // EXTERNAL SUBTITLE HANDLING
+    // ========================================================================
+
+    /**
+     * Load external subtitle cues (from file picker or API download).
+     */
+    const loadExternalCues = useCallback((cues: SubtitleCue[], name: string, isSDH: boolean) => {
+        if (!cues || cues.length === 0) return;
+
+        // Set as current display subtitle
+        setSubtitleCues(cues);
+        setSelectedSubtitleTrackIndex(-999); // Special index for external
+        setCurrentExternalName(name);
+
+        // Add to external subtitles list if not already there
+        setExternalSubtitles(prev => {
+            const exists = prev.some(s => s.name === name);
+            if (exists) return prev;
+            return [...prev, { name, cues, isSDH, source: 'file' }];
+        });
+
+        if (__DEV__) {
+            console.log('[usePlayerTracks] Loaded external subtitle:', name, cues.length, 'cues', isSDH ? '(SDH)' : '');
+        }
+    }, []);
+
+    /**
+     * Load SDH subtitle cues specifically for haptic feedback.
+     */
+    const loadSDHForHaptics = useCallback((cues: SubtitleCue[], name: string) => {
+        setHapticCues(cues);
+        if (__DEV__) {
+            console.log('[usePlayerTracks] Updated haptic cues from SDH:', name, cues.length, 'cues');
+        }
+    }, []);
+
+    // ========================================================================
+    // SELECTORS FOR COMPONENT PROPS
+    // ========================================================================
+
+    const audioTracksForSelector = useMemo(() =>
+        audioTracks.map((track) => ({
+            index: track.id,
+            type: 'audio' as const,
+            codec: 'audio',
+            language: track.name,
+            title: track.name,
+            isDefault: false,
+        })),
+        [audioTracks]
+    );
+
+    const subtitleTracksForSelector = useMemo(() =>
+        subtitleTracks.map((track) => ({
+            index: track.index,
+            type: 'subtitle' as const,
+            codec: track.codec,
+            language: track.language || 'und',
+            title: track.title || `Subtitle ${track.index}`,
+            isDefault: track.isDefault || false,
+        })),
+        [subtitleTracks]
+    );
+
+    // ========================================================================
+    // RETURN
+    // ========================================================================
+
+    return useMemo(() => ({
+        // Audio
+        audioTracks,
+        selectedAudioTrackId,
+        selectAudioTrack,
+
+        // Subtitles
+        subtitleTracks,
+        selectedSubtitleTrackIndex,
+        subtitleCues,
+        currentSubtitleCue,
+        selectSubtitleTrack,
+
+        // External
+        externalSubtitles,
+        currentExternalName,
+        loadExternalCues,
+        loadSDHForHaptics,
+
+        // Haptic
+        hapticCues,
+
+        // Selectors
+        audioTracksForSelector,
+        subtitleTracksForSelector,
+
+        // For parent to set audio tracks from VLC
+        setAudioTracksFromVLC,
+    }), [
+        audioTracks, selectedAudioTrackId, selectAudioTrack,
+        subtitleTracks, selectedSubtitleTrackIndex, subtitleCues, currentSubtitleCue, selectSubtitleTrack,
+        externalSubtitles, currentExternalName, loadExternalCues, loadSDHForHaptics,
+        hapticCues,
+        audioTracksForSelector, subtitleTracksForSelector,
+        setAudioTracksFromVLC
+    ]) as UsePlayerTracksReturn & { setAudioTracksFromVLC: typeof setAudioTracksFromVLC };
+}
+
+export default usePlayerTracks;

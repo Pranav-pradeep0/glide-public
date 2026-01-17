@@ -1,0 +1,146 @@
+name: Android CI/CD (React Native - Split + Universal)
+
+# Ensure token has the right permission to create releases
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:   # allow manual runs from Actions -> Run workflow
+  push:
+    branches: [main, develop]
+  pull_request:
+
+jobs:
+  build-android:
+    name: Build Android App
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install JS dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Create .env file for Secrets
+        run: |
+          echo "SUBDL_API_KEY=${{ secrets.SUBDL_API_KEY }}" > .env
+          echo "SUBDL_API_URL=${{ secrets.SUBDL_API_URL }}" >> .env
+          echo "SUBDL_DOWNLOAD_URL=${{ secrets.SUBDL_DOWNLOAD_URL }}" >> .env
+          echo "OMDB_API_KEY=${{ secrets.OMDB_API_KEY }}" >> .env
+          echo "OMDB_API_URL=${{ secrets.OMDB_API_URL }}" >> .env
+          echo "GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}" >> .env
+          echo "GROQ_API_URL=${{ secrets.GROQ_API_URL }}" >> .env
+          echo "GROQ_CHAT_API_URL=${{ secrets.GROQ_CHAT_API_URL }}" >> .env
+          echo "STALLION_PROJECT_ID=${{ secrets.STALLION_PROJECT_ID }}" >> .env
+          echo "STALLION_APP_TOKEN=${{ secrets.STALLION_APP_TOKEN }}" >> .env
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      - name: Cache Gradle files
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: ${{ runner.os }}-gradle-
+
+      - name: Make Gradlew executable
+        run: chmod +x android/gradlew
+
+      - name: Build Android Release (Split + Universal + AAB)
+        working-directory: android
+        run: |
+          ./gradlew clean
+          ./gradlew assembleRelease || true
+          ./gradlew bundleRelease || true
+
+      - name: Collect build outputs
+        run: |
+          mkdir -p build_artifacts
+          if [ -f android/app/build/outputs/bundle/release/app-release.aab ]; then
+            cp android/app/build/outputs/bundle/release/app-release.aab build_artifacts/ || true
+          fi
+          if compgen -G "android/app/build/outputs/apk/release/*.apk" > /dev/null; then
+            cp android/app/build/outputs/apk/release/*.apk build_artifacts/ || true
+          fi
+          if [ -f android/app/build/outputs/apk/release/app-universal-release.apk ]; then
+            cp android/app/build/outputs/apk/release/app-universal-release.apk build_artifacts/ || true
+          fi
+          cd build_artifacts || exit 0
+          zip -r ../build-artifacts-${{ github.run_id }}.zip ./* || true
+          cd ..
+          ls -lha
+
+      - name: Check artifacts exist
+        id: check_artifacts
+        run: |
+          ZIP_FILE="./build-artifacts-${{ github.run_id }}.zip"
+          AAB_FILE="android/app/build/outputs/bundle/release/app-release.aab"
+          ZIP_EXISTS=false
+          AAB_EXISTS=false
+          if [ -f "$ZIP_FILE" ]; then ZIP_EXISTS=true; fi
+          if [ -f "$AAB_FILE" ]; then AAB_EXISTS=true; fi
+          echo "zip_exists=$ZIP_EXISTS" >> $GITHUB_OUTPUT
+          echo "aab_exists=$AAB_EXISTS" >> $GITHUB_OUTPUT
+          echo "zip: $ZIP_FILE exists? $ZIP_EXISTS"
+          echo "aab: $AAB_FILE exists? $AAB_EXISTS"
+
+      # Release steps: run on push OR manual workflow_dispatch (skip for PRs/forks)
+      - name: Create CI Release (push or manual run)
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+        id: create_release
+        uses: actions/create-release@v1
+        with:
+          tag_name: "ci-${{ github.run_id }}"
+          release_name: "CI Build ${{ github.run_id }} (${{ github.ref_name || github.ref }})"
+          body: |
+            Automated CI build
+            Repository: ${{ github.repository }}
+            Ref: ${{ github.ref }}
+            Run: ${{ github.run_id }}
+            Workflow: ${{ github.workflow }}
+          draft: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload ZIP to Release (if exists)
+        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.check_artifacts.outputs.zip_exists == 'true' }}
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./build-artifacts-${{ github.run_id }}.zip
+          asset_name: build-artifacts-${{ github.run_id }}.zip
+          asset_content_type: application/zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload raw AAB to Release (if exists)
+        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.check_artifacts.outputs.aab_exists == 'true' }}
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: android/app/build/outputs/bundle/release/app-release.aab
+          asset_name: app-release-${{ github.run_id }}.aab
+          asset_content_type: application/octet-stream
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cleanup runner files
+        if: ${{ always() }}
+        run: |
+          rm -rf build_artifacts || true
+          rm -f build-artifacts-${{ github.run_id }}.zip || true
+          

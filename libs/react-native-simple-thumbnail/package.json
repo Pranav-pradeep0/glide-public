@@ -1,0 +1,21 @@
+{
+    "name": "react-native-simple-thumbnail",
+    "version": "1.0.0",
+    "description": "Zero-copy video thumbnail generator using native Android APIs",
+    "main": "index.js",
+    "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "keywords": [
+        "react-native",
+        "thumbnail",
+        "video",
+        "android"
+    ],
+    "author": "Glide",
+    "license": "MIT",
+    "peerDependencies": {
+        "react": "*",
+        "react-native": "*"
+    }
+}

@@ -1,0 +1,185 @@
+// src/services/SubtitlePickerService.ts
+import { Platform } from 'react-native';
+import * as RNFS from '@dr.pogodin/react-native-fs';
+import { pick, isErrorWithCode } from '@react-native-documents/picker';
+import { SubtitleParser } from '../utils/SubtitleParser';
+import { SubtitleCue } from '../types';
+import { SUBTITLE_EXTENSIONS } from '../utils/constants';
+
+const LOG_PREFIX = '[SubtitlePicker]';
+
+export interface PickedSubtitle {
+    path: string;
+    name: string;
+    content: string;
+    cues: SubtitleCue[];
+    format: 'srt' | 'vtt' | 'ass';
+}
+
+export class SubtitlePickerService {
+    /**
+     * Open document picker for user to select a subtitle file from storage
+     */
+    static async pickFromStorage(): Promise<PickedSubtitle | null> {
+        try {
+            console.log(`${LOG_PREFIX} Opening subtitle picker`);
+
+            // Use new @react-native-documents/picker API
+            const result = await pick({
+                mode: 'open',
+                type: ['text/*', 'application/x-subrip', 'text/vtt'],
+            });
+
+            if (!result || result.length === 0) {
+                console.log(`${LOG_PREFIX} No file selected`);
+                return null;
+            }
+
+            const file = result[0];
+            console.log(`${LOG_PREFIX} User selected:`, file.name);
+
+            // Check extension
+            const fileName = file.name || '';
+            const ext = fileName.substring(fileName.lastIndexOf('.')).toLowerCase();
+
+            if (!SUBTITLE_EXTENSIONS.includes(ext)) {
+                console.error(`${LOG_PREFIX} Unsupported format:`, ext);
+                throw new Error(`Unsupported subtitle format: ${ext}. Please select .srt, .vtt, or .ass file.`);
+            }
+
+            // Get the file path
+            let filePath = file.uri;
+
+            // Handle content:// URIs on Android - copy to cache
+            if (Platform.OS === 'android' && filePath.startsWith('content://')) {
+                const cachePath = `${RNFS.CachesDirectoryPath}/picked_subtitle_${Date.now()}${ext}`;
+                await RNFS.copyFile(filePath, cachePath);
+                filePath = cachePath;
+                console.log(`${LOG_PREFIX} Copied to cache:`, cachePath);
+            } else {
+                // Clean file:// prefix if present
+                filePath = filePath.replace('file://', '');
+            }
+
+            // Read file content
+            const content = await RNFS.readFile(filePath, 'utf8');
+            console.log(`${LOG_PREFIX} Read file: ${content.length} chars`);
+
+            // Parse subtitle
+            const format = ext === '.srt' ? 'srt' : ext === '.vtt' ? 'vtt' : 'ass';
+            const cues = SubtitleParser.parse(content, format);
+
+            if (cues.length === 0) {
+                throw new Error('Could not parse subtitle file. Please check the file format.');
+            }
+
+            console.log(`${LOG_PREFIX} Parsed ${cues.length} cues`);
+
+            return {
+                path: filePath,
+                name: fileName,
+                content,
+                cues,
+                format: format as 'srt' | 'vtt' | 'ass',
+            };
+        } catch (error: any) {
+            // Check if user cancelled using error code
+            if (isErrorWithCode(error) && error.code === 'OPERATION_CANCELED') {
+                console.log(`${LOG_PREFIX} User cancelled`);
+                return null;
+            }
+
+            console.error(`${LOG_PREFIX} Error:`, error);
+            throw error;
+        }
+    }
+
+    /**
+     * Scan common subtitle locations for matching subtitles
+     * Looks for subtitle files with same name as video
+     */
+    static async findMatchingSubtitles(videoPath: string): Promise<string[]> {
+        try {
+            // Content URIs don't have scannable directories
+            if (videoPath.startsWith('content://')) {
+                console.log(`${LOG_PREFIX} Skipping external subtitle scan for content URI`);
+                return [];
+            }
+
+            const videoDir = videoPath.substring(0, videoPath.lastIndexOf('/'));
+            const videoName = videoPath.substring(videoPath.lastIndexOf('/') + 1);
+            const videoBaseName = videoName.substring(0, videoName.lastIndexOf('.'));
+
+            console.log(`${LOG_PREFIX} Searching for subtitles matching:`, videoBaseName);
+
+            const files = await RNFS.readDir(videoDir);
+            const matchingSubtitles: string[] = [];
+
+            for (const file of files) {
+                if (file.isFile()) {
+                    const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+
+                    if (SUBTITLE_EXTENSIONS.includes(ext)) {
+                        const subBaseName = file.name.substring(0, file.name.lastIndexOf('.'));
+
+                        // Exact match or starts with video name
+                        if (subBaseName === videoBaseName ||
+                            subBaseName.startsWith(videoBaseName + '.') ||
+                            subBaseName.startsWith(videoBaseName + '_')) {
+                            matchingSubtitles.push(file.path);
+                            console.log(`${LOG_PREFIX} Found matching:`, file.name);
+                        }
+                    }
+                }
+            }
+
+            return matchingSubtitles;
+        } catch (error) {
+            console.error(`${LOG_PREFIX} Error scanning for subtitles:`, error);
+            return [];
+        }
+    }
+
+    /**
+     * Load a subtitle file from path
+     */
+    static async loadFromPath(filePath: string): Promise<PickedSubtitle | null> {
+        try {
+            // Clean file:// prefix
+            const cleanPath = filePath.replace('file://', '');
+
+            // Check file exists
+            const exists = await RNFS.exists(cleanPath);
+            if (!exists) {
+                console.error(`${LOG_PREFIX} File not found:`, cleanPath);
+                return null;
+            }
+
+            const fileName = cleanPath.substring(cleanPath.lastIndexOf('/') + 1);
+            const ext = fileName.substring(fileName.lastIndexOf('.')).toLowerCase();
+
+            // Read content
+            const content = await RNFS.readFile(cleanPath, 'utf8');
+
+            // Parse
+            const format = ext === '.srt' ? 'srt' : ext === '.vtt' ? 'vtt' : 'ass';
+            const cues = SubtitleParser.parse(content, format);
+
+            if (cues.length === 0) {
+                console.error(`${LOG_PREFIX} No cues parsed from:`, fileName);
+                return null;
+            }
+
+            return {
+                path: cleanPath,
+                name: fileName,
+                content,
+                cues,
+                format: format as 'srt' | 'vtt' | 'ass',
+            };
+        } catch (error) {
+            console.error(`${LOG_PREFIX} Error loading subtitle:`, error);
+            return null;
+        }
+    }
+}

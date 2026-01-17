@@ -1,0 +1,43 @@
+buildscript {
+    ext {
+        buildToolsVersion = "35.0.0"
+        minSdkVersion = 26
+        compileSdkVersion = 35
+        targetSdkVersion = 34
+        ndkVersion = "26.1.10909125"
+        kotlinVersion = "1.9.24"
+    }
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath("com.android.tools.build:gradle")
+        classpath("com.facebook.react:react-native-gradle-plugin")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin")
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+        flatDir {
+            dirs "$rootDir/libs"
+        }
+    }
+    
+    configurations.all {
+        resolutionStrategy {
+            dependencySubstitution {
+                substitute module('com.arthenica:ffmpeg-kit-https') using project(':ffmpeg-lib')
+                substitute module('com.arthenica:ffmpeg-kit-min') using project(':ffmpeg-lib')
+                substitute module('com.arthenica:ffmpeg-kit-min-gpl') using project(':ffmpeg-lib')
+                substitute module('com.arthenica:ffmpeg-kit-full') using project(':ffmpeg-lib')
+                substitute module('com.arthenica:ffmpeg-kit-full-gpl') using project(':ffmpeg-lib')
+            }
+        }
+    }
+}
+
+apply plugin: "com.facebook.react.rootproject"

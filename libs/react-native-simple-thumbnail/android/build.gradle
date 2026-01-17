@@ -1,0 +1,46 @@
+buildscript {
+    ext.safeExtGet = {prop, fallback ->
+        rootProject.ext.has(prop) ? rootProject.ext.get(prop) : fallback
+    }
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath("com.android.tools.build:gradle:7.3.1")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.7.20")
+    }
+}
+
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+
+android {
+    compileSdkVersion safeExtGet('compileSdkVersion', 33)
+    
+    defaultConfig {
+        minSdkVersion safeExtGet('minSdkVersion', 21)
+        targetSdkVersion safeExtGet('targetSdkVersion', 33)
+    }
+
+    lintOptions {
+        abortOnError false
+    }
+}
+
+repositories {
+    mavenLocal()
+    maven {
+        // All of React Native (JS, Obj-C sources, Android binaries) is installed from npm
+        url("$rootDir/../node_modules/react-native/android")
+    }
+    google()
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'com.facebook.react:react-native:+'
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.7.20"
+    // FFmpegKit for subtitle track probing (provided by app)
+    compileOnly files("$rootDir/ffmpeg-lib/ffmpeg-kit-minimal.aar")
+}
