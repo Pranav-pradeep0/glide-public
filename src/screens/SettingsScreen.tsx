@@ -552,7 +552,7 @@ export default function SettingsScreen() {
                 <View style={[styles.controlRow, { borderColor: theme.colors.border }]}>
                     <Text style={[styles.controlLabel, { color: theme.colors.text }]}>Color</Text>
                     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.colorScroll}>
-                        {SUBTITLE_COLORS.map(color => (
+                        {SUBTITLE_COLORS?.map(color => (
                             <TouchableOpacity
                                 key={color.value}
                                 style={[
