@@ -73,15 +73,37 @@ const SubtitlePreviewSection = React.memo(({ fontSizeSV, settings, theme }: any)
                         ? 'transparent'
                         : `rgba(${parseInt(settings.subtitleBackgroundColor.slice(1, 3), 16)}, ${parseInt(settings.subtitleBackgroundColor.slice(3, 5), 16)}, ${parseInt(settings.subtitleBackgroundColor.slice(5, 7), 16)}, ${settings.subtitleBackgroundOpacity})`,
                 }}>
-                    <AnimatedText style={[{
-                        color: settings.subtitleColor,
-                        fontWeight: String(settings.subtitleFontWeight) as any,
-                        textShadowColor: settings.subtitleEdgeStyle !== 'none' ? '#000' : undefined,
-                        textShadowRadius: settings.subtitleEdgeStyle !== 'none' ? settings.subtitleOutlineWidth : 0,
-                        textAlign: 'center'
-                    }, animatedStyle]}>
-                        This is a subtitle preview
-                    </AnimatedText>
+                    {(() => {
+                        let fontFamily = settings.subtitleFontFamily || 'System';
+                        let fontWeight = String(settings.subtitleFontWeight) as any;
+
+                        if (fontFamily === 'NetflixSans-Medium') {
+                            const weightNum = Number(settings.subtitleFontWeight);
+                            if (weightNum >= 700) {
+                                fontFamily = 'NetflixSans-Bold';
+                                fontWeight = 'normal';
+                            } else if (weightNum <= 300) {
+                                fontFamily = 'NetflixSans-Light';
+                                fontWeight = 'normal';
+                            } else {
+                                fontFamily = 'NetflixSans-Medium';
+                                fontWeight = 'normal';
+                            }
+                        }
+
+                        return (
+                            <AnimatedText style={[{
+                                color: settings.subtitleColor,
+                                fontWeight: fontWeight,
+                                fontFamily: fontFamily,
+                                textShadowColor: settings.subtitleEdgeStyle !== 'none' ? '#000' : undefined,
+                                textShadowRadius: settings.subtitleEdgeStyle !== 'none' ? settings.subtitleOutlineWidth : 0,
+                                textAlign: 'center'
+                            }, animatedStyle]}>
+                                This is a subtitle preview
+                            </AnimatedText>
+                        );
+                    })()}
                 </View>
             </View>
         </View>

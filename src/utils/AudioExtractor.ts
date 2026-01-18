@@ -86,6 +86,104 @@ export class AudioExtractor {
     }
 
     /**
+     * Checks the volume level of an audio file using FFmpeg volumedetect
+     * @param audioPath Path to the audio file
+     * @returns Mean volume in dB (e.g., -20.5), or -91.0 if silent/error
+     */
+    /**
+     * Checks the volume level of an audio file by reading PCM data directly
+     * @param audioPath Path to the audio file
+     * @returns Mean volume in dB (e.g., -20.5), or -91.0 if silent/error
+     */
+    static async checkAudioVolume(audioPath: string): Promise<number> {
+        console.log(`${LOG_PREFIX} Checking volume for: ${audioPath}`);
+
+        try {
+            // Read file as base64 (RNFS reads binary as base64)
+            const base64Data = await RNFS.readFile(audioPath, 'base64');
+
+            // Decode base64 to binary string (polyfill or manual)
+            // React Native doesn't have Buffer globally available without polyfills often, 
+            // so we do a simple manual decode or use fetch blob if available but RNFS is standard here.
+            // Actually, we can just walk the base64 string or use a library, but simplest standard way:
+            // Since we don't have Buffer in this context guaranteed, and importing it adds weight:
+            // Let's use a helper if we have one or just simple base64 decoder.
+            // Wait, we can assume Buffer is available or use `atob`. 
+            // Most RN environments have `atob`.
+
+            // To be safe and minimal: 
+            // We can rely on `Buffer` if node libs are polyfilled (common in RN). 
+            // If not, we iterate.
+            // For robustness, I'll use Buffer.from if available, or a simple implementation.
+
+            // Let's try Buffer. If it fails, catch error.
+            let pcmData: Uint8Array;
+            try {
+                pcmData = Buffer.from(base64Data, 'base64');
+            } catch (e) {
+                // Fallback for environment without Buffer
+                const binaryString = atob(base64Data);
+                const len = binaryString.length;
+                pcmData = new Uint8Array(len);
+                for (let i = 0; i < len; i++) {
+                    pcmData[i] = binaryString.charCodeAt(i);
+                }
+            }
+
+            // WAV Header is 44 bytes
+            if (pcmData.length <= 44) {
+                console.warn(`${LOG_PREFIX} Audio file too short for analysis`);
+                return -91.0;
+            }
+
+            let sumSquares = 0.0;
+            let sampleCount = 0;
+            const headerSize = 44; // Standard WAV header
+
+            // Process 16-bit Mono PCM (2 bytes per sample)
+            // Little Endian
+            for (let i = headerSize; i < pcmData.length - 1; i += 2) {
+                // Read 16-bit signed integer
+                const low = pcmData[i];
+                const high = pcmData[i + 1];
+
+                // Convert to signed 16-bit
+                let sample = (high << 8) | low;
+                if (sample & 0x8000) {
+                    sample = sample - 0x10000;
+                }
+
+                sumSquares += sample * sample;
+                sampleCount++;
+            }
+
+            if (sampleCount === 0) return -91.0;
+
+            const meanSquare = sumSquares / sampleCount;
+            const rms = Math.sqrt(meanSquare);
+
+            // dBFS = 20 * log10(RMS / MaxPossibleAmplitude)
+            // Max amplitude for 16-bit is 32768
+            let db = 20 * Math.log10(rms / 32768);
+
+            // Access floor at -91dB
+            if (!isFinite(db) || db < -91) db = -91;
+
+            console.log(`${LOG_PREFIX} Calculated RMS: ${rms.toFixed(2)}, dB: ${db.toFixed(1)}`);
+            return db;
+
+        } catch (error) {
+            console.error(`${LOG_PREFIX} Volume check error (JS):`, error);
+            // Non-fatal, just assume silence to be safe? 
+            // If we assume silence on error, user gets "No Speech" which blocks them.
+            // BETTER: If check fails, return high volume to ALLOW transcription as fallback.
+            // The previous logic returned -91 which blocked the user.
+            // If the file exists but we failed to parse, let's allow it -> return 0dB (loud)
+            return 0.0;
+        }
+    }
+
+    /**
      * Cleanup temporary audio files
      */
     static async cleanup() {

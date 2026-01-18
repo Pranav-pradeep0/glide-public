@@ -1,3 +1,4 @@
+
 import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
     StyleSheet,
@@ -8,19 +9,9 @@ import {
     AppState,
     Platform,
     NativeModules,
-    TouchableOpacity,
-    ActivityIndicator,
-    Text,
 } from 'react-native';
-import Animated, {
-    useSharedValue,
-    useAnimatedStyle,
-    withSpring,
-    runOnJS,
-    FadeInDown,
-} from 'react-native-reanimated';
 import { GestureDetector } from 'react-native-gesture-handler';
-import { EdgeInsets, useSafeAreaInsets, initialWindowMetrics } from 'react-native-safe-area-context';
+import { useSafeAreaInsets, initialWindowMetrics } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { SystemBars } from 'react-native-edge-to-edge';
@@ -44,7 +35,6 @@ import { EqualizerModal } from '@/components/EqualizerModal';
 import { FloatingSyncPanel } from '@/components/FloatingSyncPanel';
 import { RecapModal } from '@/components/VideoPlayer/RecapModal';
 import { ResumeModal } from '@/components/VideoPlayer/ResumeModal';
-import { RecapIcon } from '@/components/VideoPlayer/PlayerIcons';
 import { RecapService } from '@/services/RecapService';
 
 // Hooks
@@ -455,19 +445,40 @@ export default function VideoPlayerScreen({ route }: Props) {
         };
     }, []);
 
-    const subtitleSettings = useMemo<SubtitleSettings>(() => ({
-        fontSize: settings.subtitleFontSize,
-        fontColor: settings.subtitleColor,
-        fontWeight: String(settings.subtitleFontWeight) as '400' | '600' | '700' | 'bold' | 'normal',
-        fontFamily: Platform.select({ android: 'Roboto', ios: 'System', default: 'System' }),
-        backgroundColor: settings.subtitleBackgroundColor,
-        backgroundOpacity: settings.subtitleBackgroundColor === 'transparent' ? 0 : settings.subtitleBackgroundOpacity,
-        // If edge style is outline or dropShadow, use black, else transparent
-        outlineColor: settings.subtitleEdgeStyle !== 'none' ? '#000000' : 'transparent',
-        // Use outlineWidth from settings when outline is enabled
-        outlineWidth: settings.subtitleEdgeStyle === 'none' ? 0 : settings.subtitleOutlineWidth,
-        position: 'bottom',
-    }), [settings]);
+    const subtitleSettings = useMemo<SubtitleSettings>(() => {
+        let fontFamily = settings.subtitleFontFamily || Platform.select({ android: 'Roboto', ios: 'System', default: 'System' });
+        let fontWeight: SubtitleSettings['fontWeight'] = String(settings.subtitleFontWeight) as any;
+
+        if (fontFamily === 'NetflixSans-Medium') {
+
+            const weightNum = Number(settings.subtitleFontWeight);
+
+            if (weightNum >= 700) {
+                fontFamily = 'NetflixSans-Bold';
+                fontWeight = 'normal';
+            } else if (weightNum <= 300) {
+                fontFamily = 'NetflixSans-Light';
+                fontWeight = 'normal';
+            } else {
+                fontFamily = 'NetflixSans-Medium';
+                fontWeight = 'normal';
+            }
+        }
+
+        return {
+            fontSize: settings.subtitleFontSize,
+            fontColor: settings.subtitleColor,
+            fontWeight: fontWeight,
+            fontFamily: fontFamily,
+            backgroundColor: settings.subtitleBackgroundColor,
+            backgroundOpacity: settings.subtitleBackgroundColor === 'transparent' ? 0 : settings.subtitleBackgroundOpacity,
+            // If edge style is outline or dropShadow, use black, else transparent
+            outlineColor: settings.subtitleEdgeStyle !== 'none' ? '#000000' : 'transparent',
+            // Use outlineWidth from settings when outline is enabled
+            outlineWidth: settings.subtitleEdgeStyle === 'none' ? 0 : settings.subtitleOutlineWidth,
+            position: 'bottom',
+        };
+    }, [settings]);
 
     const shouldShowBuffer = useMemo(() =>
         player.state.isVideoLoaded && player.state.isBuffering && !player.state.isSeeking,
@@ -1073,7 +1084,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                     duration={player.state.duration}
                     videoEnhancement={settingsHook.settings.videoEnhancement}
                     audioTrack={tracksHook.selectedAudioTrackId}
-                    textTrack={-1}
+                    textTrack={tracksHook.vlcTextTrackId ?? -1}
                     title={videoName}
                     artist={albumName || "Glide"}
                     animatedStyle={gestures.videoAnimatedStyle}
@@ -1112,6 +1123,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                     subtitleCues={tracksHook.subtitleCues}
                     currentTime={player.currentTimeRef.current}
                     videoPath={videoPath}
+                    subtitleLanguage={tracksHook.subtitleTracks.find(t => t.index === tracksHook.selectedSubtitleTrackIndex)?.language}
                 />
             )}
 

@@ -56,3 +56,10 @@
 
 # General
 -dontwarn com.facebook.react.**
+
+# React Native Config
+-keep class com.lugg.ReactNativeConfig.** { *; }
+
+# Keep BuildConfig
+-keep class com.glide.app.BuildConfig { *; }
+

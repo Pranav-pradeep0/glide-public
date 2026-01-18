@@ -8,6 +8,7 @@ import {
     TextInput,
     ScrollView,
     ActivityIndicator,
+    Alert,
 } from 'react-native';
 import Animated, { FadeIn, FadeOut, LinearTransition } from 'react-native-reanimated';
 import { SubtitleCue } from '../types';
@@ -25,6 +26,7 @@ interface FloatingSyncPanelProps {
     subtitleCues?: SubtitleCue[];
     currentTime?: number;
     videoPath?: string;
+    subtitleLanguage?: string;
 }
 
 export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
@@ -35,6 +37,7 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
     subtitleCues = [],
     currentTime = 0,
     videoPath,
+    subtitleLanguage,
 }) => {
     const [searchMode, setSearchMode] = useState(false);
     const [query, setQuery] = useState('');
@@ -94,7 +97,48 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
             const audioClip = await AudioExtractor.extractAudioChunk(videoPath, extractStart, 10);
 
             if (audioClip) {
-                const text = await SpeechToTextService.transcribe(audioClip);
+                // 1. SMART VAD: Check for silence before wasting API call
+                const volume = await AudioExtractor.checkAudioVolume(audioClip);
+                if (volume < -50) {
+                    console.log(`[SmartSync] Silence detected (${volume} dB). Skipping transcription.`);
+                    Alert.alert('No Speech Detected', 'It seems there was no clear speech in this segment. Please try again or type manually.');
+                    setIsListening(false);
+                    await AudioExtractor.cleanup();
+                    return;
+                }
+
+                // Determine transcription strategy based on subtitle language
+                let language = subtitleLanguage?.toLowerCase();
+                let task: 'transcribe' | 'translate' = 'transcribe';
+
+                // If subtitle is English, force translation from whatever language audio is
+                if (language && (language === 'eng' || language === 'en' || language.includes('english'))) {
+                    task = 'translate';
+                    language = undefined; // Whisper auto-detects source language for translation
+                } else if (language) {
+                    // For native subtitles, try to transcribe in that specific language
+                    // Groq expects ISO-639-1 (2 chars), but we might get 'eng', 'spa', etc. 
+                    // Mapping simple 3-char codes to 2-char where obvious
+                    const map: Record<string, string> = {
+                        'spa': 'es', 'fre': 'fr', 'fra': 'fr', 'ger': 'de', 'deu': 'de',
+                        'ita': 'it', 'por': 'pt', 'rus': 'ru', 'jpn': 'ja', 'chi': 'zh',
+                        'hin': 'hi', 'kor': 'ko', 'mal': 'ml'
+                    };
+                    if (map[language]) {
+                        language = map[language];
+                    } else if (language.length === 3) {
+                        // Optimistic fallback: take first 2 chars if not in map
+                        language = language.substring(0, 2);
+                    }
+                }
+
+                console.log(`[SmartSync] Auto-listening with task: ${task}, language: ${language || 'auto'}`);
+
+                const text = await SpeechToTextService.transcribe(audioClip, {
+                    language,
+                    task
+                });
+
                 if (text && text.trim()) {
                     // This will trigger the search with the fresh text
                     handleSearch(text);
@@ -111,7 +155,7 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
         } finally {
             setIsListening(false);
         }
-    }, [videoPath, currentTime, isListening, handleSearch]);
+    }, [videoPath, currentTime, isListening, handleSearch, subtitleLanguage]);
 
     const applySync = useCallback((match: MatchResult) => {
         const offset = SubtitleSyncService.calculateOffset(match.cue, currentTime);
@@ -303,22 +347,27 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
 
                         {!isListening && results.length > 0 && (
                             <ScrollView style={styles.resultsList} showsVerticalScrollIndicator={false}>
-                                {results.map((item, index) => (
-                                    <Pressable
-                                        key={`${item.cue.startTime} -${index} `}
-                                        style={({ pressed }) => [
-                                            styles.resultItem,
-                                            pressed && styles.resultItemPressed
-                                        ]}
-                                        onPress={() => applySync(item)}
-                                    >
-                                        <View style={styles.resultContent}>
-                                            <Text style={styles.resultTime}>{formatMatchTime(item.cue.startTime)}</Text>
-                                            <Text style={styles.resultText} numberOfLines={1}>{item.cue.text.replace(/\n/g, ' ')}</Text>
-                                        </View>
-                                        <Feather name="chevron-right" size={14} color="#666" />
-                                    </Pressable>
-                                ))}
+                                {results.map((item, index) => {
+                                    return (
+                                        <Pressable
+                                            key={`${item.cue.startTime}-${index}`}
+                                            style={({ pressed }) => [
+                                                styles.resultItem,
+                                                pressed && styles.resultItemPressed
+                                            ]}
+                                            onPress={() => applySync(item)}
+                                        >
+                                            <View style={styles.resultContent}>
+                                                <Text style={styles.resultTime}>{formatMatchTime(item.cue.startTime)}</Text>
+
+                                                <Text style={styles.resultText} numberOfLines={1}>
+                                                    {item.cue.text.replace(/\n/g, ' ')}
+                                                </Text>
+                                            </View>
+                                            <Feather name="chevron-right" size={14} color="#666" />
+                                        </Pressable>
+                                    );
+                                })}
                             </ScrollView>
                         )}
 

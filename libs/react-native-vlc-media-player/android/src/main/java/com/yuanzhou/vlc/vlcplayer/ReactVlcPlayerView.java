@@ -1027,7 +1027,8 @@ class ReactVlcPlayerView extends TextureView implements
         _textTrack = track; // Store the desired text track
         if (mMediaPlayer != null) {
             mMediaPlayer.setSpuTrack(track);
-            Log.i(TAG, "setTextTrack: " + track);
+        } else {
+            // mMediaPlayer is null, handle gracefully if needed or ignore
         }
     }
 

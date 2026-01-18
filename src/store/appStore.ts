@@ -20,6 +20,7 @@ interface AppStore {
     setSubtitleBackgroundColor: (color: string) => void;
     setSubtitleBackgroundOpacity: (opacity: number) => void;
     setSubtitleEdgeStyle: (style: 'none' | 'outline' | 'dropShadow') => void;
+    setSubtitleFontFamily: (fontFamily: string) => void;
     resetSubtitleSettings: () => void;
     completeOnboarding: () => void;
     setHapticIntensity: (intensity: number) => void;
@@ -49,6 +50,7 @@ export const useAppStore = create<AppStore>((set) => ({
         subtitleBackgroundColor: 'transparent', // Default transparent
         subtitleBackgroundOpacity: 0.5,
         subtitleEdgeStyle: 'outline', // Default outline for legibility
+        subtitleFontFamily: 'NetflixSans-Medium',
 
         hasCompletedOnboarding: false,
         brightnessMode: 'video', // Default to video-specific as per original request, or global? Let's stick to video as default for now or user preference. Detailed in plan: "video" default.
@@ -114,6 +116,10 @@ export const useAppStore = create<AppStore>((set) => ({
         set((state) => ({
             settings: { ...state.settings, subtitleEdgeStyle: style },
         })),
+    setSubtitleFontFamily: (fontFamily) =>
+        set((state) => ({
+            settings: { ...state.settings, subtitleFontFamily: fontFamily },
+        })),
     resetSubtitleSettings: () =>
         set((state) => ({
             settings: {
@@ -125,6 +131,7 @@ export const useAppStore = create<AppStore>((set) => ({
                 subtitleBackgroundColor: 'transparent',
                 subtitleBackgroundOpacity: 0.5,
                 subtitleEdgeStyle: 'outline',
+                subtitleFontFamily: 'NetflixSans-Medium',
             },
         })),
     completeOnboarding: () =>

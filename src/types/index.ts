@@ -58,6 +58,7 @@ export interface AppSettings {
     subtitleBackgroundColor: string;
     subtitleBackgroundOpacity: number;
     subtitleEdgeStyle: 'none' | 'outline' | 'dropShadow';
+    subtitleFontFamily?: string;
 
     hasCompletedOnboarding: boolean;
     brightnessMode: 'global' | 'video';

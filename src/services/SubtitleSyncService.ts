@@ -2,8 +2,11 @@ import { SubtitleCue } from '../types';
 
 export interface MatchResult {
     cue: SubtitleCue;
-    score: number;
     matchedText: string;
+}
+
+interface InternalMatchResult extends MatchResult {
+    score: number;
 }
 
 export class SubtitleSyncService {
@@ -22,7 +25,6 @@ export class SubtitleSyncService {
         if (!query || query.trim().length < 2) return [];
 
         const normalizedQuery = this.normalize(query);
-        const results: MatchResult[] = [];
 
         for (const windowMinutes of this.WINDOW_STEPS) {
             const windowSeconds = windowMinutes * 60;
@@ -34,7 +36,8 @@ export class SubtitleSyncService {
             if (windowResults.length > 0) {
                 // If we found good matches in a smaller window, we stop here to avoid
                 // confusion with similar phrases further away in the movie.
-                return windowResults.slice(0, 5);
+                // Strip score before returning
+                return windowResults.slice(0, 5).map(({ score, ...rest }) => rest);
             }
         }
 
@@ -47,10 +50,10 @@ export class SubtitleSyncService {
         startTime: number,
         endTime: number,
         currentTime: number
-    ): MatchResult[] {
-        const matches: MatchResult[] = [];
+    ): InternalMatchResult[] {
+        const matches: InternalMatchResult[] = [];
 
-        // Find cues within the time window
+        // Find cues within window
         const relevantCues = cues.filter(c =>
             (c.startTime >= startTime && c.startTime <= endTime) ||
             (c.endTime >= startTime && c.endTime <= endTime)
@@ -58,7 +61,7 @@ export class SubtitleSyncService {
 
         for (const cue of relevantCues) {
             const normalizedCueText = this.normalize(cue.text);
-            const score = this.calculateScore(normalizedCueText, normalizedQuery, cue, currentTime);
+            const { score } = this.calculateScore(normalizedCueText, normalizedQuery, cue, currentTime);
 
             if (score > 0) {
                 matches.push({
@@ -69,9 +72,9 @@ export class SubtitleSyncService {
             }
         }
 
-        // Sort by score (descending) and then proximity to current time
+        // Sort by score then proximity
         return matches.sort((a, b) => {
-            if (b.score !== a.score) return b.score - a.score;
+            if (Math.abs(b.score - a.score) > 10) return b.score - a.score;
             return Math.abs(a.cue.startTime - currentTime) - Math.abs(b.cue.startTime - currentTime);
         });
     }
@@ -84,36 +87,59 @@ export class SubtitleSyncService {
             .trim();
     }
 
-    private static calculateScore(cueText: string, query: string, cue: SubtitleCue, currentTime: number): number {
-        if (cueText.includes(query)) {
-            // Exact match gets high base score
+    private static calculateScore(cueText: string, query: string, cue: SubtitleCue, currentTime: number): { score: number } {
+        const normalizedCue = cueText; // Assumed already normalized by caller to save perf
+        const normalizedQuery = query;
+
+        let bestScore = 0;
+
+        // 1. EXACT INCLUSION
+        const cueInQuery = normalizedQuery.includes(normalizedCue);
+        const queryInCue = normalizedCue.includes(normalizedQuery);
+
+        if (cueInQuery || queryInCue) {
             let score = 100;
 
-            // Check if it's an exact word match (not just substring)
-            const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            const regex = new RegExp(`\\b${escapedQuery}\\b`, 'i');
-            if (regex.test(cueText)) score += 50;
+            // Boundary checks
+            const escapedQuery = normalizedQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const escapedCue = normalizedCue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const boundaryRegex = new RegExp(`\\b${escapedQuery}\\b`, 'i');
+            const reverseBoundaryRegex = new RegExp(`\\b${escapedCue}\\b`, 'i');
 
-            // Proximity bonus (closer to currentTime = higher bonus)
+            if (boundaryRegex.test(normalizedCue) || reverseBoundaryRegex.test(normalizedQuery)) {
+                score += 50;
+            }
+
             const timeDiff = Math.abs(cue.startTime - currentTime);
-            const proximityBonus = Math.max(0, 50 - (timeDiff / 2)); // Bonus decreases as time diff increases
+            const proximityBonus = Math.max(0, 50 - (timeDiff / 2));
 
-            return score + proximityBonus;
+            bestScore = score + proximityBonus;
+            // Return immediately for exact matches as they are highest priority
+            return { score: bestScore };
         }
 
-        // Fuzzy match for individual words if query has multiple words
-        const queryWords = query.split(' ').filter(w => w.length > 2);
-        if (queryWords.length > 1) {
+        // 2. FUZZY MATCHING
+        const queryWords = normalizedQuery.split(' ').filter(w => w.length > 2);
+        const cueWords = normalizedCue.split(' ').filter(w => w.length > 2);
+
+        if (queryWords.length > 0 && cueWords.length > 0) {
             let matches = 0;
+            // Simple word overlap
             for (const word of queryWords) {
-                if (cueText.includes(word)) matches++;
+                if (normalizedCue.includes(word)) matches++;
             }
-            if (matches >= queryWords.length / 2) {
-                return (matches / queryWords.length) * 80;
+
+            const denominator = Math.min(queryWords.length, cueWords.length);
+            if (denominator > 0) {
+                const matchRate = matches / denominator;
+                if (matchRate >= 0.5) {
+                    const matchLengthBonus = Math.min(matches * 5, 20);
+                    bestScore = (matchRate * 80) + matchLengthBonus;
+                }
             }
         }
 
-        return 0;
+        return { score: bestScore };
     }
 
     /**
@@ -125,4 +151,6 @@ export class SubtitleSyncService {
         // offset = currentTime - cueStartTime
         return Math.round((currentTime - cue.startTime) * 1000);
     }
+
+
 }

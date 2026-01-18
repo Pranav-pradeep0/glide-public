@@ -880,17 +880,19 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
                             <Text style={styles.title}>{title}</Text>
                         </View>
                         <View style={styles.headerRight}>
-                            <Pressable
-                                onPress={() => {
-                                    onOpenSyncPanel?.(type);
-                                    onClose();
-                                }}
-                                style={styles.headerSyncButton}
-                                hitSlop={12}
-                            >
-                                <Feather name="clock" size={16} color="#CCCCCC" />
-                                <Text style={styles.syncButtonText}>Sync Adjust</Text>
-                            </Pressable>
+                            {((selectedTrackIndex !== null && selectedTrackIndex !== undefined) || !!currentExternalName) && (
+                                <Pressable
+                                    onPress={() => {
+                                        onOpenSyncPanel?.(type);
+                                        onClose();
+                                    }}
+                                    style={styles.headerSyncButton}
+                                    hitSlop={12}
+                                >
+                                    <Feather name="clock" size={16} color="#CCCCCC" />
+                                    <Text style={styles.syncButtonText}>Sync Adjust</Text>
+                                </Pressable>
+                            )}
                             <Pressable onPress={handleClose} style={styles.closeButton} hitSlop={12}>
                                 <Feather name="x" size={22} color="#808080" />
                             </Pressable>

@@ -347,6 +347,12 @@ export interface UsePlayerTracksReturn {
     // Selectors for TrackSelector component
     audioTracksForSelector: any[];
     subtitleTracksForSelector: any[];
+
+    // Native VLC Text Track ID
+    vlcTextTrackId?: number;
+
+    // Actions
+    setSubtitleCues: React.Dispatch<React.SetStateAction<SubtitleCue[]>>;
 }
 
 export interface UsePlayerBookmarksReturn {
@@ -481,10 +487,9 @@ export const getOptimizedInitOptions = (
 ): string[] => {
     const isNetworkStream = uri.startsWith('http') || uri.startsWith('rtsp');
 
-    // SAFE BASE OPTIONS - Removed risky flags like --no-spu, --aout=opensles
     const baseOptions = [
         '--no-video-title-show',
-        '--no-osd',
+        // '--no-osd', // Removed as it disables subtitles
         '--no-sub-autodetect-file',
         '--stats',
         '--audio-filter=scaletempo',  // Ensure Time-Stretching is active

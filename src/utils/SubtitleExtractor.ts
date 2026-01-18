@@ -15,9 +15,25 @@ export interface SubtitleTrack {
     title?: string;
     isDefault?: boolean;
     isForced?: boolean;
+    isBitmap?: boolean;
 }
 
 export class SubtitleExtractor {
+    /**
+     * Check if codec is text-based (can be extracted to SRT)
+     */
+    static isTextSubtitle(codec: string): boolean {
+        const textCodecs = ['srt', 'subrip', 'ass', 'ssa', 'webvtt', 'vtt', 'mov_text', 'text', 'utf8', 'text/plain'];
+        return textCodecs.includes(codec?.toLowerCase());
+    }
+
+    /**
+     * Check if codec is bitmap-based (needs native rendering)
+     */
+    static isBitmapSubtitle(codec: string): boolean {
+        const bitmapCodecs = ['hdmv_pgs_subtitle', 'pgs', 'dvd_subtitle', 'dvdsub', 'vobsub', 'idx', 'sub'];
+        return bitmapCodecs.includes(codec?.toLowerCase());
+    }
     /**
      * Resolve video path to FFmpeg-compatible format
      */
@@ -243,6 +259,7 @@ export class SubtitleExtractor {
                     title: stream.tags?.title || `Subtitle ${stream.index}`,
                     isDefault: stream.disposition?.default === 1,
                     isForced: stream.disposition?.forced === 1,
+                    isBitmap: SubtitleExtractor.isBitmapSubtitle(stream.codec_name || ''),
                 };
                 tracks.push(track);
             }
@@ -322,40 +339,24 @@ export class SubtitleExtractor {
             };
             const codec = codecMap[outputFormat];
             const command = `-v quiet -i "${resolvedPath}" -map 0:${subtitleIndex} -c:s ${codec} "${outputPath}"`;
-            console.log(`${LOG_PREFIX} [extractSubtitle] Executing FFmpeg`);
+            if (__DEV__) console.log(`${LOG_PREFIX} [extractSubtitle] Executing FFmpeg`);
 
             const session = await FFmpegKit.execute(command);
             const returnCode = await session.getReturnCode();
 
-            console.log(`${LOG_PREFIX} [extractSubtitle] FFmpeg return code`, {
-                code: returnCode?.getValue(),
-                isSuccess: ReturnCode.isSuccess(returnCode),
-            });
-
             if (ReturnCode.isSuccess(returnCode)) {
-                const exists = await RNFS.exists(outputPath);
-
-                if (exists) {
-                    const fileInfo = await RNFS.stat(outputPath);
-                    const duration = Date.now() - startTime;
-                    console.log(`${LOG_PREFIX} [extractSubtitle] ✓ SUCCESS`, {
-                        outputPath,
-                        fileSize: fileInfo.size,
-                        fileSizeKB: (fileInfo.size / 1024).toFixed(2),
-                        durationMs: duration,
-                    });
+                if (await RNFS.exists(outputPath)) {
+                    if (__DEV__) {
+                        console.log(`${LOG_PREFIX} [extractSubtitle] ✓ SUCCESS`, {
+                            outputPath,
+                            durationMs: Date.now() - startTime,
+                        });
+                    }
                     return outputPath;
-                } else {
-                    // FFmpeg returned 0 but file wasn't created - get more info
-                    const sessionOutput = await session.getOutput();
-                    const allLogs = await session.getAllLogsAsString();
-                    console.error(`${LOG_PREFIX} [extractSubtitle] Output file not created despite success code`, {
-                        outputPath,
-                        sessionOutput: sessionOutput?.substring(0, 500),
-                        logs: allLogs?.substring(0, 500),
-                        command,
-                    });
                 }
+            } else {
+                const logs = await session.getAllLogsAsString();
+                console.error(`${LOG_PREFIX} [extractSubtitle] FAILED. Logs: ${logs}`);
             }
 
             const output = await session.getOutput();
@@ -412,21 +413,16 @@ export class SubtitleExtractor {
             const content = await RNFS.readFile(filePath, 'utf8');
             const duration = Date.now() - startTime;
 
-            console.log(`${LOG_PREFIX} [readSubtitleFile] ✓ SUCCESS`, {
-                contentLength: content.length,
-                contentSizeKB: (content.length / 1024).toFixed(2),
-                durationMs: duration,
-            });
+            if (__DEV__) {
+                console.log(`${LOG_PREFIX} [readSubtitleFile] ✓ SUCCESS`, {
+                    sizeKB: (content.length / 1024).toFixed(2),
+                    durationMs: Date.now() - startTime,
+                });
+            }
 
             return content;
         } catch (error) {
-            const duration = Date.now() - startTime;
-            console.error(`${LOG_PREFIX} [readSubtitleFile] FATAL ERROR`, {
-                error: error instanceof Error ? error.message : String(error),
-                stack: error instanceof Error ? error.stack : undefined,
-                filePath: filePath.substring(0, 60) + '...',
-                durationMs: duration,
-            });
+            console.error(`${LOG_PREFIX} [readSubtitleFile] FATAL ERROR`, error);
             return null;
         }
     }

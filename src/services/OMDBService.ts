@@ -44,6 +44,7 @@ export class OMDBService {
             }
 
             console.log(`${LOG_PREFIX} Searching:`, { title, year });
+            console.log(`${LOG_PREFIX} API Key present:`, !!OMDB_API_KEY, 'Length:', OMDB_API_KEY?.length);
 
             const response = await fetch(`${OMDB_API_URL}?${params}`, {
                 method: 'GET',

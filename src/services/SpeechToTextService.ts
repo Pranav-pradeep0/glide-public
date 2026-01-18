@@ -8,14 +8,20 @@ export interface TranscriptionResponse {
     text: string;
 }
 
+export interface TranscribeOptions {
+    language?: string; // ISO-639-1 code (e.g. 'en', 'es', 'hi')
+    task?: 'transcribe' | 'translate';
+}
+
 export class SpeechToTextService {
     /**
      * Transcribes an audio file using Groq Whisper API
      * @param audioPath Absolute path to the local audio file (.m4a)
+     * @param options Configuration for transcription (language, task)
      * @returns Transcribed text
      */
-    static async transcribe(audioPath: string): Promise<string> {
-        console.log(`${LOG_PREFIX} Starting transcription for: ${audioPath}`);
+    static async transcribe(audioPath: string, options: TranscribeOptions = {}): Promise<string> {
+        console.log(`${LOG_PREFIX} Starting transcription for: ${audioPath}`, options);
 
         try {
             const formData = new FormData();
@@ -30,9 +36,19 @@ export class SpeechToTextService {
 
             formData.append('model', 'whisper-large-v3');
             formData.append('response_format', 'json');
-            // Omit language for auto-detection
 
-            const response = await fetch(GROQ_API_URL, {
+            // Apply options
+            let apiUrl = GROQ_API_URL;
+
+            if (options.task === 'translate') {
+                // Switch to translations endpoint
+                apiUrl = GROQ_API_URL.replace('/transcriptions', '/translations');
+            } else if (options.language) {
+                // Whisper expects ISO-639-1 code
+                formData.append('language', options.language);
+            }
+
+            const response = await fetch(apiUrl, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${GROQ_API_KEY}`,

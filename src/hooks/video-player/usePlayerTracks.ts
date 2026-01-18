@@ -12,7 +12,6 @@ import { SubtitleCue } from '@/types';
 import {
     NativeAudioTrack,
     ExternalSubtitle,
-    UsePlayerTracksOptions,
     UsePlayerTracksReturn,
 } from './types';
 import { findMatchingAudioTrack } from '@/utils/languages';
@@ -76,6 +75,10 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
             setSelectedSubtitleTrackIndex(initialSubtitleTrackIndex);
         }
     }, [initialSubtitleTrackIndex]);
+
+    // VLC Native Text Track ID (for bitmap subtitles like PGS/VobSub)
+    // -1 = disabled (or using custom overlay), >= 0 = enabled native track
+    const [vlcTextTrackId, setVlcTextTrackId] = useState<number>(-1);
 
     const [subtitleCues, setSubtitleCues] = useState<SubtitleCue[]>([]);
     const [currentSubtitleCue, setCurrentSubtitleCue] = useState<SubtitleCue | null>(null);
@@ -165,14 +168,31 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
             if (selectedSubtitleTrackIndex === null) {
                 setSubtitleCues([]);
                 setCurrentSubtitleCue(null);
+                setVlcTextTrackId(-1); // Disable native
                 return;
             }
 
             // External subtitle (special index -999)
             if (selectedSubtitleTrackIndex === -999) {
                 // Cues already set by loadExternalCues
+                setVlcTextTrackId(-1); // Disable native for external (we render them)
                 return;
             }
+
+            // Check if it's a bitmap subtitle (PGS, VobSub, etc.)
+            const selectedTrack = subtitleTracks.find(t => t.index === selectedSubtitleTrackIndex);
+            if (selectedTrack && selectedTrack.isBitmap) {
+                if (__DEV__) {
+                    console.log(`[usePlayerTracks] Bitmap subtitle detected (${selectedTrack.codec}), using VLC native rendering`);
+                }
+                setSubtitleCues([]); // Clear overlay
+                setCurrentSubtitleCue(null);
+                setVlcTextTrackId(selectedTrack.index); // Enable native
+                return;
+            }
+
+            // It's a text subtitle, disable native and extract
+            setVlcTextTrackId(-1);
 
             try {
                 const extractedPath = await SubtitleExtractor.extractSubtitle(
@@ -211,7 +231,7 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
         return () => {
             mounted = false;
         };
-    }, [selectedSubtitleTrackIndex, videoPath]);
+    }, [selectedSubtitleTrackIndex, videoPath, subtitleTracks]);
 
     // Track current subtitle cue based on playback time
     useEffect(() => {
@@ -338,6 +358,7 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
         subtitleCues,
         currentSubtitleCue,
         selectSubtitleTrack,
+        vlcTextTrackId, // Expose for player to use
 
         // External
         externalSubtitles,
@@ -354,6 +375,8 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
 
         // For parent to set audio tracks from VLC
         setAudioTracksFromVLC,
+        // For drift correction updates
+        setSubtitleCues,
     }), [
         audioTracks, selectedAudioTrackId, selectAudioTrack,
         subtitleTracks, selectedSubtitleTrackIndex, subtitleCues, currentSubtitleCue, selectSubtitleTrack,
@@ -361,7 +384,10 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
         hapticCues,
         audioTracksForSelector, subtitleTracksForSelector,
         setAudioTracksFromVLC
-    ]) as UsePlayerTracksReturn & { setAudioTracksFromVLC: typeof setAudioTracksFromVLC };
+    ]) as UsePlayerTracksReturn & {
+        setAudioTracksFromVLC: typeof setAudioTracksFromVLC,
+        setSubtitleCues: typeof setSubtitleCues
+    };
 }
 
 export default usePlayerTracks;
