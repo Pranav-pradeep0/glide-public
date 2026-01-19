@@ -71,6 +71,7 @@ import { SubtitleCue, VideoFile } from '@/types';
 type RouteParams = {
     videoPath: string;
     videoName?: string;
+    contentUri?: string; // Original content:// URI for CameraRoll operations
     playMode?: string;
     albumName?: string;
     hapticCues?: SubtitleCue[];
@@ -92,6 +93,7 @@ export default function VideoPlayerScreen({ route }: Props) {
     const {
         videoPath,
         videoName = 'Video',
+        contentUri, // Original content:// URI for history storage
         hapticCues: routeHapticCues,
         apiSubtitles,
         isExternalOpen,
@@ -989,10 +991,10 @@ export default function VideoPlayerScreen({ route }: Props) {
     useEffect(() => {
         const isNetwork = NavigationService.isNetworkStream(videoPath);
         if (!isNetwork && player.state.isPlaying && !hasIncrementedView.current && videoPath && videoName) {
-            incrementViewCount(videoPath, videoName);
+            incrementViewCount(videoPath, videoName, contentUri); // Pass contentUri for history storage
             hasIncrementedView.current = true;
         }
-    }, [player.state.isPlaying, videoPath, videoName, incrementViewCount]);
+    }, [player.state.isPlaying, videoPath, videoName, contentUri, incrementViewCount]);
 
     // Periodic progress save
     useEffect(() => {

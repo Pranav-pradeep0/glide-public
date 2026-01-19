@@ -29,6 +29,7 @@ class MediaServiceClass {
         edges: Array<{
             name: string;
             path: string;
+            uri: string; // Original content:// URI for CameraRoll.deletePhotos
             duration: number;
             size: number;
             timestamp: number;
@@ -63,7 +64,8 @@ class MediaServiceClass {
             // Map and resolve content:// URIs to real file paths
             const edges = await Promise.all(photos.edges.map(async (e) => {
                 const node = e.node;
-                let videoPath = node.image.uri;
+                const originalUri = node.image.uri; // Keep original URI for CameraRoll.deletePhotos
+                let videoPath = originalUri;
 
                 // Resolve content:// URIs to real file paths
                 if (videoPath.startsWith('content://')) {
@@ -78,6 +80,7 @@ class MediaServiceClass {
                 return {
                     name: node.image.filename || 'Unknown Video',
                     path: videoPath,
+                    uri: originalUri, // Original content:// URI for deletion
                     duration: node.image.playableDuration || 0,
                     size: node.image.fileSize || 0,
                     timestamp: node.timestamp,

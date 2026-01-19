@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useState, useRef, useEffect } from 'react';
 import {
     View,
     Text,
@@ -6,6 +6,8 @@ import {
     ActivityIndicator,
     TouchableOpacity,
     Dimensions,
+    InteractionManager,
+    Alert,
 } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
@@ -13,8 +15,11 @@ import { FlashList as FlashListOriginal } from '@shopify/flash-list';
 import FastImage from 'react-native-fast-image';
 import Feather from 'react-native-vector-icons/Feather';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Animated, { ZoomIn, LinearTransition, FadeInRight, ZoomInRight, FadeInDown } from 'react-native-reanimated';
+import Animated, { LinearTransition, FadeInDown, ZoomInRight } from 'react-native-reanimated';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import * as RNFS from '@dr.pogodin/react-native-fs';
+import Share from 'react-native-share';
+import { CameraRoll } from '@react-native-camera-roll/camera-roll';
 
 import { RootStackParamList, VideoFile } from '@/types';
 import { useTheme } from '@/hooks/useTheme';
@@ -22,6 +27,10 @@ import { useAlbumVideos } from '@/hooks/useMediaService';
 import { formatFileSize } from '@/utils/formatUtils';
 import { useThumbnail } from '@/hooks/useThumbnails';
 import { NavigationService } from '@/services/NavigationService';
+
+// Options Components
+import { VideoOptionsBottomSheet } from '@/components/VideoOptionsBottomSheet';
+import { useVideoHistoryStore } from '@/store/videoHistoryStore';
 
 const FlashList = Animated.createAnimatedComponent(FlashListOriginal) as any;
 
@@ -31,7 +40,6 @@ type AlbumVideosRouteProp = RouteProp<RootStackParamList, 'AlbumVideos'>;
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const GRID_ITEM_HEIGHT = 170; // 160 + margins
 const LIST_ITEM_HEIGHT = 90; // 72 + margins
-const PADDING = 20;
 
 type ViewMode = 'grid' | 'list';
 
@@ -63,11 +71,13 @@ const VideoGridCard = React.memo(
     ({
         item,
         onPress,
+        onLongPress,
         theme,
         index,
     }: {
         item: VideoFile;
         onPress: () => void;
+        onLongPress: () => void;
         theme: any;
         index: number;
     }) => {
@@ -78,6 +88,7 @@ const VideoGridCard = React.memo(
             >
                 <TouchableOpacity
                     onPress={onPress}
+                    onLongPress={onLongPress}
                     activeOpacity={0.7}
                     style={[styles.videoGridCard, { backgroundColor: theme.colors.surface }]}
                 >
@@ -102,7 +113,7 @@ const VideoGridCard = React.memo(
 );
 VideoGridCard.displayName = 'VideoGridCard';
 
-const VideoListItem = React.memo(({ item, onPress, theme, index }: any) => (
+const VideoListItem = React.memo(({ item, onPress, onMorePress, theme, index }: any) => (
     <Animated.View
         entering={FadeInDown.duration(400).springify().damping(20).mass(1).stiffness(150)}
     >
@@ -122,7 +133,13 @@ const VideoListItem = React.memo(({ item, onPress, theme, index }: any) => (
                     {formatFileSize(item.size)}
                 </Text>
             </View>
-            <Feather name="chevron-right" size={18} color={theme.colors.textSecondary} />
+            <TouchableOpacity
+                style={styles.moreButton}
+                onPress={onMorePress}
+                hitSlop={15}
+            >
+                <Feather name="more-vertical" size={20} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
         </TouchableOpacity>
     </Animated.View>
 ));
@@ -135,21 +152,100 @@ export default function AlbumVideosScreen() {
     const navigation = useNavigation<NavigationProp>();
     const route = useRoute<AlbumVideosRouteProp>();
     const insets = useSafeAreaInsets();
+    const clearHistoryForPath = useVideoHistoryStore(state => state.clearVideoHistory);
+
 
     const { albumTitle } = route.params;
     const { videos, loading, loadingMore, hasMore, loadMore, refetch } = useAlbumVideos(albumTitle);
     const [viewMode, setViewMode] = useState<ViewMode>('list');
 
+    // Options Menu State
+    const [selectedVideo, setSelectedVideo] = useState<VideoFile | null>(null);
+    const selectedVideoRef = useRef<VideoFile | null>(null);
+    const [optionsVisible, setOptionsVisible] = useState(false);
+
+    // Keep ref in sync with state
+    useEffect(() => {
+        selectedVideoRef.current = selectedVideo;
+    }, [selectedVideo]);
+
+    // ============= HANDLERS =============
+
     const handleVideoPress = useCallback((video: VideoFile) => {
         NavigationService.handleVideoNavigation(navigation, video.path, {
             videoName: video.name,
+            contentUri: video.uri, // Pass original content:// URI for history storage
             albumName: albumTitle,
         });
     }, [navigation, albumTitle]);
 
+    const handleOpenOptions = useCallback((video: VideoFile) => {
+        setSelectedVideo(video);
+        setOptionsVisible(true);
+    }, []);
+
     const toggleViewMode = useCallback(() => {
         setViewMode((prev) => (prev === 'grid' ? 'list' : 'grid'));
     }, []);
+
+    // --- Options Logic ---
+
+    const handleDelete = async () => {
+        const video = selectedVideoRef.current;
+        if (!video) {
+            console.error('[AlbumVideosScreen] handleDelete: No video selected - selectedVideoRef is null');
+            return;
+        }
+
+        const videoPath = video.path;
+        const videoUri = video.uri; // Original content:// URI for CameraRoll.deletePhotos
+
+        console.log('[AlbumVideosScreen] handleDelete started:', {
+            videoPath,
+            videoUri,
+            videoName: video.name,
+        });
+
+        if (!videoUri) {
+            console.error('[AlbumVideosScreen] handleDelete: No URI available for deletion');
+            Alert.alert('Delete Failed', 'Cannot delete: missing media URI.');
+            return;
+        }
+
+        try {
+            // Use CameraRoll.deletePhotos to properly delete from MediaStore
+            console.log('[AlbumVideosScreen] Attempting CameraRoll.deletePhotos with URI:', videoUri);
+            await CameraRoll.deletePhotos([videoUri]);
+            console.log('[AlbumVideosScreen] File deleted successfully via CameraRoll:', videoUri);
+            clearHistoryForPath(videoPath);
+            refetch();
+        } catch (error) {
+            console.error('[AlbumVideosScreen] Delete failed:', {
+                error,
+                videoPath,
+                videoUri,
+                message: error instanceof Error ? error.message : 'Unknown error',
+                stack: error instanceof Error ? error.stack : undefined,
+            });
+            Alert.alert('Delete Failed', 'Could not delete the file. Please check permissions.');
+        }
+    };
+
+    const handleShare = async () => {
+        const video = selectedVideoRef.current;
+        if (!video) return;
+        try {
+            await Share.open({
+                url: `file://${video.path}`,
+                type: 'video/*',
+                failOnCancel: false,
+            });
+        } catch (error) {
+            console.log('Share dismissed or failed', error);
+        }
+    };
+
+    // ============= RENDERERS =============
 
     const renderItem = useCallback(
         ({ item, index }: { item: VideoFile, index: number }) => {
@@ -158,14 +254,23 @@ export default function AlbumVideosScreen() {
                     <VideoListItem
                         item={item}
                         onPress={() => handleVideoPress(item)}
+                        onMorePress={() => handleOpenOptions(item)}
                         theme={theme}
                         index={index}
                     />
                 );
             }
-            return <VideoGridCard item={item} onPress={() => handleVideoPress(item)} theme={theme} index={index} />;
+            return (
+                <VideoGridCard
+                    item={item}
+                    onPress={() => handleVideoPress(item)}
+                    onLongPress={() => handleOpenOptions(item)}
+                    theme={theme}
+                    index={index}
+                />
+            );
         },
-        [viewMode, theme, handleVideoPress]
+        [viewMode, theme, handleVideoPress, handleOpenOptions]
     );
 
     const renderHeader = useCallback(() => (
@@ -250,6 +355,16 @@ export default function AlbumVideosScreen() {
                     />
                 </View>
             </View>
+
+            {/* Options Modals */}
+            <VideoOptionsBottomSheet
+                visible={optionsVisible}
+                video={selectedVideo}
+                onClose={() => setOptionsVisible(false)}
+                onPlay={() => selectedVideo && handleVideoPress(selectedVideo)}
+                onShare={handleShare}
+                onDelete={handleDelete}
+            />
         </GestureHandlerRootView>
     );
 }
@@ -436,4 +551,7 @@ const styles = StyleSheet.create({
     videoSize: {
         fontSize: 13,
     },
+    moreButton: {
+        padding: 8,
+    }
 });

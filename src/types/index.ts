@@ -3,6 +3,7 @@
 export interface VideoFile {
     name: string;
     path: string;
+    uri?: string; // Original content:// URI needed for CameraRoll.deletePhotos
     size: number;
     modifiedDate: number;
     duration: number; // in seconds
@@ -100,12 +101,14 @@ export type RootStackParamList = {
     PlayerDetail: {
         videoPath: string;
         videoName: string;
+        contentUri?: string; // Original content:// URI for CameraRoll operations
         albumName?: string;
         imdbId?: string;
     };
     VideoPlayer: {
         videoPath: string;
         videoName: string;
+        contentUri?: string; // Original content:// URI for CameraRoll operations
         cleanTitle?: string;
         albumName?: string;
         imdbId?: string;
@@ -134,6 +137,7 @@ export interface VideoBookmark {
 export interface VideoHistoryEntry {
     videoPath: string;
     videoName: string;
+    contentUri?: string; // Original content:// URI for CameraRoll.deletePhotos
     lastWatchedTime: number; // timestamp when last watched
     lastPausedPosition: number; // seconds
     duration: number;

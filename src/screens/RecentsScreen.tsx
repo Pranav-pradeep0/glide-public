@@ -25,6 +25,11 @@ import { useAppStore } from '@/store/appStore';
 import { useTheme } from '@/hooks/useTheme';
 import { ThumbnailService } from '@/services/ThumbnailService';
 import { NavigationService } from '@/services/NavigationService';
+import * as RNFS from '@dr.pogodin/react-native-fs';
+import Share from 'react-native-share';
+import { CameraRoll } from '@react-native-camera-roll/camera-roll';
+
+import { VideoOptionsBottomSheet } from '@/components/VideoOptionsBottomSheet';
 
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -229,12 +234,12 @@ const VideoListItem = React.memo(
     ({
         item,
         onPress,
-        onLongPress,
+        onMorePress,
         theme,
     }: {
         item: HistoryItemData;
         onPress: () => void;
-        onLongPress: () => void;
+        onMorePress: () => void;
         theme: Theme;
     }) => {
         const progress = item.duration > 0 ? (item.lastPausedPosition / item.duration) * 100 : 0;
@@ -247,7 +252,6 @@ const VideoListItem = React.memo(
                 <TouchableOpacity
                     style={[styles.videoItem, { backgroundColor: theme.colors.background, borderColor: theme.colors.surface, borderWidth: 2, elevation: 5, overflow: 'hidden' }]}
                     onPress={onPress}
-                    onLongPress={onLongPress}
                     activeOpacity={0.7}
                     accessibilityRole="button"
                     accessibilityLabel={`Play video: ${item.videoName}`}
@@ -282,7 +286,13 @@ const VideoListItem = React.memo(
                             </Text>
                         </View>
                     </View>
-                    <Feather name="chevron-right" size={18} color={theme.colors.textSecondary} />
+                    <TouchableOpacity
+                        style={styles.moreButton}
+                        onPress={onMorePress}
+                        hitSlop={15}
+                    >
+                        <Feather name="more-vertical" size={20} color={theme.colors.textSecondary} />
+                    </TouchableOpacity>
                     {progress > 0 && (
                         <View style={styles.progressBarContainerList}>
                             <View
@@ -309,7 +319,7 @@ export default function RecentsScreen() {
     const navigation = useNavigation<NavigationProp>();
     const insets = useSafeAreaInsets();
 
-    const { getAllHistory, clearVideoHistory, hydrateFromStorage, isHydrated } = useVideoHistoryStore();
+    const { getAllHistory, clearVideoHistory, hydrateFromStorage, isHydrated, updateVideoHistory } = useVideoHistoryStore();
     const { settings, updateSettings } = useAppStore();
 
     const [history, setHistory] = useState<HistoryItemData[]>([]);
@@ -317,6 +327,16 @@ export default function RecentsScreen() {
     const [refreshing, setRefreshing] = useState(false);
     const [viewMode, setViewMode] = useState<ViewMode>('list');
     const [sortBy, setSortBy] = useState<SortByOption>('recent');
+
+    // Options Menu State
+    const [selectedVideo, setSelectedVideo] = useState<VideoHistoryEntry | null>(null);
+    const selectedVideoRef = useRef<VideoHistoryEntry | null>(null);
+    const [optionsVisible, setOptionsVisible] = useState(false);
+
+    // Keep ref in sync with state
+    useEffect(() => {
+        selectedVideoRef.current = selectedVideo;
+    }, [selectedVideo]);
 
     const isMountedRef = useRef(true);
     const flattenedDataRef = useRef<SectionItem[]>([]);
@@ -506,27 +526,15 @@ export default function RecentsScreen() {
         });
     }
 
-    function handleLongPress(video: HistoryItemData) {
-        Alert.alert(
-            video.videoName,
-            'Choose an option',
-            [
-                {
-                    text: 'Clear History',
-                    style: 'destructive',
-                    onPress: () => {
-                        clearVideoHistory(video.videoPath);
-                        loadHistory();
-                    },
-                },
-                {
-                    text: 'Cancel',
-                    style: 'cancel',
-                },
-            ],
-            { cancelable: true }
-        );
-    }
+    const handleOpenOptions = useCallback((video: HistoryItemData) => {
+        console.log('[RecentsScreen] handleOpenOptions called:', {
+            videoName: video.videoName,
+            videoPath: video.videoPath,
+        });
+        setSelectedVideo(video);
+        setOptionsVisible(true);
+        console.log('[RecentsScreen] optionsVisible set to true');
+    }, []);
 
     const toggleViewMode = useCallback(() => setViewMode((prev) => (prev === 'grid' ? 'list' : 'grid')), []);
 
@@ -535,6 +543,75 @@ export default function RecentsScreen() {
     const toggleTheme = useCallback(() => {
         updateSettings({ darkMode: !settings.darkMode });
     }, [settings.darkMode, updateSettings]);
+
+    // --- Options Handlers ---
+
+    // --- Options Handlers ---
+
+    const handleDelete = async () => {
+        const video = selectedVideoRef.current;
+        if (!video) {
+            console.error('[RecentsScreen] handleDelete: No video selected - selectedVideoRef is null');
+            return;
+        }
+
+        const videoPath = video.videoPath;
+        const contentUri = video.contentUri; // Original content:// URI stored in history
+
+        console.log('[RecentsScreen] handleDelete started:', {
+            videoPath,
+            contentUri,
+            videoName: video.videoName,
+        });
+
+        if (!contentUri) {
+            console.error('[RecentsScreen] handleDelete: No contentUri available for deletion');
+            Alert.alert(
+                'Cannot Delete',
+                'This video was watched before the delete feature was updated. Please delete it from the Folders screen instead.'
+            );
+            return;
+        }
+
+        try {
+            // Use CameraRoll.deletePhotos with the stored content:// URI
+            console.log('[RecentsScreen] Attempting CameraRoll.deletePhotos with URI:', contentUri);
+            await CameraRoll.deletePhotos([contentUri]);
+            console.log('[RecentsScreen] File deleted successfully via CameraRoll:', contentUri);
+            clearVideoHistory(videoPath);
+            loadHistory();
+        } catch (error) {
+            console.error('[RecentsScreen] Delete failed:', {
+                error,
+                videoPath,
+                contentUri,
+                message: error instanceof Error ? error.message : 'Unknown error',
+                stack: error instanceof Error ? error.stack : undefined,
+            });
+            Alert.alert('Delete Failed', 'Could not delete the file. Please check permissions.');
+        }
+    };
+
+    const handleClearHistoryItem = () => {
+        const video = selectedVideoRef.current;
+        if (!video) return;
+        clearVideoHistory(video.videoPath);
+        loadHistory();
+    };
+
+    const handleShare = async () => {
+        const video = selectedVideoRef.current;
+        if (!video) return;
+        try {
+            await Share.open({
+                url: `file://${video.videoPath}`,
+                type: 'video/*',
+                failOnCancel: false,
+            });
+        } catch (error) {
+            console.log('Share dismissed', error);
+        }
+    };
 
     // ============= KEY EXTRACTOR =============
 
@@ -667,13 +744,13 @@ export default function RecentsScreen() {
                     <VideoListItem
                         item={item.data!}
                         onPress={() => handleVideoPress(item.data!)}
-                        onLongPress={() => handleLongPress(item.data!)}
+                        onMorePress={() => handleOpenOptions(item.data!)}
                         theme={theme}
                     />
                 );
             }
 
-            return <GridRow item={item} onPress={handleVideoPress} onLongPress={handleLongPress} theme={theme} />;
+            return <GridRow item={item} onPress={handleVideoPress} onLongPress={handleOpenOptions} theme={theme} />;
         },
         [viewMode, theme]
     );
@@ -711,13 +788,23 @@ export default function RecentsScreen() {
                     initialNumToRender={10}
                     windowSize={5}
                 />
+                {/* Options Modals */}
+                <VideoOptionsBottomSheet
+                    visible={optionsVisible}
+                    video={selectedVideo}
+                    onClose={() => setOptionsVisible(false)}
+                    onPlay={() => selectedVideo && handleVideoPress(selectedVideo as HistoryItemData)}
+                    onShare={handleShare}
+                    onDelete={handleDelete}
+                    onClearHistory={handleClearHistoryItem}
+                />
             </View>
+
         </View>
     );
 }
 
-
-// ============= STYLES =============
+// ... styles remain mostly same, just added moreButton style
 
 const styles = StyleSheet.create({
     container: { flex: 1 },
@@ -919,6 +1006,9 @@ const styles = StyleSheet.create({
     },
     videoSize: {
         fontSize: 13,
+    },
+    moreButton: {
+        padding: 8,
     },
     emptyContainer: {
         flex: 1,

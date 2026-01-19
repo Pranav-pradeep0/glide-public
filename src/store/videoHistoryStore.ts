@@ -13,7 +13,7 @@ interface VideoHistoryState {
     getVideoHistory: (videoPath: string) => VideoHistoryEntry | null;
     getAllHistory: () => VideoHistoryEntry[];
     updateVideoHistory: (entry: Partial<VideoHistoryEntry> & { videoPath: string; videoName: string }) => void;
-    incrementViewCount: (videoPath: string, videoName: string) => void;
+    incrementViewCount: (videoPath: string, videoName: string, contentUri?: string) => void;
     updatePlaybackPosition: (videoPath: string, videoName: string, position: number, duration: number, audioTrackId?: number, subtitleTrackIndex?: number, audioDelay?: number, subtitleDelay?: number, brightness?: number) => void;
     addBookmark: (videoPath: string, videoName: string, timestamp: number, label?: string) => void;
     removeBookmark: (videoPath: string, bookmarkId: string) => void;
@@ -107,7 +107,7 @@ export const useVideoHistoryStore = create<VideoHistoryState>((set, get) => ({
         debouncedPersist();
     },
 
-    incrementViewCount: (videoPath: string, videoName: string) => {
+    incrementViewCount: (videoPath: string, videoName: string, contentUri?: string) => {
         // Skip content:// and http/https URIs - they can't be replayed after permission expires
         if (videoPath.startsWith('content://') || (videoPath.startsWith('http://') ||
             videoPath.startsWith('https://'))) {
@@ -123,11 +123,13 @@ export const useVideoHistoryStore = create<VideoHistoryState>((set, get) => ({
                     ...existing,
                     viewCount: existing.viewCount + 1,
                     lastWatchedTime: Date.now(),
+                    contentUri: contentUri || existing.contentUri, // Preserve existing URI if not provided
                 });
             } else {
                 newHistory.set(videoPath, {
                     videoPath,
                     videoName,
+                    contentUri, // Store the content:// URI
                     lastWatchedTime: Date.now(),
                     lastPausedPosition: 0,
                     duration: 0,

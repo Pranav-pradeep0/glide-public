@@ -56,6 +56,7 @@ export function useAlbumVideos(albumTitle: string | null) {
             const mappedVideos: VideoFile[] = result.edges.map(edge => ({
                 name: edge.name,
                 path: edge.path,
+                uri: edge.uri, // Original content:// URI for CameraRoll.deletePhotos
                 size: edge.size, // Size in bytes
                 modifiedDate: edge.timestamp,
                 duration: edge.duration * 1000,

@@ -37,6 +37,7 @@
     "react-native-reanimated": "^3.19.3",
     "react-native-safe-area-context": "^5.6.1",
     "react-native-screens": "^4.18.0",
+    "react-native-share": "^12.1.0",
     "react-native-stallion": "^2.2.0",
     "react-native-svg": "^15.14.0",
     "react-native-vlc-media-player": "file:./libs/react-native-vlc-media-player",
