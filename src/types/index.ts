@@ -127,6 +127,7 @@ export type RootStackParamList = {
         albumTitle: string;
         videoCount: number;
     };
+    Search: undefined;
 };
 
 export interface VideoBookmark {

@@ -2,6 +2,7 @@ import { useSettings } from '@/hooks/useSettings';
 import RootNavigator from '@/navigation/RootNavigator';
 import { FileService } from '@/services/FileService';
 import { useTheme } from '@/hooks/useTheme';
+import { useVideoIndexStore } from '@/store/videoIndexStore';
 import { ErrorBoundary } from 'ErrorBoundary';
 import React, { useEffect, useState, useRef } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -40,6 +41,11 @@ function App() {
     try {
       const subtitleCacheDir = FileService.getSubtitleCacheDir();
       await FileService.ensureDir(subtitleCacheDir);
+
+      // Start background video indexing for search
+      // This runs async and doesn't block app startup
+      useVideoIndexStore.getState().initialize();
+
       setAppReady(true);
       console.log('App initialized successfully');
     } catch (error) {

@@ -227,6 +227,13 @@ export default function FoldersScreen() {
             <View style={styles.headerActions}>
                 <TouchableOpacity
                     style={[styles.viewModeButton, { backgroundColor: theme.colors.surface }]}
+                    onPress={() => navigation.navigate('Search')}
+                    activeOpacity={0.7}
+                >
+                    <Feather name="search" size={20} color={theme.colors.text} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                    style={[styles.viewModeButton, { backgroundColor: theme.colors.surface }]}
                     onPress={toggleViewMode}
                     activeOpacity={0.7}
                 >

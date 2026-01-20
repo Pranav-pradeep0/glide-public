@@ -631,6 +631,15 @@ export default function RecentsScreen() {
                 <View style={styles.headerControls}>
                     <TouchableOpacity
                         style={[styles.viewModeButton, { backgroundColor: theme.colors.surface }]}
+                        onPress={() => navigation.navigate('Search')}
+                        activeOpacity={0.7}
+                        accessibilityRole="button"
+                        accessibilityLabel="Search videos"
+                    >
+                        <Feather name="search" size={20} color={theme.colors.text} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[styles.viewModeButton, { backgroundColor: theme.colors.surface }]}
                         onPress={toggleViewMode}
                         activeOpacity={0.7}
                         accessibilityRole="button"

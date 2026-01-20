@@ -13,6 +13,7 @@ import OnboardingScreen from '@/screens/OnboardingScreen';
 import RecentsScreen from '@/screens/RecentsScreen';
 import SettingsScreen from '@/screens/SettingsScreen';
 import FoldersScreen from '@/screens/FoldersScreen';
+import SearchScreen from '@/screens/SearchScreen';
 import PlayerDetailScreen from '@/screens/PlayerDetailScreen';
 import VideoPlayerScreen from '@/screens/VideoPlayerScreen';
 import AlbumVideosScreen from '@/screens/AlbumVideosScreen';
@@ -187,6 +188,14 @@ export default function RootNavigator({ onReady }: RootNavigatorProps) {
                                 animation: 'ios_from_right',
                                 animationDuration: 150,
                                 gestureEnabled: false,
+                            }}
+                        />
+                        <Stack.Screen
+                            name="Search"
+                            component={SearchScreen}
+                            options={{
+                                headerShown: false,
+                                animation: 'slide_from_right',
                             }}
                         />
                     </>
