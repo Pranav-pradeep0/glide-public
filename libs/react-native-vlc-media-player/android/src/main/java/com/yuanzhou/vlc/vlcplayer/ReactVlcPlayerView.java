@@ -906,12 +906,28 @@ class ReactVlcPlayerView extends TextureView implements
         }
     }
 
+    // Guard against rapid play/pause toggling
+    private long lastPauseModifierTime = 0;
+    private boolean lastPauseModifierState = true;
+    private static final long PAUSE_MODIFIER_DEBOUNCE_MS = 50;
+
     /**
      * 改变播放状态
      *
      * @param paused
      */
     public void setPausedModifier(boolean paused) {
+        long now = System.currentTimeMillis();
+
+        // Skip if same state requested within debounce window
+        if (paused == lastPauseModifierState && (now - lastPauseModifierTime) < PAUSE_MODIFIER_DEBOUNCE_MS) {
+            Log.d(TAG, "setPausedModifier: Skipping rapid duplicate call, paused=" + paused);
+            return;
+        }
+
+        lastPauseModifierTime = now;
+        lastPauseModifierState = paused;
+
         Log.i(TAG, "setPausedModifier: paused=" + paused + ", mMediaPlayer=" + mMediaPlayer);
         if (mMediaPlayer != null) {
             if (paused) {

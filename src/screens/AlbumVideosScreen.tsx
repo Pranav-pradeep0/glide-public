@@ -10,7 +10,7 @@ import {
     Alert,
 } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import { useNavigation, useRoute, RouteProp, useIsFocused } from '@react-navigation/native';
 import { FlashList as FlashListOriginal } from '@shopify/flash-list';
 import FastImage from 'react-native-fast-image';
 import Feather from 'react-native-vector-icons/Feather';
@@ -30,7 +30,8 @@ import { NavigationService } from '@/services/NavigationService';
 
 // Options Components
 import { VideoOptionsBottomSheet } from '@/components/VideoOptionsBottomSheet';
-import { useVideoHistoryStore } from '@/store/videoHistoryStore';
+import { useVideoHistoryStore, generateVideoId } from '@/store/videoHistoryStore';
+import { VideoHistoryEntry } from '@/types';
 
 const FlashList = Animated.createAnimatedComponent(FlashListOriginal) as any;
 
@@ -74,13 +75,19 @@ const VideoGridCard = React.memo(
         onLongPress,
         theme,
         index,
+        historyEntry, // Receive history entry
     }: {
         item: VideoFile;
         onPress: () => void;
         onLongPress: () => void;
         theme: any;
         index: number;
+        historyEntry?: VideoHistoryEntry | null;
     }) => {
+        const progress = historyEntry && historyEntry.duration > 0
+            ? (historyEntry.lastPausedPosition / historyEntry.duration) * 100
+            : 0;
+
         return (
             <Animated.View
                 entering={ZoomInRight.duration(250).springify().damping(30).mass(1).stiffness(200)}
@@ -97,6 +104,16 @@ const VideoGridCard = React.memo(
                         <View style={styles.playOverlay}>
                             <Feather name="play" size={24} color="#FFFFFF" />
                         </View>
+                        {progress > 0 && (
+                            <View style={styles.progressBarContainer}>
+                                <View
+                                    style={[
+                                        styles.progressBar,
+                                        { width: `${progress}%`, backgroundColor: theme.colors.primary },
+                                    ]}
+                                />
+                            </View>
+                        )}
                     </View>
                     <View style={styles.videoGridInfo}>
                         <Text style={[styles.videoGridName, { color: theme.colors.text }]} numberOfLines={2}>
@@ -113,36 +130,52 @@ const VideoGridCard = React.memo(
 );
 VideoGridCard.displayName = 'VideoGridCard';
 
-const VideoListItem = React.memo(({ item, onPress, onMorePress, theme, index }: any) => (
-    <Animated.View
-        entering={FadeInDown.duration(400).springify().damping(20).mass(1).stiffness(150)}
-    >
-        <TouchableOpacity
-            style={[styles.videoListItem, { backgroundColor: theme.colors.background, borderColor: theme.colors.surface, borderWidth: 2, elevation: 5 }]}
-            onPress={onPress}
-            activeOpacity={0.7}
+const VideoListItem = React.memo(({ item, onPress, onMorePress, theme, index, historyEntry }: any) => {
+    const progress = historyEntry && historyEntry.duration > 0
+        ? (historyEntry.lastPausedPosition / historyEntry.duration) * 100
+        : 0;
+
+    return (
+        <Animated.View
+            entering={FadeInDown.duration(400).springify().damping(20).mass(1).stiffness(150)}
         >
-            <View style={[styles.videoThumbnail, { backgroundColor: theme.colors.surfaceVariant }]}>
-                <VideoThumbnail path={item.path} duration={item.duration} />
-            </View>
-            <View style={styles.videoInfo}>
-                <Text style={[styles.videoName, { color: theme.colors.text }]} numberOfLines={1}>
-                    {item.name}
-                </Text>
-                <Text style={[styles.videoSize, { color: theme.colors.textSecondary }]}>
-                    {formatFileSize(item.size)}
-                </Text>
-            </View>
             <TouchableOpacity
-                style={styles.moreButton}
-                onPress={onMorePress}
-                hitSlop={15}
+                style={[styles.videoListItem, { backgroundColor: theme.colors.background, borderColor: theme.colors.surface, borderWidth: 2, elevation: 5, overflow: 'hidden' }]}
+                onPress={onPress}
+                activeOpacity={0.7}
             >
-                <Feather name="more-vertical" size={20} color={theme.colors.textSecondary} />
+                <View style={[styles.videoThumbnail, { backgroundColor: theme.colors.surfaceVariant }]}>
+                    <VideoThumbnail path={item.path} duration={item.duration} />
+                </View>
+                <View style={styles.videoInfo}>
+                    <Text style={[styles.videoName, { color: theme.colors.text }]} numberOfLines={1}>
+                        {item.name}
+                    </Text>
+                    <Text style={[styles.videoSize, { color: theme.colors.textSecondary }]}>
+                        {formatFileSize(item.size)}
+                    </Text>
+                </View>
+                <TouchableOpacity
+                    style={styles.moreButton}
+                    onPress={onMorePress}
+                    hitSlop={15}
+                >
+                    <Feather name="more-vertical" size={20} color={theme.colors.textSecondary} />
+                </TouchableOpacity>
+                {progress > 0 && (
+                    <View style={styles.progressBarContainerList}>
+                        <View
+                            style={[
+                                styles.progressBar,
+                                { width: `${progress}%`, backgroundColor: theme.colors.primary },
+                            ]}
+                        />
+                    </View>
+                )}
             </TouchableOpacity>
-        </TouchableOpacity>
-    </Animated.View>
-));
+        </Animated.View>
+    );
+});
 VideoListItem.displayName = 'VideoListItem';
 
 // ============= MAIN COMPONENT =============
@@ -153,6 +186,9 @@ export default function AlbumVideosScreen() {
     const route = useRoute<AlbumVideosRouteProp>();
     const insets = useSafeAreaInsets();
     const clearHistoryForPath = useVideoHistoryStore(state => state.clearVideoHistory);
+    // Use selector with shallow equality or just get the map reference.
+    const history = useVideoHistoryStore(state => state.history);
+    const isFocused = useIsFocused(); // Force re-render on focus
 
 
     const { albumTitle } = route.params;
@@ -247,8 +283,36 @@ export default function AlbumVideosScreen() {
 
     // ============= RENDERERS =============
 
+    const getHistoryEntry = useCallback((file: VideoFile) => {
+        // 1. Try direct path
+        let entry = history.get(file.path);
+
+        // 2. Try adding file:// prefix if not present
+        if (!entry && !file.path.startsWith('file://')) {
+            entry = history.get(`file://${file.path}`);
+        }
+
+        // 3. Try removing file:// prefix if present
+        if (!entry && file.path.startsWith('file://')) {
+            entry = history.get(file.path.replace('file://', ''));
+        }
+
+        if (!entry) {
+            // 4. Fallback to video ID lookup (name + size)
+            const videoId = generateVideoId(file.name, file.size);
+            for (const e of history.values()) {
+                if (e.videoId === videoId) {
+                    entry = e;
+                    break;
+                }
+            }
+        }
+        return entry;
+    }, [history]);
+
     const renderItem = useCallback(
         ({ item, index }: { item: VideoFile, index: number }) => {
+            const historyEntry = getHistoryEntry(item);
             if (viewMode === 'list') {
                 return (
                     <VideoListItem
@@ -257,6 +321,7 @@ export default function AlbumVideosScreen() {
                         onMorePress={() => handleOpenOptions(item)}
                         theme={theme}
                         index={index}
+                        historyEntry={historyEntry}
                     />
                 );
             }
@@ -267,10 +332,11 @@ export default function AlbumVideosScreen() {
                     onLongPress={() => handleOpenOptions(item)}
                     theme={theme}
                     index={index}
+                    historyEntry={historyEntry}
                 />
             );
         },
-        [viewMode, theme, handleVideoPress, handleOpenOptions]
+        [viewMode, theme, handleVideoPress, handleOpenOptions, getHistoryEntry]
     );
 
     const renderHeader = useCallback(() => (
@@ -335,6 +401,7 @@ export default function AlbumVideosScreen() {
                     <FlashList
                         data={videos}
                         renderItem={renderItem}
+                        extraData={[history, isFocused]} // update on history change or focus
                         estimatedItemSize={viewMode === 'grid' ? GRID_ITEM_HEIGHT : LIST_ITEM_HEIGHT}
                         ListEmptyComponent={renderEmpty}
                         ListFooterComponent={renderFooter}
@@ -553,5 +620,24 @@ const styles = StyleSheet.create({
     },
     moreButton: {
         padding: 8,
-    }
+    },
+    progressBarContainer: {
+        position: 'absolute',
+        bottom: 0,
+        left: 0,
+        right: 0,
+        height: 3,
+        backgroundColor: 'rgba(255,255,255,0.3)',
+    },
+    progressBarContainerList: {
+        position: 'absolute',
+        bottom: 0,
+        left: 0,
+        right: 0,
+        height: 3,
+        backgroundColor: 'rgba(0,0,0,0.1)',
+    },
+    progressBar: {
+        height: '100%',
+    },
 });

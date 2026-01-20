@@ -58,8 +58,10 @@ export function useAlbumVideos(albumTitle: string | null) {
                 path: edge.path,
                 uri: edge.uri, // Original content:// URI for CameraRoll.deletePhotos
                 size: edge.size, // Size in bytes
-                modifiedDate: edge.timestamp,
-                duration: edge.duration * 1000,
+                modifiedDate: edge.timestamp * 1000, // Convert to milliseconds
+                duration: edge.duration, // Already in seconds from MediaService
+                width: edge.width,
+                height: edge.height,
                 album: albumTitle,
                 isDirectory: false,
             }));

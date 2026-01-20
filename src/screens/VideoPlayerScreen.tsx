@@ -311,10 +311,18 @@ export default function VideoPlayerScreen({ route }: Props) {
 
     // Pause player immediately if it starts playing while resume modal is visible
     useEffect(() => {
+        console.log('[DEBUG RACE] Guard effect triggered:', {
+            resumeModalVisible,
+            isPlaying: player.state.isPlaying,
+            paused: player.state.paused,
+            timestamp: Date.now()
+        });
         if (resumeModalVisible && player.state.isPlaying) {
+            console.log('[DEBUG RACE] >>> PAUSING because modal visible + isPlaying');
             player.pause();
         }
-    }, [resumeModalVisible, player.state.isPlaying, player]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [resumeModalVisible, player.state.isPlaying]);
 
 
 
@@ -919,30 +927,47 @@ export default function VideoPlayerScreen({ route }: Props) {
 
     // Inactivity Prompt Logic
     useEffect(() => {
+        console.log('[DEBUG RACE] Inactivity effect triggered:', {
+            paused: player.state.paused,
+            resumeModalVisible,
+            recapVisible,
+            lastPauseTime: lastPauseTimeRef.current,
+            timestamp: Date.now()
+        });
         if (player.state.paused) {
             // Only set if not already set (e.g. from a previous pause)
             if (!lastPauseTimeRef.current) {
                 lastPauseTimeRef.current = Date.now();
+                console.log('[DEBUG RACE] Set lastPauseTime:', lastPauseTimeRef.current);
             }
         } else {
             // When resuming, check how long it was paused
             if (lastPauseTimeRef.current) {
                 const pauseDuration = Date.now() - lastPauseTimeRef.current;
+                console.log('[DEBUG RACE] Pause duration:', pauseDuration, 'threshold:', RECAP_INACTIVITY_THRESHOLD);
                 // If paused for > threshold, show the resume modal again to offer a recap
                 if (pauseDuration > RECAP_INACTIVITY_THRESHOLD && !resumeModalVisible && !recapVisible) {
+                    console.log('[DEBUG RACE] >>> SHOWING MODAL + PAUSING due to inactivity');
                     setResumeModalVisible(true);
                     player.pause();
                 }
             }
             lastPauseTimeRef.current = null;
         }
-    }, [player.state.paused, resumeModalVisible, recapVisible, player]);
+    }, [player.state.paused, resumeModalVisible, recapVisible]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const handleResumeModalAction = useCallback((action: 'resume' | 'restart' | 'recap') => {
+        console.log('[DEBUG RACE] handleResumeModalAction called:', action, 'at:', Date.now());
         if (action === 'resume') {
+            console.log('[DEBUG RACE] >>> Setting resumeModalVisible=false, then calling play()');
             setResumeModalVisible(false);
             player.play();
+            console.log('[DEBUG RACE] <<< play() called, current state:', {
+                paused: player.state.paused,
+                isPlaying: player.state.isPlaying
+            });
         } else if (action === 'restart') {
+            console.log('[DEBUG RACE] >>> Setting resumeModalVisible=false, then seek+play');
             setResumeModalVisible(false);
             player.seekImmediate(0);
             player.play();
@@ -973,7 +998,8 @@ export default function VideoPlayerScreen({ route }: Props) {
         if (ui.state.quickSettingsOpen && player.state.isPlaying) {
             player.pause();
         }
-    }, [ui.state.quickSettingsOpen, player.state.isPlaying, player]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [ui.state.quickSettingsOpen, player.state.isPlaying]);
 
     // App state handling - respect background play setting
     useEffect(() => {

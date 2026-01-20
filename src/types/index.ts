@@ -7,6 +7,8 @@ export interface VideoFile {
     size: number;
     modifiedDate: number;
     duration: number; // in seconds
+    width?: number;
+    height?: number;
     isDirectory: boolean;
     album?: string;
 }
@@ -137,7 +139,9 @@ export interface VideoBookmark {
 export interface VideoHistoryEntry {
     videoPath: string;
     videoName: string;
+    videoId: string; // Canonical identifier based on name (+ optional size) for deduplication
     contentUri?: string; // Original content:// URI for CameraRoll.deletePhotos
+    hideFromRecents?: boolean; // If true, entry is hidden from Recents list but state is still saved
     lastWatchedTime: number; // timestamp when last watched
     lastPausedPosition: number; // seconds
     duration: number;

@@ -131,6 +131,7 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
 
         // Intercept onPlaying to apply resume
         const handlePlaying = useCallback(() => {
+            console.log('[DEBUG RACE] AnimatedVideoView.handlePlaying at:', Date.now(), 'pendingResume:', pendingResumeRef.current);
             // Apply pending resume if exists
             if (pendingResumeRef.current !== null) {
                 const fraction = pendingResumeRef.current;
@@ -146,6 +147,7 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
             }
 
             // Forward event
+            console.log('[DEBUG RACE] AnimatedVideoView forwarding onPlaying to parent');
             onPlaying();
         }, [onPlaying, ref]);
 
@@ -173,7 +175,7 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
                     style={styles.video}
                     audioTrack={audioTrack}
                     textTrack={textTrack ?? -1}
-                    autoplay={true}
+                    autoplay={!paused}
                     muted={muted}
                     resizeMode={resizeMode}
                     repeat={repeat}

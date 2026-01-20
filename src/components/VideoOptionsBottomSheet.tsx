@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import Feather from 'react-native-vector-icons/Feather';
 import FastImage from 'react-native-fast-image';
+import { FFprobeKit } from 'react-native-ffmpeg-kit';
 import { useTheme } from '@/hooks/useTheme';
 import { VideoFile, VideoHistoryEntry } from '@/types';
 import { formatFileSize } from '@/utils/formatUtils';
@@ -31,20 +32,29 @@ const MetadataItem = ({
     icon,
     label,
     value,
+    badge,
     theme
 }: {
     icon: string;
     label: string;
     value: string;
+    badge?: string;
     theme: any;
 }) => (
     <View style={styles.metaItem}>
         <View style={[styles.metaIcon, { backgroundColor: theme.colors.surfaceVariant }]}>
             <Feather name={icon as any} size={16} color={theme.colors.textSecondary} />
         </View>
-        <View>
-            <Text style={[styles.metaLabel, { color: theme.colors.textSecondary }]}>{label}</Text>
-            <Text style={[styles.metaValue, { color: theme.colors.text }]}>{value}</Text>
+        <View style={{ flex: 1, flexShrink: 1 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 2 }}>
+                <Text style={[styles.metaLabel, { color: theme.colors.textSecondary, marginBottom: 0 }]} numberOfLines={1}>{label}</Text>
+                {badge && (
+                    <View style={{ backgroundColor: theme.colors.surfaceVariant, borderRadius: 4, paddingHorizontal: 4, paddingVertical: 1, marginLeft: 6 }}>
+                        <Text style={{ fontSize: 10, color: theme.colors.text, fontWeight: '700' }}>{badge}</Text>
+                    </View>
+                )}
+            </View>
+            <Text style={[styles.metaValue, { color: theme.colors.text }]} numberOfLines={3}>{value}</Text>
         </View>
     </View>
 );
@@ -117,6 +127,7 @@ export const VideoOptionsBottomSheet: React.FC<VideoOptionsProps> = ({
     const size = video && 'size' in video ? video.size : (video && 'fileSize' in video ? video.fileSize : 0);
     const date = video && 'modifiedDate' in video ? video.modifiedDate : (video && 'lastWatchedTime' in video ? video.lastWatchedTime : 0);
     const dateLabel = video && 'lastWatchedTime' in video ? 'Watched' : 'Modified';
+    const resolution = video && 'width' in video && video.width && video.height ? `${video.width} x ${video.height}` : null;
 
     const { thumbnail } = useThumbnail(path, duration);
     const [aspectRatio, setAspectRatio] = useState<number>(1.77);
@@ -133,6 +144,114 @@ export const VideoOptionsBottomSheet: React.FC<VideoOptionsProps> = ({
             });
         }
     }, [thumbnail]);
+
+    // Extended Metadata State
+    const [extendedMeta, setExtendedMeta] = useState<{
+        bitrate?: string;
+        videoCodec?: string;
+        audioCodec?: string;
+        fps?: string;
+        sampleRate?: string;
+        subtitles?: string;
+        subtitleBadge?: string;
+        loading: boolean;
+    }>({ loading: false });
+
+    useEffect(() => {
+        if (visible && path) {
+            setExtendedMeta(prev => ({ ...prev, loading: true }));
+
+            FFprobeKit.getMediaInformation(path).then(async (session) => {
+                const information = session.getMediaInformation();
+                if (information) {
+                    const props = information.getAllProperties();
+
+                    // Extract streams
+                    const streams = information.getStreams();
+                    let videoCodec = '';
+                    let audioCodec = '';
+                    let fps = '';
+                    let sampleRate = '';
+                    const subtitleTracks: { lang: string; codec: string }[] = [];
+
+                    streams.forEach((stream: any) => {
+                        if (stream.getType() === 'video') {
+                            videoCodec = stream.getCodec();
+                            // FPS calculation from r_frame_rate (e.g., "30000/1001" or "30/1")
+                            const rFrameRate = stream.getRealFrameRate();
+                            if (rFrameRate) {
+                                // Simple check if it's a fraction or number
+                                if (rFrameRate.includes('/')) {
+                                    const [num, den] = rFrameRate.split('/');
+                                    const calculated = parseInt(num) / parseInt(den);
+                                    fps = calculated.toFixed(0) + ' fps';
+                                } else {
+                                    fps = parseFloat(rFrameRate).toFixed(0) + ' fps';
+                                }
+                            }
+                        } else if (stream.getType() === 'audio') {
+                            audioCodec = stream.getCodec();
+                            sampleRate = stream.getSampleRate() ? `${parseInt(stream.getSampleRate()) / 1000} kHz` : '';
+                        } else if (stream.getType() === 'subtitle') {
+                            const codec = stream.getCodec();
+                            const tags = stream.getTags();
+                            // Try to get language, default to 'und' (VideoOptionsBottomSheet.tsx) or just codec
+                            let lang = tags && tags.language ? tags.language.toUpperCase() : 'UND';
+
+                            // Map common codecs to friendly names if needed
+                            let friendlyCodec = codec;
+                            if (codec === 'subrip') friendlyCodec = 'SRT';
+                            if (codec === 'hdmv_pgs_subtitle') friendlyCodec = 'PGS';
+                            if (codec === 'ass') friendlyCodec = 'SSA';
+                            if (codec === 'mov_text') friendlyCodec = 'MOV';
+
+
+                            subtitleTracks.push({ lang, codec: friendlyCodec.toUpperCase() });
+                        }
+                    });
+
+                    // Bitrate
+                    const bitrateVal = information.getBitrate(); // in bps
+                    let bitrate = '';
+                    if (bitrateVal) {
+                        const bps = parseInt(bitrateVal);
+                        if (bps > 1000000) {
+                            bitrate = (bps / 1000000).toFixed(1) + ' Mbps';
+                        } else {
+                            bitrate = (bps / 1000).toFixed(0) + ' Kbps';
+                        }
+                    }
+
+                    // Format Subtitles and Badge
+                    let subtitlesStr = '';
+                    let subtitleBadge = '';
+
+                    if (subtitleTracks.length > 0) {
+                        // Deduplicate formats for badge (e.g., "SRT / PGS")
+                        const uniqueCodecs = [...new Set(subtitleTracks.map(t => t.codec))];
+                        subtitleBadge = uniqueCodecs.join(' / ');
+
+                        // Deduplicate languages for value (e.g., "ENG, JPN")
+                        const uniqueLangs = [...new Set(subtitleTracks.map(t => t.lang))];
+                        subtitlesStr = uniqueLangs.join(', ');
+                    }
+
+                    setExtendedMeta({
+                        bitrate,
+                        videoCodec: videoCodec.toUpperCase(),
+                        audioCodec: audioCodec.toUpperCase(),
+                        fps,
+                        sampleRate,
+                        subtitles: subtitlesStr || undefined,
+                        subtitleBadge: subtitleBadge || undefined,
+                        loading: false
+                    });
+                } else {
+                    setExtendedMeta(prev => ({ ...prev, loading: false }));
+                }
+            });
+        }
+    }, [visible, path]);
 
     const formattedDate = useMemo(() => {
         if (!date) return 'Unknown';
@@ -181,58 +300,70 @@ export const VideoOptionsBottomSheet: React.FC<VideoOptionsProps> = ({
                             </Text>
                         </View>
 
-                        {isPortrait ? (
-                            <View style={styles.portraitLayout}>
-                                <View style={[styles.portraitThumbnailWrapper, { backgroundColor: theme.colors.surfaceVariant }]}>
-                                    {thumbnail ? (
-                                        <FastImage
+                        <View style={styles.landscapeLayout}>
+                            <View style={[styles.landscapeThumbnailWrapper, { backgroundColor: theme.colors.surfaceVariant, aspectRatio: 1.77 }]}>
+                                {thumbnail ? (
+                                    <>
+                                        {/* Blurred Background for Portrait/Weird Aspect Ratios */}
+                                        <Image
                                             source={{ uri: thumbnail }}
                                             style={StyleSheet.absoluteFill}
-                                            resizeMode={FastImage.resizeMode.cover}
-                                        />
-                                    ) : (
-                                        <Feather name="video" size={32} color={theme.colors.textSecondary} />
-                                    )}
-                                    <View style={styles.playOverlay}>
-                                        <Feather name="play-circle" size={32} color="rgba(255,255,255,0.8)" />
-                                    </View>
-                                </View>
-                                <View style={styles.portraitDetails}>
-                                    <MetadataItem icon="clock" label="Duration" value={formatDurationLocal(duration)} theme={theme} />
-                                    <View style={{ height: 12 }} />
-                                    {size ? <MetadataItem icon="hard-drive" label="Size" value={formatFileSize(size)} theme={theme} /> : null}
-                                    <View style={{ height: 12 }} />
-                                    <MetadataItem icon="calendar" label={dateLabel} value={formattedDate} theme={theme} />
-                                </View>
-                            </View>
-                        ) : (
-                            <View style={styles.landscapeLayout}>
-                                <View style={[styles.landscapeThumbnailWrapper, { backgroundColor: theme.colors.surfaceVariant, aspectRatio: aspectRatio || 1.77 }]}>
-                                    {thumbnail ? (
+                                            resizeMode="cover"
+                                            blurRadius={10}
+                                        /><View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0, 0, 0, 0.51)' }} />
+
+                                        {/* Playable Content */}
                                         <FastImage
                                             source={{ uri: thumbnail }}
                                             style={StyleSheet.absoluteFill}
                                             resizeMode={FastImage.resizeMode.contain}
                                         />
-                                    ) : (
+                                    </>
+                                ) : (
+                                    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
                                         <Feather name="video" size={48} color={theme.colors.textSecondary} />
-                                    )}
-                                    <View style={styles.playOverlay}>
-                                        <Feather name="play-circle" size={48} color="rgba(255,255,255,0.8)" />
                                     </View>
-                                </View>
-                                <View style={[styles.metaGrid, { backgroundColor: theme.colors.surface }]}>
-                                    <View style={styles.metaRow}>
-                                        <MetadataItem icon="clock" label="Duration" value={formatDurationLocal(duration)} theme={theme} />
-                                        {size ? <MetadataItem icon="hard-drive" label="Size" value={formatFileSize(size)} theme={theme} /> : null}
-                                    </View>
-                                    <View style={[styles.divider, { backgroundColor: theme.colors.border }]} />
-                                    <View style={styles.metaRow}>
-                                        <MetadataItem icon="calendar" label={dateLabel} value={formattedDate} theme={theme} />
-                                    </View>
-                                </View>
+                                )}
+                                <Pressable style={styles.playOverlay} onPress={() => handleAction(onPlay)}>
+                                    <Feather name="play-circle" size={48} color="rgba(255,255,255,0.9)" />
+                                </Pressable>
                             </View>
-                        )}
+                            <View style={[styles.metaGrid, { backgroundColor: theme.colors.surface }]}>
+                                <View style={styles.metaRow}>
+                                    <MetadataItem icon="clock" label="Duration" value={formatDurationLocal(duration)} theme={theme} />
+                                    {size ? <MetadataItem icon="hard-drive" label="Size" value={formatFileSize(size)} theme={theme} /> : null}
+                                </View>
+                                <View style={[styles.divider, { backgroundColor: theme.colors.border }]} />
+                                <View style={styles.metaRow}>
+                                    <MetadataItem icon="calendar" label={dateLabel} value={formattedDate} theme={theme} />
+                                    {resolution ? <MetadataItem icon="maximize" label="Resolution" value={resolution} theme={theme} /> : null}
+                                </View>
+
+                                {/* Extended Geeky Metadata Landscape */}
+                                {!extendedMeta.loading && (extendedMeta.bitrate || extendedMeta.videoCodec || extendedMeta.audioCodec || extendedMeta.subtitles) && (
+                                    <>
+                                        <View style={[styles.divider, { backgroundColor: theme.colors.border }]} />
+                                        <View style={styles.metaRow}>
+                                            {extendedMeta.bitrate ? <MetadataItem icon="activity" label="Bitrate" value={extendedMeta.bitrate} theme={theme} /> : <View style={{ flex: 1 }} />}
+                                            {extendedMeta.videoCodec ? <MetadataItem icon="film" label="Video" value={`${extendedMeta.videoCodec} ${extendedMeta.fps ? `(${extendedMeta.fps})` : ''}`} theme={theme} /> : <View style={{ flex: 1 }} />}
+                                        </View>
+                                        {(extendedMeta.audioCodec || extendedMeta.subtitles) && (
+                                            <View style={{ marginTop: 16 }}>
+                                                <View style={styles.metaRow}>
+                                                    {extendedMeta.audioCodec ? <MetadataItem icon="music" label="Audio" value={`${extendedMeta.audioCodec} ${extendedMeta.sampleRate ? `(${extendedMeta.sampleRate})` : ''}`} theme={theme} /> : <View style={{ flex: 1 }} />}
+                                                </View>
+                                                {extendedMeta.subtitles ? (
+                                                    <>
+                                                        <View style={{ height: 16 }} />
+                                                        <MetadataItem icon="message-square" label="Subtitles" badge={extendedMeta.subtitleBadge} value={extendedMeta.subtitles} theme={theme} />
+                                                    </>
+                                                ) : null}
+                                            </View>
+                                        )}
+                                    </>
+                                )}
+                            </View>
+                        </View>
 
                         <View style={styles.actions}>
                             <ActionButton icon="play" label="Play Video" onPress={() => handleAction(onPlay)} theme={theme} color={theme.colors.primary} />
@@ -247,7 +378,7 @@ export const VideoOptionsBottomSheet: React.FC<VideoOptionsProps> = ({
                     </ScrollView>
                 </View>
             </View>
-        </Modal>
+        </Modal >
     );
 };
 

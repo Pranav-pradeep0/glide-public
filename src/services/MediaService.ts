@@ -32,6 +32,8 @@ class MediaServiceClass {
             uri: string; // Original content:// URI for CameraRoll.deletePhotos
             duration: number;
             size: number;
+            width?: number;
+            height?: number;
             timestamp: number;
         }>;
         page_info: {
@@ -83,6 +85,8 @@ class MediaServiceClass {
                     uri: originalUri, // Original content:// URI for deletion
                     duration: node.image.playableDuration || 0,
                     size: node.image.fileSize || 0,
+                    width: node.image.width,
+                    height: node.image.height,
                     timestamp: node.timestamp,
                 };
             }));

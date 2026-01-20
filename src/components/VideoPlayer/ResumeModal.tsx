@@ -1,7 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet, Modal, Pressable, useWindowDimensions, ActivityIndicator } from 'react-native';
 import { Feather } from '@react-native-vector-icons/feather';
-import { BlurView } from '@react-native-community/blur';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { RecapIcon } from './PlayerIcons';
 
@@ -48,7 +47,7 @@ export const ResumeModal: React.FC<ResumeModalProps> = ({
             >
                 <Pressable style={styles.overlay} onPress={onResume}>
                     <Animated.View
-                        entering={FadeInDown.springify().damping(15)}
+                        entering={FadeInDown.duration(300).springify().damping(20).mass(0.8)}
                         style={styles.stripPortrait}
                     >
                         {/* Close button - top right */}
@@ -134,7 +133,7 @@ export const ResumeModal: React.FC<ResumeModalProps> = ({
         >
             <Pressable style={styles.overlay} onPress={onResume}>
                 <Animated.View
-                    entering={FadeInDown.springify().damping(15)}
+                    entering={FadeInDown.duration(300).springify().damping(20).mass(0.8)}
                     style={styles.controlStrip}
                 >
                     {/* Left: Info Group */}
@@ -226,10 +225,10 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: 'rgba(255, 255, 255, 0.12)',
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 10 },
-        shadowOpacity: 0.5,
-        shadowRadius: 15,
-        elevation: 10,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+        elevation: 6,
     },
     // Portrait styles
     stripPortrait: {
@@ -239,11 +238,10 @@ const styles = StyleSheet.create({
         paddingHorizontal: 20,
         borderWidth: 1,
         borderColor: 'rgba(255, 255, 255, 0.12)',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 10 },
-        shadowOpacity: 0.5,
-        shadowRadius: 15,
-        elevation: 10,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+        elevation: 6,
         minWidth: 280,
         maxWidth: '90%',
         alignItems: 'stretch',

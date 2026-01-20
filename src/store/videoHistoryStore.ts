@@ -5,16 +5,30 @@ import { VideoHistoryEntry, VideoBookmark } from '../types';
 const mmkv = createMMKV({ id: 'video_history_v1' });
 const HISTORY_KEY = '@video_history_v1';
 
+/**
+ * Generate a canonical video ID from name and optional file size.
+ * This allows matching the same video opened from different sources
+ * (e.g., content:// URI vs file:// path).
+ */
+export function generateVideoId(videoName: string, fileSize?: number): string {
+    const normalizedName = videoName.toLowerCase().trim();
+    if (fileSize && fileSize > 0) {
+        return `${normalizedName}::${fileSize}`;
+    }
+    return normalizedName;
+}
+
 interface VideoHistoryState {
     history: Map<string, VideoHistoryEntry>;
     isHydrated: boolean;
 
     // Actions
     getVideoHistory: (videoPath: string) => VideoHistoryEntry | null;
+    getVideoHistoryByName: (videoName: string) => VideoHistoryEntry | null;
     getAllHistory: () => VideoHistoryEntry[];
     updateVideoHistory: (entry: Partial<VideoHistoryEntry> & { videoPath: string; videoName: string }) => void;
-    incrementViewCount: (videoPath: string, videoName: string, contentUri?: string) => void;
-    updatePlaybackPosition: (videoPath: string, videoName: string, position: number, duration: number, audioTrackId?: number, subtitleTrackIndex?: number, audioDelay?: number, subtitleDelay?: number, brightness?: number) => void;
+    incrementViewCount: (videoPath: string, videoName: string, contentUri?: string, fileSize?: number) => void;
+    updatePlaybackPosition: (videoPath: string, videoName: string, position: number, duration: number, audioTrackId?: number, subtitleTrackIndex?: number, audioDelay?: number, subtitleDelay?: number, brightness?: number, fileSize?: number) => void;
     addBookmark: (videoPath: string, videoName: string, timestamp: number, label?: string) => void;
     removeBookmark: (videoPath: string, bookmarkId: string) => void;
     updateBookmarkLabel: (videoPath: string, bookmarkId: string, label: string) => void;
@@ -65,34 +79,71 @@ export const useVideoHistoryStore = create<VideoHistoryState>((set, get) => ({
     isHydrated: true, // Always hydrated now
 
     getVideoHistory: (videoPath: string) => {
-        return get().history.get(videoPath) || null;
+        // First try direct path lookup
+        const byPath = get().history.get(videoPath);
+        if (byPath) return byPath;
+
+        // For content:// URIs, try to find by videoId derived from path
+        // The videoId may have been stored with a different path
+        const videoId = generateVideoId(videoPath.split('/').pop() || videoPath);
+        for (const entry of get().history.values()) {
+            if (entry.videoId === videoId) {
+                return entry;
+            }
+        }
+        return null;
+    },
+
+    getVideoHistoryByName: (videoName: string) => {
+        const videoId = generateVideoId(videoName);
+        for (const entry of get().history.values()) {
+            if (entry.videoId === videoId) {
+                return entry;
+            }
+        }
+        return null;
     },
 
     getAllHistory: () => {
         const historyMap = get().history;
-        return Array.from(historyMap.values()).sort(
-            (a, b) => b.lastWatchedTime - a.lastWatchedTime
-        );
+        return Array.from(historyMap.values())
+            .filter(entry => !entry.hideFromRecents) // Hide content:// and http(s):// entries
+            .sort((a, b) => b.lastWatchedTime - a.lastWatchedTime);
     },
 
     updateVideoHistory: (entry) => {
         const { videoPath, videoName, ...updates } = entry;
+        const videoId = generateVideoId(videoName);
+
         set((state) => {
             const newHistory = new Map(state.history);
-            const existing = newHistory.get(videoPath);
 
-            if (existing) {
-                newHistory.set(videoPath, {
+            // Try to find existing entry by videoId first
+            let existingKey: string | null = null;
+            let existing: VideoHistoryEntry | undefined;
+            for (const [key, e] of newHistory.entries()) {
+                if (e.videoId === videoId) {
+                    existingKey = key;
+                    existing = e;
+                    break;
+                }
+            }
+
+            if (existing && existingKey) {
+                // Update existing entry, but keep the original key
+                newHistory.set(existingKey, {
                     ...existing,
                     ...updates,
-                    videoPath,
+                    videoPath: existing.videoPath, // Keep original path for file operations
                     videoName,
+                    videoId,
                     lastWatchedTime: Date.now(),
                 });
             } else {
                 newHistory.set(videoPath, {
                     videoPath,
                     videoName,
+                    videoId,
                     lastWatchedTime: Date.now(),
                     lastPausedPosition: 0,
                     duration: 0,
@@ -107,29 +158,53 @@ export const useVideoHistoryStore = create<VideoHistoryState>((set, get) => ({
         debouncedPersist();
     },
 
-    incrementViewCount: (videoPath: string, videoName: string, contentUri?: string) => {
-        // Skip content:// and http/https URIs - they can't be replayed after permission expires
-        if (videoPath.startsWith('content://') || (videoPath.startsWith('http://') ||
-            videoPath.startsWith('https://'))) {
+    incrementViewCount: (videoPath: string, videoName: string, contentUri?: string, fileSize?: number) => {
+        // Skip content:// and http/https URIs from appearing in history list
+        // These can't be reliably replayed (permissions expire, URLs expire)
+        // Note: updatePlaybackPosition still saves their state for resume when reopened
+        const isNonReplayable = videoPath.startsWith('content://') ||
+            videoPath.startsWith('http://') ||
+            videoPath.startsWith('https://');
+        if (isNonReplayable) {
             return;
         }
 
+        const videoId = generateVideoId(videoName, fileSize);
+
         set((state) => {
             const newHistory = new Map(state.history);
-            const existing = newHistory.get(videoPath);
 
-            if (existing) {
-                newHistory.set(videoPath, {
+            // Find existing entry by videoId (handles same file opened from different paths)
+            let existingKey: string | null = null;
+            let existing: VideoHistoryEntry | undefined;
+            for (const [key, entry] of newHistory.entries()) {
+                if (entry.videoId === videoId) {
+                    existingKey = key;
+                    existing = entry;
+                    break;
+                }
+            }
+
+            if (existing && existingKey) {
+                newHistory.set(existingKey, {
                     ...existing,
                     viewCount: existing.viewCount + 1,
                     lastWatchedTime: Date.now(),
-                    contentUri: contentUri || existing.contentUri, // Preserve existing URI if not provided
+                    contentUri: contentUri || existing.contentUri,
+                    // Keep the best path: prefer file:// over content:// or http(s)://
+                    videoPath: videoPath.startsWith('file://') || videoPath.startsWith('/')
+                        ? videoPath
+                        : existing.videoPath,
                 });
             } else {
-                newHistory.set(videoPath, {
+                // Use videoId as key for non-file:// URIs (content://, http://, etc.)
+                const isLocalFile = videoPath.startsWith('file://') || videoPath.startsWith('/');
+                const key = isLocalFile ? videoPath : videoId;
+                newHistory.set(key, {
                     videoPath,
                     videoName,
-                    contentUri, // Store the content:// URI
+                    videoId,
+                    contentUri,
                     lastWatchedTime: Date.now(),
                     lastPausedPosition: 0,
                     duration: 0,
@@ -143,18 +218,25 @@ export const useVideoHistoryStore = create<VideoHistoryState>((set, get) => ({
         debouncedPersist();
     },
 
-    updatePlaybackPosition: (videoPath, videoName, position, duration, audioTrackId, subtitleTrackIndex, audioDelay, subtitleDelay, brightness) => {
-        // Skip content:// URIs - they can't be replayed after permission expires
-        if (videoPath.startsWith('content://')) {
-            return;
-        }
+    updatePlaybackPosition: (videoPath, videoName, position, duration, audioTrackId, subtitleTrackIndex, audioDelay, subtitleDelay, brightness, fileSize) => {
+        const videoId = generateVideoId(videoName, fileSize);
 
         set((state) => {
             const newHistory = new Map(state.history);
-            const existing = newHistory.get(videoPath);
 
-            if (existing) {
-                newHistory.set(videoPath, {
+            // Find existing entry by videoId
+            let existingKey: string | null = null;
+            let existing: VideoHistoryEntry | undefined;
+            for (const [key, entry] of newHistory.entries()) {
+                if (entry.videoId === videoId) {
+                    existingKey = key;
+                    existing = entry;
+                    break;
+                }
+            }
+
+            if (existing && existingKey) {
+                newHistory.set(existingKey, {
                     ...existing,
                     lastPausedPosition: position,
                     duration: duration,
@@ -164,11 +246,23 @@ export const useVideoHistoryStore = create<VideoHistoryState>((set, get) => ({
                     audioDelay: audioDelay,
                     subtitleDelay: subtitleDelay,
                     brightness: brightness,
+                    // Keep the best path: prefer file:// over content:// or http(s)://
+                    videoPath: videoPath.startsWith('file://') || videoPath.startsWith('/')
+                        ? videoPath
+                        : existing.videoPath,
                 });
             } else {
-                newHistory.set(videoPath, {
+                // Create new entry
+                // Mark non-local files (content://, http(s)://) as hidden from Recents
+                // but still save their playback state for resume functionality
+                const isLocalFile = videoPath.startsWith('file://') || videoPath.startsWith('/');
+                const key = isLocalFile ? videoPath : videoId;
+
+                newHistory.set(key, {
                     videoPath,
                     videoName,
+                    videoId,
+                    hideFromRecents: !isLocalFile, // Hide content:// and http(s):// from Recents
                     lastWatchedTime: Date.now(),
                     lastPausedPosition: position,
                     duration: duration,
@@ -188,18 +282,30 @@ export const useVideoHistoryStore = create<VideoHistoryState>((set, get) => ({
     },
 
     addBookmark: (videoPath: string, videoName: string, timestamp: number, label?: string) => {
+        const videoId = generateVideoId(videoName);
+
         set((state) => {
             const newHistory = new Map(state.history);
-            const existing = newHistory.get(videoPath);
+
+            // Find existing entry by videoId
+            let existingKey: string | null = null;
+            let existing: VideoHistoryEntry | undefined;
+            for (const [key, entry] of newHistory.entries()) {
+                if (entry.videoId === videoId) {
+                    existingKey = key;
+                    existing = entry;
+                    break;
+                }
+            }
 
             const newBookmark: VideoBookmark = {
-                id: `${videoPath}-${timestamp}-${Date.now()}`,
+                id: `${videoId}-${timestamp}-${Date.now()}`,
                 timestamp,
                 createdAt: Date.now(),
                 label,
             };
 
-            if (existing) {
+            if (existing && existingKey) {
                 // Check for duplicate bookmark (within 2 seconds)
                 const isDuplicate = existing.bookmarks.some(
                     b => Math.abs(b.timestamp - timestamp) < 2
@@ -210,14 +316,20 @@ export const useVideoHistoryStore = create<VideoHistoryState>((set, get) => ({
                     return state;
                 }
 
-                newHistory.set(videoPath, {
+                newHistory.set(existingKey, {
                     ...existing,
                     bookmarks: [...existing.bookmarks, newBookmark].sort((a, b) => a.timestamp - b.timestamp),
                 });
             } else {
-                newHistory.set(videoPath, {
+                // Create new entry for bookmark
+                const isLocalFile = videoPath.startsWith('file://') || videoPath.startsWith('/');
+                const key = isLocalFile ? videoPath : videoId;
+
+                newHistory.set(key, {
                     videoPath,
                     videoName,
+                    videoId,
+                    hideFromRecents: !isLocalFile,
                     lastWatchedTime: Date.now(),
                     lastPausedPosition: 0,
                     duration: 0,
@@ -236,10 +348,29 @@ export const useVideoHistoryStore = create<VideoHistoryState>((set, get) => ({
     removeBookmark: (videoPath: string, bookmarkId: string) => {
         set((state) => {
             const newHistory = new Map(state.history);
-            const existing = newHistory.get(videoPath);
 
+            // Find entry by videoId (extracted from bookmarkId or path)
+            let existingKey: string | null = null;
+            let existing: VideoHistoryEntry | undefined;
+
+            // First try direct path lookup
+            existing = newHistory.get(videoPath);
             if (existing) {
-                newHistory.set(videoPath, {
+                existingKey = videoPath;
+            } else {
+                // Fallback to videoId lookup
+                const videoId = generateVideoId(videoPath.split('/').pop() || videoPath);
+                for (const [key, entry] of newHistory.entries()) {
+                    if (entry.videoId === videoId) {
+                        existingKey = key;
+                        existing = entry;
+                        break;
+                    }
+                }
+            }
+
+            if (existing && existingKey) {
+                newHistory.set(existingKey, {
                     ...existing,
                     bookmarks: existing.bookmarks.filter((b) => b.id !== bookmarkId),
                 });
@@ -255,10 +386,29 @@ export const useVideoHistoryStore = create<VideoHistoryState>((set, get) => ({
     updateBookmarkLabel: (videoPath: string, bookmarkId: string, label: string) => {
         set((state) => {
             const newHistory = new Map(state.history);
-            const existing = newHistory.get(videoPath);
 
+            // Find entry by videoId
+            let existingKey: string | null = null;
+            let existing: VideoHistoryEntry | undefined;
+
+            // First try direct path lookup
+            existing = newHistory.get(videoPath);
             if (existing) {
-                newHistory.set(videoPath, {
+                existingKey = videoPath;
+            } else {
+                // Fallback to videoId lookup
+                const videoId = generateVideoId(videoPath.split('/').pop() || videoPath);
+                for (const [key, entry] of newHistory.entries()) {
+                    if (entry.videoId === videoId) {
+                        existingKey = key;
+                        existing = entry;
+                        break;
+                    }
+                }
+            }
+
+            if (existing && existingKey) {
+                newHistory.set(existingKey, {
                     ...existing,
                     bookmarks: existing.bookmarks.map((b) =>
                         b.id === bookmarkId ? { ...b, label } : b
@@ -274,7 +424,21 @@ export const useVideoHistoryStore = create<VideoHistoryState>((set, get) => ({
     clearVideoHistory: (videoPath: string) => {
         set((state) => {
             const newHistory = new Map(state.history);
-            newHistory.delete(videoPath);
+
+            // First try direct path deletion
+            if (newHistory.has(videoPath)) {
+                newHistory.delete(videoPath);
+            } else {
+                // Fallback to videoId lookup
+                const videoId = generateVideoId(videoPath.split('/').pop() || videoPath);
+                for (const [key, entry] of newHistory.entries()) {
+                    if (entry.videoId === videoId) {
+                        newHistory.delete(key);
+                        break;
+                    }
+                }
+            }
+
             return { history: newHistory };
         });
         debouncedPersist();

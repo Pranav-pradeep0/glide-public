@@ -108,6 +108,11 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
     // Track when scrubbing ends to ignore stale progress
     const scrubEndTimeRef = useRef<number>(0);
 
+    // Guard against VLC rapid play/pause oscillation
+    // VLC can emit rapid onPlaying/onPaused events that create a feedback loop
+    const lastPlayPauseEventRef = useRef<{ type: 'play' | 'pause'; time: number } | null>(null);
+    const PLAY_PAUSE_DEBOUNCE_MS = 100; // Ignore events within 100ms of opposite event
+
     // ========================================================================
     // STATE
     // ========================================================================
@@ -259,23 +264,31 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
         // is also being toggled leads to race conditions and "simultaneous play/pause" glitches.
         // The VLCPlayer component will handle the play/pause transition itself via the 'paused' prop.
 
-        setState(prev => ({
-            ...prev,
-            paused: false,
-            isPlaying: true,
-            playerStopped: false,
-        }));
+        console.log('[DEBUG RACE] usePlayerCore.play() called at:', Date.now());
+        setState(prev => {
+            console.log('[DEBUG RACE] play() setState: prev.paused=', prev.paused, 'prev.isPlaying=', prev.isPlaying);
+            return {
+                ...prev,
+                paused: false,
+                isPlaying: true,
+                playerStopped: false,
+            };
+        });
 
         if (__DEV__) console.log('[usePlayerCore] Play triggered (state updated)');
     }, []);
 
     const pause = useCallback(() => {
-        setState(prev => ({
-            ...prev,
-            paused: true,
-            isPlaying: false,
-            isBuffering: false,
-        }));
+        console.log('[DEBUG RACE] usePlayerCore.pause() called at:', Date.now());
+        setState(prev => {
+            console.log('[DEBUG RACE] pause() setState: prev.paused=', prev.paused, 'prev.isPlaying=', prev.isPlaying);
+            return {
+                ...prev,
+                paused: true,
+                isPlaying: false,
+                isBuffering: false,
+            };
+        });
         onProgressSave?.();
         if (__DEV__) console.log('[usePlayerCore] Paused');
     }, [onProgressSave]);
@@ -523,13 +536,34 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
      * Handle VLC playing event.
      */
     const handlePlaying = useCallback(() => {
-        setState(prev => ({
-            ...prev,
-            paused: false,
-            isPlaying: true,
-            isBuffering: false,
-            playerStopped: false,
-        }));
+        console.log('[DEBUG RACE] VLC onPlaying event at:', Date.now());
+
+        // Guard against rapid oscillation: ignore if we just processed a pause event
+        const now = Date.now();
+        const lastEvent = lastPlayPauseEventRef.current;
+        if (lastEvent && lastEvent.type === 'pause' && (now - lastEvent.time) < PLAY_PAUSE_DEBOUNCE_MS) {
+            console.log('[DEBUG RACE] SKIPPING onPlaying - too soon after pause event:', now - lastEvent.time, 'ms');
+            return;
+        }
+
+        // Record this event
+        lastPlayPauseEventRef.current = { type: 'play', time: now };
+
+        setState(prev => {
+            // Skip if already in desired state to prevent unnecessary re-renders
+            if (!prev.paused && prev.isPlaying) {
+                console.log('[DEBUG RACE] handlePlaying SKIPPED - already playing');
+                return prev;
+            }
+            console.log('[DEBUG RACE] handlePlaying setState: prev.paused=', prev.paused, 'prev.isPlaying=', prev.isPlaying);
+            return {
+                ...prev,
+                paused: false,
+                isPlaying: true,
+                isBuffering: false,
+                playerStopped: false,
+            };
+        });
         if (__DEV__) console.log('[usePlayerCore] Playing started');
     }, []);
 
@@ -537,11 +571,32 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
      * Handle VLC paused event.
      */
     const handlePaused = useCallback(() => {
-        setState(prev => ({
-            ...prev,
-            paused: true,
-            isPlaying: false,
-        }));
+        console.log('[DEBUG RACE] VLC onPaused event at:', Date.now());
+
+        // Guard against rapid oscillation: ignore if we just processed a play event
+        const now = Date.now();
+        const lastEvent = lastPlayPauseEventRef.current;
+        if (lastEvent && lastEvent.type === 'play' && (now - lastEvent.time) < PLAY_PAUSE_DEBOUNCE_MS) {
+            console.log('[DEBUG RACE] SKIPPING onPaused - too soon after play event:', now - lastEvent.time, 'ms');
+            return;
+        }
+
+        // Record this event
+        lastPlayPauseEventRef.current = { type: 'pause', time: now };
+
+        setState(prev => {
+            // Skip if already in desired state to prevent unnecessary re-renders
+            if (prev.paused && !prev.isPlaying) {
+                console.log('[DEBUG RACE] handlePaused SKIPPED - already paused');
+                return prev;
+            }
+            console.log('[DEBUG RACE] handlePaused setState: prev.paused=', prev.paused, 'prev.isPlaying=', prev.isPlaying);
+            return {
+                ...prev,
+                paused: true,
+                isPlaying: false,
+            };
+        });
         onProgressSave?.();
         if (__DEV__) console.log('[usePlayerCore] Video paused - progress saved');
     }, [onProgressSave]);
