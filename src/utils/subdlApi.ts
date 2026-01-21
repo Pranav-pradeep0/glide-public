@@ -82,10 +82,16 @@ function calculateSDHScore(sub: any): number {
 export async function searchAllSubtitles(
     videoName: string,
     language: string = 'en',
-    imdbId?: string
+    imdbId?: string,
+    prioritizeSDH: boolean = true,
+    manualSeason?: number,
+    manualEpisode?: number,
+    manualYear?: number // Added
 ): Promise<{
     subtitles: SubtitleResult[];
 }> {
+    console.log(`${LOG_PREFIX} === Search Started ===`);
+    console.log(`${LOG_PREFIX} videoName: "${videoName}", language: "${language}", imdbId: ${imdbId || 'none'}, prioritizeSDH: ${prioritizeSDH}, manualSeason: ${manualSeason || 'none'}, manualEpisode: ${manualEpisode || 'none'}, manualYear: ${manualYear || 'none'}`);
     try {
         const parsed = FilenameParser.parse(videoName);
         console.log(`${LOG_PREFIX} Parsed: "${parsed.title}", year=${parsed.year || 'unknown'}, isTVShow=${parsed.isTVShow}`);
@@ -93,50 +99,58 @@ export async function searchAllSubtitles(
         // Safeguard: If parsing resulted in empty title, use original
         if (!parsed.title || parsed.title.trim().length === 0) {
             console.warn(`${LOG_PREFIX} Warning: Parsed title is empty. Fallback to original.`);
-            parsed.title = videoName;
         }
+
+        const effectiveSeason = manualSeason !== undefined ? manualSeason : parsed.season;
+        const effectiveEpisode = manualEpisode !== undefined ? manualEpisode : parsed.episode;
+        const effectiveYear = manualYear !== undefined ? manualYear : parsed.year;
 
         const params = new URLSearchParams({
             api_key: SUBDL_API_KEY,
             languages: language,
             subs_per_page: '30',
-            hi: '1',
             releases: '1',
             comment: '1', // Get author comments for better SDH scoring
+            film_name: parsed.title || videoName, // Always use parsed title or fallback
+            type: (parsed.isTVShow || manualSeason !== undefined || manualEpisode !== undefined) ? 'tv' : 'movie'
         });
+
+        // Add year if available
+        if (effectiveYear) {
+            params.append('year', effectiveYear.toString());
+        }
+
+        // Only request HI subtitles when prioritizing SDH (for haptic play)
+        if (prioritizeSDH) {
+            params.append('hi', '1');
+            console.log(`${LOG_PREFIX} Including hi=1 param (SDH prioritized)`);
+        } else {
+            console.log(`${LOG_PREFIX} NOT including hi param (general search)`);
+        }
 
         // Always include file_name for better matching accuracy
         params.append('file_name', videoName);
 
-        // Use IMDB ID if available (most accurate)
+        console.log(`${LOG_PREFIX} Using film_name: "${parsed.title}"`);
+
+        // Also add IMDB ID if available (improves accuracy)
         if (imdbId) {
             params.append('imdb_id', imdbId);
-            console.log(`${LOG_PREFIX} Using IMDB ID: ${imdbId}`);
-        } else {
-            // Use cleaned film name
-            params.append('film_name', parsed.title);
+            console.log(`${LOG_PREFIX} Also using IMDB ID: ${imdbId}`);
         }
 
         // Add type and season/episode info
-        if (parsed.isTVShow) {
-            params.append('type', 'tv');
-
+        // Priority: Manual inputs > Parsed info
+        if (parsed.isTVShow || manualSeason !== undefined || manualEpisode !== undefined) {
             // Add Season/Episode info for TV shows
-            if (parsed.season !== undefined) {
-                params.append('season_number', parsed.season.toString());
+            if (effectiveSeason !== undefined) {
+                params.append('season_number', effectiveSeason.toString());
             }
-            if (parsed.episode !== undefined) {
-                params.append('episode_number', parsed.episode.toString());
+            if (effectiveEpisode !== undefined) {
+                params.append('episode_number', effectiveEpisode.toString());
             }
             if (parsed.fullSeason) {
                 params.append('full_season', '1');
-            }
-        } else {
-            params.append('type', 'movie');
-
-            // Add year for movies if available
-            if (parsed.year) {
-                params.append('year', parsed.year.toString());
             }
         }
 
@@ -163,10 +177,14 @@ export async function searchAllSubtitles(
                     api_key: SUBDL_API_KEY,
                     languages: language,
                     subs_per_page: '30',
-                    hi: '1',
                     releases: '1',
                     film_name: parsed.title,
                 });
+
+                // Only include hi param when prioritizing SDH
+                if (prioritizeSDH) {
+                    fallbackParams.append('hi', '1');
+                }
 
                 fallbackParams.append('file_name', videoName);
 
@@ -194,7 +212,7 @@ export async function searchAllSubtitles(
                     const fallbackData = await fallbackResponse.json();
                     if (fallbackData.subtitles && fallbackData.subtitles.length > 0) {
                         console.log(`${LOG_PREFIX} Fallback found ${fallbackData.subtitles.length} subtitles`);
-                        return processSubtitleResults(fallbackData.subtitles, parsed.title, language);
+                        return processSubtitleResults(fallbackData.subtitles, parsed.title, language, prioritizeSDH);
                     }
                 }
             }
@@ -203,7 +221,8 @@ export async function searchAllSubtitles(
         }
 
         console.log(`${LOG_PREFIX} Found ${data.subtitles.length} subtitles`);
-        return processSubtitleResults(data.subtitles, parsed.title, language);
+        console.log(`${LOG_PREFIX} Passing prioritizeSDH=${prioritizeSDH} to processSubtitleResults`);
+        return processSubtitleResults(data.subtitles, parsed.title, language, prioritizeSDH);
 
     } catch (error) {
         console.error(`${LOG_PREFIX} Search error:`, error);
@@ -233,7 +252,8 @@ export async function searchSDHSubtitles(
 function processSubtitleResults(
     subtitles: any[],
     defaultName: string,
-    language: string
+    language: string,
+    prioritizeSDH: boolean = true
 ): { subtitles: SubtitleResult[] } {
     const allSubtitles: SubtitleResult[] = subtitles.map((sub: any, index: number) => ({
         id: sub.sd_id || sub.id || `sub_${index}`,
@@ -248,13 +268,29 @@ function processSubtitleResults(
         comment: sub.comment || '',
     }));
 
-    // Sort by SDH score first (for SDH preference), then by rating
+    // Sort subtitles based on priority preference
+    console.log(`${LOG_PREFIX} Sorting ${allSubtitles.length} subtitles with prioritizeSDH=${prioritizeSDH}`);
+
+    // Count SDH vs non-SDH before sorting
+    const sdhCount = allSubtitles.filter(s => (s.sdhScore || 0) > 5 || s.hearingImpaired).length;
+    const nonSdhCount = allSubtitles.length - sdhCount;
+    console.log(`${LOG_PREFIX} SDH subtitles: ${sdhCount}, Non-SDH subtitles: ${nonSdhCount}`);
+
     allSubtitles.sort((a: any, b: any) => {
-        // Prioritize SDH subtitles (score > 5)
-        if (b.sdhScore !== a.sdhScore && (b.sdhScore > 5 || a.sdhScore > 5)) {
-            return b.sdhScore - a.sdhScore;
+        if (prioritizeSDH) {
+            // Prioritize SDH subtitles (score > 5), then by rating
+            if (b.sdhScore !== a.sdhScore && (b.sdhScore > 5 || a.sdhScore > 5)) {
+                return b.sdhScore - a.sdhScore;
+            }
         }
         return (b.rating || 0) - (a.rating || 0);
+    });
+
+    // Log first 3 results after sorting
+    console.log(`${LOG_PREFIX} Top 3 results after sorting (prioritizeSDH=${prioritizeSDH}):`);
+    allSubtitles.slice(0, 3).forEach((sub, i) => {
+        const isSDH = (sub.sdhScore || 0) > 5 || sub.hearingImpaired;
+        console.log(`${LOG_PREFIX}   ${i + 1}. "${sub.release?.substring(0, 40)}..." - SDH: ${isSDH}, sdhScore: ${sub.sdhScore || 0}, rating: ${sub.rating || 0}`);
     });
 
     return { subtitles: allSubtitles };

@@ -1097,37 +1097,39 @@ export default function VideoPlayerScreen({ route }: Props) {
         <View style={styles.container}>
             {/* Video with gestures */}
             <GestureDetector gesture={gestures.composedGesture}>
-                <AnimatedVideoView
-                    ref={player.videoRef}
-                    source={source}
-                    playerKey={settingsHook.settings.playerKey}
-                    decoder={settingsHook.settings.decoder}
-                    paused={player.state.paused}
-                    rate={hud.state.speed.rate}
-                    muted={settingsHook.settings.muted || resumeModalVisible}
-                    repeat={settingsHook.settings.repeat}
-                    resizeMode={settingsHook.settings.resizeMode}
-                    playInBackground={settingsHook.settings.backgroundPlayEnabled || isInPipMode}
-                    currentTime={player.currentTimeRef.current}
-                    duration={player.state.duration}
-                    videoEnhancement={settingsHook.settings.videoEnhancement}
-                    audioTrack={tracksHook.selectedAudioTrackId}
-                    textTrack={tracksHook.vlcTextTrackId ?? -1}
-                    title={videoName}
-                    artist={albumName || "Glide"}
-                    animatedStyle={gestures.videoAnimatedStyle}
-                    audioEqualizer={settingsHook.audioEqualizer}
-                    audioDelay={settingsHook.settings.audioDelay}
-                    onLoad={player.handleLoad}
-                    onProgress={player.handleProgress}
-                    onEnd={handleVideoEnd}
-                    onError={player.handleError}
-                    onBuffering={player.handleBuffering}
-                    onPlaying={player.handlePlaying}
-                    onPaused={player.handlePaused}
-                    onStopped={player.handleStopped}
-                    onSeek={player.handleSeek}
-                />
+                <View style={[StyleSheet.absoluteFill, { zIndex: 0 }]}>
+                    <AnimatedVideoView
+                        ref={player.videoRef}
+                        source={source}
+                        playerKey={settingsHook.settings.playerKey}
+                        decoder={settingsHook.settings.decoder}
+                        paused={player.state.paused}
+                        rate={hud.state.speed.rate}
+                        muted={settingsHook.settings.muted || resumeModalVisible}
+                        repeat={settingsHook.settings.repeat}
+                        resizeMode={settingsHook.settings.resizeMode}
+                        playInBackground={settingsHook.settings.backgroundPlayEnabled || isInPipMode}
+                        currentTime={player.currentTimeRef.current}
+                        duration={player.state.duration}
+                        videoEnhancement={settingsHook.settings.videoEnhancement}
+                        audioTrack={tracksHook.selectedAudioTrackId}
+                        textTrack={tracksHook.vlcTextTrackId ?? -1}
+                        title={videoName}
+                        artist={albumName || "Glide"}
+                        animatedStyle={gestures.videoAnimatedStyle}
+                        audioEqualizer={settingsHook.audioEqualizer}
+                        audioDelay={settingsHook.settings.audioDelay}
+                        onLoad={player.handleLoad}
+                        onProgress={player.handleProgress}
+                        onEnd={handleVideoEnd}
+                        onError={player.handleError}
+                        onBuffering={player.handleBuffering}
+                        onPlaying={player.handlePlaying}
+                        onPaused={player.handlePaused}
+                        onStopped={player.handleStopped}
+                        onSeek={player.handleSeek}
+                    />
+                </View>
             </GestureDetector>
 
             {/* Black overlay to hide video when resume modal is visible */}

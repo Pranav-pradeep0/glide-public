@@ -65,6 +65,7 @@ export function useZoomGesture(options: UseZoomGestureOptions) {
     } = options;
 
     const pinchActive = useSharedValue(false);
+    const lastReportedScale = useSharedValue(0); // For throttling
 
     // Pinch gesture for zooming
     const pinchGesture = useMemo(() => {
@@ -98,7 +99,12 @@ export function useZoomGesture(options: UseZoomGestureOptions) {
 
                 pinchScale.value = newScale;
 
-                runOnJS(onZoomUpdate)(newScale);
+                // Throttle JS updates to prevent "steppy" feel
+                // Only notify JS if the scale has changed significantly since the last update (by 0.05)
+                if (Math.abs(newScale - lastReportedScale.value) > 0.05) {
+                    lastReportedScale.value = newScale;
+                    runOnJS(onZoomUpdate)(newScale);
+                }
             })
             .onEnd(() => {
                 'worklet';
@@ -138,8 +144,9 @@ export function useZoomGesture(options: UseZoomGestureOptions) {
     // Pan gesture for moving zoomed video
     const panGesture = useMemo(() => {
         return Gesture.Pan()
-            // Require 2 fingers to distinguish from brightness/volume/seek gestures
+            // STRICTLY Require 2 fingers
             .minPointers(2)
+            .maxPointers(2) // Explicitly limit to 2 fingers
             .minDistance(10)
             .onStart(() => {
                 'worklet';
@@ -177,6 +184,7 @@ export function useZoomGesture(options: UseZoomGestureOptions) {
         panStartX,
         panStartY,
         zoomActive,
+        isLockedShared // Added explicit dependency
     ]);
 
     return { pinchGesture, panGesture };

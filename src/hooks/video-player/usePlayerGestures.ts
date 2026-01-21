@@ -406,15 +406,19 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
         // Vertical pan gestures (brightness left, volume right)
         const verticalGestures = Gesture.Exclusive(brightnessGesture, volumeGesture);
 
-        // All pan gestures (horizontal seek, vertical brightness/volume, zoom pan)
-        const panGestures = Gesture.Exclusive(seekGesture, verticalGestures, zoomPanGesture);
+        // All pan gestures (horizontal seek, vertical brightness/volume)
+        // Note: zoomPanGesture is REMOVED from here to be simultaneous with Pinch
+        const panGestures = Gesture.Exclusive(seekGesture, verticalGestures);
+
+        // Simultaneous Zoom + Pan (2 fingers)
+        const zoomMultiGesture = Gesture.Simultaneous(pinchGesture, zoomPanGesture);
 
         // Final composition:
-        // 1. Pinch has highest priority (zoom)
+        // 1. Zoom/Pan (2 fingers) - wins if 2 fingers detected
         // 2. Speed gestures (long press) 
         // 3. Tap gestures
-        // 4. Pan gestures (fallback)
-        return Gesture.Race(pinchGesture, speedGestures, tapGestures, panGestures);
+        // 4. Pan gestures (fallback - 1 finger)
+        return Gesture.Race(zoomMultiGesture, speedGestures, tapGestures, panGestures);
     }, [
         pinchGesture,
         speedRightGesture,

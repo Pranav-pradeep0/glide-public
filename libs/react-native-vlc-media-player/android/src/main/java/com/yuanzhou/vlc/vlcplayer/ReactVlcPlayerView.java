@@ -114,6 +114,11 @@ class ReactVlcPlayerView extends TextureView implements
     private Handler bufferingHandler = new Handler(Looper.getMainLooper());
     private Runnable pendingBufferingEvent = null;
 
+    // Resize debounce logic
+    private Handler resizeDebounceHandler = new Handler(Looper.getMainLooper());
+    private Runnable pendingResize = null;
+    private static final int RESIZE_DEBOUNCE_MS = 100;
+
     public ReactVlcPlayerView(ThemedReactContext context) {
         super(context);
         this.eventEmitter = new VideoEventEmitter(context);
@@ -232,6 +237,44 @@ class ReactVlcPlayerView extends TextureView implements
         }
     }
 
+    private boolean areDimensionsStable() {
+        return mVideoWidth > 0 && mVideoHeight > 0
+                && getWidth() > 0 && getHeight() > 0
+                && !isSurfaceViewDestory;
+    }
+
+    private float getVideoDisplayAspectRatio() {
+        if (mVideoHeight == 0)
+            return 0;
+        float pixelAspect = (float) mVideoWidth / mVideoHeight;
+        if (mSarNum > 0 && mSarDen > 0) {
+            float sampleAspect = (float) mSarNum / mSarDen;
+            return pixelAspect * sampleAspect;
+        }
+        return pixelAspect;
+    }
+
+    private void requestResizeMode() {
+        if (!areDimensionsStable()) {
+            return;
+        }
+
+        if (pendingResize != null) {
+            resizeDebounceHandler.removeCallbacks(pendingResize);
+        }
+
+        pendingResize = new Runnable() {
+            @Override
+            public void run() {
+                if (areDimensionsStable()) {
+                    applyResizeModeInternal(getWidth(), getHeight());
+                }
+            }
+        };
+
+        resizeDebounceHandler.postDelayed(pendingResize, RESIZE_DEBOUNCE_MS);
+    }
+
     /*************
      * Events Listener
      *************/
@@ -258,22 +301,11 @@ class ReactVlcPlayerView extends TextureView implements
                     mLastViewHeight = height;
 
                     if (mMediaPlayer != null) {
-                        IVLCVout vlcOut = mMediaPlayer.getVLCVout();
+                        // Removed direct setWindowSize to avoid double-setting and race conditions
+                        // Removed direct applyResizeMode call
 
-                        // Always update window size first
-                        vlcOut.setWindowSize(width, height);
-
-                        if (autoAspectRatio) {
-                            mMediaPlayer.setAspectRatio(width + ":" + height);
-                        } else {
-                            // Delay resize mode application slightly to ensure layout is complete
-                            post(new Runnable() {
-                                @Override
-                                public void run() {
-                                    applyResizeMode();
-                                }
-                            });
-                        }
+                        // Use debounced request
+                        requestResizeMode();
                     }
                 }
             }
@@ -325,6 +357,7 @@ class ReactVlcPlayerView extends TextureView implements
                     WritableMap map = createEventMap();
                     if (map == null)
                         return;
+
                     // Force disable subtitles after VLC auto-enables them
                     // VLC automatically enables the first subtitle track when media loads,
                     // so we need to re-apply our desired text track setting here
@@ -350,14 +383,20 @@ class ReactVlcPlayerView extends TextureView implements
 
                     // FALLBACK: Get video dimensions from video track if onNewVideoLayout hasn't
                     // fired
+                    // NOTE: VideoTrack does NOT provide SAR, so this is only for getting pixel
+                    // dimensions
+                    // The proper SAR will be applied when onNewVideoLayout fires
                     if (mVideoWidth <= 0 || mVideoHeight <= 0) {
                         Media.VideoTrack videoTrack = mMediaPlayer.getCurrentVideoTrack();
                         if (videoTrack != null && videoTrack.width > 0 && videoTrack.height > 0) {
                             mVideoWidth = videoTrack.width;
                             mVideoHeight = videoTrack.height;
-                            Log.i(TAG, "Got video dimensions from track: " + mVideoWidth + "x" + mVideoHeight);
-                            // Apply resize mode now that we have dimensions
-                            applyResizeMode();
+                            Log.i(TAG, "Got video dimensions from track: " + mVideoWidth + "x" + mVideoHeight
+                                    + " (SAR will come from onNewVideoLayout)");
+
+                            // CRITICAL FIX: Use debounced request instead of direct call
+                            // This prevents race conditions and ensures resize happens at the right time
+                            requestResizeMode();
                         } else {
                             Log.w(TAG, "Could not get video dimensions from track");
                         }
@@ -368,7 +407,7 @@ class ReactVlcPlayerView extends TextureView implements
                     eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_ON_IS_PLAYING);
 
                     // RE-APPLIED FIX: Move video info update here (only when playback starts)
-                    // instead of in the progress pooling loop to save CPU cycles.
+                    // instead of in the progress polling loop to save CPU cycles.
                     updateVideoInfo();
 
                     updateMediaMetadata();
@@ -479,14 +518,8 @@ class ReactVlcPlayerView extends TextureView implements
             Log.d(TAG, String.format("New video layout: %dx%d (visible: %dx%d, SAR: %d:%d)", width, height,
                     visibleWidth, visibleHeight, sarNum, sarDen));
 
-            // Apply resize mode now that we have video dimensions
-            // Use post to ensure it runs after layout is complete
-            post(new Runnable() {
-                @Override
-                public void run() {
-                    applyResizeMode();
-                }
-            });
+            // Use debounce mechanism to apply resize mode
+            requestResizeMode();
 
             WritableMap map = Arguments.createMap();
             map.putInt("mVideoWidth", mVideoWidth);
@@ -726,8 +759,15 @@ class ReactVlcPlayerView extends TextureView implements
     }
 
     private void releasePlayer() {
-        if (libvlc == null)
-            return;
+        // Clean up buffering handler
+        if (pendingBufferingEvent != null) {
+            bufferingHandler.removeCallbacks(pendingBufferingEvent);
+            pendingBufferingEvent = null;
+        }
+
+        if (mProgressUpdateRunnable != null) {
+            mProgressUpdateHandler.removeCallbacks(mProgressUpdateRunnable);
+        }
 
         if (mMediaPlayer != null) {
             final IVLCVout vout = mMediaPlayer.getVLCVout();
@@ -736,11 +776,10 @@ class ReactVlcPlayerView extends TextureView implements
             mMediaPlayer.release();
             mMediaPlayer = null;
         }
-        libvlc.release();
-        libvlc = null;
 
-        if (mProgressUpdateRunnable != null) {
-            mProgressUpdateHandler.removeCallbacks(mProgressUpdateRunnable);
+        if (libvlc != null) {
+            libvlc.release();
+            libvlc = null;
         }
 
         if (currentPfd != null) {
@@ -1147,10 +1186,8 @@ class ReactVlcPlayerView extends TextureView implements
         Log.i(TAG,
                 "Set resizeMode to: " + this.resizeMode + ", playerReady=" + (mMediaPlayer != null && mVideoWidth > 0));
 
-        // Apply immediately if player is ready
-        if (mMediaPlayer != null && mVideoWidth > 0 && mVideoHeight > 0) {
-            applyResizeMode();
-        }
+        // Use requestResizeMode logic
+        requestResizeMode();
     }
 
     /**
@@ -1256,53 +1293,70 @@ class ReactVlcPlayerView extends TextureView implements
      * In VLC: setScale(0) = auto-fit (contain), >0 = zoom factor
      * For cover, we need to zoom until the smaller dimension fills the view
      */
+    /**
+     * Apply "cover" mode - fill the view while maintaining aspect ratio (may crop
+     * edges)
+     * Correctly handles SAR (Sample Aspect Ratio)
+     * Similar to CSS background-size: cover
+     */
     private void applyCoverMode() {
         mMediaPlayer.setAspectRatio(null);
 
-        // Calculate scale factors for each dimension
         int viewWidth = getWidth();
         int viewHeight = getHeight();
-        float scaleX = (float) viewWidth / mVideoWidth;
-        float scaleY = (float) viewHeight / mVideoHeight;
 
-        // For cover: use the LARGER scale so video fills the view completely
-        // This will cause cropping on one dimension
+        // Calculate SAR-corrected display dimensions
+        float sarFactor = (mSarNum > 0 && mSarDen > 0) ? (float) mSarNum / mSarDen : 1.0f;
+        float videoDisplayWidth = mVideoWidth * sarFactor;
+        float videoDisplayHeight = mVideoHeight; // Height is not affected by SAR
+
+        // Calculate scale factors based on DISPLAY dimensions (not pixel dimensions)
+        // This ensures SAR is properly accounted for in the zoom calculation
+        float scaleX = (float) viewWidth / videoDisplayWidth;
+        float scaleY = (float) viewHeight / videoDisplayHeight;
+
+        // Cover mode: use the LARGER scale to ensure video fills the view completely
+        // This will cause cropping on the dimension that doesn't match
         float coverScale = Math.max(scaleX, scaleY);
 
         mMediaPlayer.setScale(coverScale);
-        Log.i(TAG, String.format("Cover mode: scale=%.3f, video will fill view", coverScale));
+        Log.i(TAG, String.format("Cover mode: scale=%.3f (SAR=%.2f, videoDisplay=%.0fx%.0f, view=%dx%d)",
+                coverScale, sarFactor, videoDisplayWidth, videoDisplayHeight, viewWidth, viewHeight));
     }
 
     /**
      * Apply "fill" mode - stretch to fill entire view (distorts aspect ratio)
-     * Similar to CSS background-size: 100% 100%
      */
     private void applyFillMode(int viewWidth, int viewHeight) {
         // Force the video aspect ratio to match the view
-        // This causes the video to stretch/distort to fill
         mMediaPlayer.setAspectRatio(viewWidth + ":" + viewHeight);
-        mMediaPlayer.setScale(0); // Auto-fit with forced aspect ratio
-        Log.d(TAG, String.format("Fill mode: forcing AR to %d:%d (stretch)", viewWidth, viewHeight));
+        mMediaPlayer.setScale(0);
+        Log.d(TAG, String.format("Fill mode: forcing AR to %d:%d", viewWidth, viewHeight));
     }
 
     /**
-     * Apply "none" mode - display at original video size (1:1 pixel mapping)
-     * Video may overflow or underflow the view
+     * Apply "none" mode
      */
     private void applyNoneMode() {
-        mMediaPlayer.setAspectRatio(null);
-        mMediaPlayer.setScale(1.0f); // 1:1 pixel mapping
-        Log.d(TAG, String.format("None mode: 1:1 scale, video=%dx%d", mVideoWidth, mVideoHeight));
+        if (mSarNum > 0 && mSarDen > 0) {
+            String ar = (mVideoWidth * mSarNum) + ":" + (mVideoHeight * mSarDen);
+            mMediaPlayer.setAspectRatio(ar);
+        } else {
+            mMediaPlayer.setAspectRatio(null);
+        }
+        mMediaPlayer.setScale(1.0f);
+        Log.d(TAG, "None mode: 1:1 scale (SAR corrected)");
     }
 
     /**
-     * Apply "contain" mode - fit entire video within view (letterbox/pillarbox)
-     * Similar to CSS background-size: contain - this is VLC's default
+     * Apply "contain" mode - fit entire video within view
+     * Now considers SAR to avoid letterboxing issues
      */
     private void applyContainMode() {
+        // Let VLC handle SAR automatically with auto-fit
         mMediaPlayer.setAspectRatio(null);
-        mMediaPlayer.setScale(0); // VLC auto-fit - instant, no animation
-        Log.d(TAG, "Contain mode: auto-fit");
+        mMediaPlayer.setScale(0); // VLC auto-fit - should respect SAR
+        Log.d(TAG, "Contain mode: auto-fit (VLC handles SAR automatically)");
     }
 
     /**
@@ -1310,18 +1364,29 @@ class ReactVlcPlayerView extends TextureView implements
      * Only shrinks videos that are larger than the view
      */
     private void applyScaleDownMode() {
-        mMediaPlayer.setAspectRatio(null);
+        float sarFactor = 1.0f;
+        if (mSarNum > 0 && mSarDen > 0) {
+            String ar = (mVideoWidth * mSarNum) + ":" + (mVideoHeight * mSarDen);
+            mMediaPlayer.setAspectRatio(ar);
+            sarFactor = (float) mSarNum / mSarDen;
+        } else {
+            mMediaPlayer.setAspectRatio(null);
+        }
 
         int viewWidth = getWidth();
         int viewHeight = getHeight();
 
+        // Calculate Display Dimensions
+        float displayWidth = mVideoWidth * sarFactor;
+        float displayHeight = mVideoHeight;
+
         // Check if video is larger than view in any dimension
-        boolean videoLargerThanView = mVideoWidth > viewWidth || mVideoHeight > viewHeight;
+        boolean videoLargerThanView = displayWidth > viewWidth || displayHeight > viewHeight;
 
         if (videoLargerThanView) {
             // Video is larger - use contain behavior (shrink to fit)
-            float scaleX = (float) viewWidth / mVideoWidth;
-            float scaleY = (float) viewHeight / mVideoHeight;
+            float scaleX = (float) viewWidth / displayWidth;
+            float scaleY = (float) viewHeight / displayHeight;
             float containScale = Math.min(scaleX, scaleY);
             mMediaPlayer.setScale(containScale); // Instant change
             Log.d(TAG, String.format("Scale-down mode: shrinking to scale=%.3f", containScale));

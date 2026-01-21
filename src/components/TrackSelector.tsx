@@ -11,6 +11,7 @@ import {
     ScrollView,
     TouchableOpacity,
 } from 'react-native';
+import { FilenameParser } from '../utils/FilenameParser';
 import { FlashList } from '@shopify/flash-list';
 import type { ListRenderItem } from '@shopify/flash-list';
 import Feather from '@react-native-vector-icons/feather';
@@ -24,6 +25,74 @@ import { EQUALIZER_PRESETS } from '../config/equalizerPresets';
 
 type SubtitleTab = 'embedded' | 'external' | 'online';
 type AudioTab = 'tracks' | 'effects';
+
+// Common subtitle languages for selection
+const SUBTITLE_LANGUAGES = [
+    { code: 'ar', label: 'Arabic' },
+    { code: 'br_pt', label: 'Brazillian Portuguese' },
+    { code: 'da', label: 'Danish' },
+    { code: 'nl', label: 'Dutch' },
+    { code: 'en', label: 'English' },
+    { code: 'fa', label: 'Farsi/Persian' },
+    { code: 'fi', label: 'Finnish' },
+    { code: 'fr', label: 'French' },
+    { code: 'id', label: 'Indonesian' },
+    { code: 'it', label: 'Italian' },
+    { code: 'no', label: 'Norwegian' },
+    { code: 'ro', label: 'Romanian' },
+    { code: 'es', label: 'Spanish' },
+    { code: 'sv', label: 'Swedish' },
+    { code: 'vi', label: 'Vietnamese' },
+    { code: 'sq', label: 'Albanian' },
+    { code: 'az', label: 'Azerbaijani' },
+    { code: 'be', label: 'Belarusian' },
+    { code: 'bn', label: 'Bengali' },
+    { code: 'zh_bg', label: 'Big 5 code (Chinese)' },
+    { code: 'bs', label: 'Bosnian' },
+    { code: 'bg', label: 'Bulgarian' },
+    { code: 'bg_en', label: 'Bulgarian_English' },
+    { code: 'my', label: 'Burmese' },
+    { code: 'ca', label: 'Catalan' },
+    { code: 'zh', label: 'Chinese BG code' },
+    { code: 'hr', label: 'Croatian' },
+    { code: 'cs', label: 'Czech' },
+    { code: 'nl_en', label: 'Dutch_English' },
+    { code: 'en_de', label: 'English_German' },
+    { code: 'eo', label: 'Esperanto' },
+    { code: 'et', label: 'Estonian' },
+    { code: 'ka', label: 'Georgian' },
+    { code: 'de', label: 'German' },
+    { code: 'el', label: 'Greek' },
+    { code: 'kl', label: 'Greenlandic' },
+    { code: 'he', label: 'Hebrew' },
+    { code: 'hi', label: 'Hindi' },
+    { code: 'hu', label: 'Hungarian' },
+    { code: 'hu_en', label: 'Hungarian_English' },
+    { code: 'is', label: 'Icelandic' },
+    { code: 'ja', label: 'Japanese' },
+    { code: 'ko', label: 'Korean' },
+    { code: 'ku', label: 'Kurdish' },
+    { code: 'lv', label: 'Latvian' },
+    { code: 'lt', label: 'Lithuanian' },
+    { code: 'mk', label: 'Macedonian' },
+    { code: 'ms', label: 'Malay' },
+    { code: 'ml', label: 'Malayalam' },
+    { code: 'mni', label: 'Manipuri' },
+    { code: 'pl', label: 'Polish' },
+    { code: 'pt', label: 'Portuguese' },
+    { code: 'ru', label: 'Russian' },
+    { code: 'sr', label: 'Serbian' },
+    { code: 'si', label: 'Sinhala' },
+    { code: 'sk', label: 'Slovak' },
+    { code: 'sl', label: 'Slovenian' },
+    { code: 'tl', label: 'Tagalog' },
+    { code: 'ta', label: 'Tamil' },
+    { code: 'te', label: 'Telugu' },
+    { code: 'th', label: 'Thai' },
+    { code: 'tr', label: 'Turkish' },
+    { code: 'uk', label: 'Ukranian' },
+    { code: 'ur', label: 'Urdu' },
+];
 
 interface ExternalSubtitle {
     name: string;
@@ -116,7 +185,16 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
     const [searchResults, setSearchResults] = useState<SubtitleResult[]>([]);
     const [isSearching, setIsSearching] = useState(false);
     const [downloadingId, setDownloadingId] = useState<string | null>(null);
-    const [showSearchBar, setShowSearchBar] = useState(true);
+
+    const [selectedLanguage, setSelectedLanguage] = useState('en');
+
+    // Advanced Search State
+    const [advancedModalVisible, setAdvancedModalVisible] = useState(false);
+    const [showSeasonEpisodeInputs, setShowSeasonEpisodeInputs] = useState(false);
+    const [manualSeason, setManualSeason] = useState('');
+    const [manualEpisode, setManualEpisode] = useState('');
+    const [manualYear, setManualYear] = useState('');
+    const [preferHI, setPreferHI] = useState(false);
 
     const searchTokenRef = useRef<number>(0);
     const hasAutoSearchedRef = useRef(false);
@@ -127,7 +205,6 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
             setActiveTab(defaultTab);
             setAudioTab('tracks');
             setDownloadingId(null);
-            setShowSearchBar(true);
             hasAutoSearchedRef.current = false;
         } else {
             setSearchQuery('');
@@ -135,6 +212,11 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
             setDownloadingId(null);
         }
     }, [visible, defaultTab]);
+
+    // Ensure modal is closed when switching tabs
+    useEffect(() => {
+        setAdvancedModalVisible(false);
+    }, [activeTab]);
 
     // Auto-fetch subtitles when Online tab opens
     useEffect(() => {
@@ -150,13 +232,13 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
             const autoSearch = async () => {
                 try {
                     setIsSearching(true);
-                    const result = await searchAllSubtitles(videoName, 'en', imdbId);
+                    console.log('[TrackSelector] autoSearch - videoName:', videoName, 'imdbId:', imdbId, 'language:', selectedLanguage, 'prioritizeSDH: false');
+                    const result = await searchAllSubtitles(videoName, selectedLanguage, imdbId, false);
                     const subs = result.subtitles || [];
+                    console.log('[TrackSelector] autoSearch - received', subs.length, 'subtitles');
                     setSearchResults(subs);
 
-                    if (subs.length > 0) {
-                        setShowSearchBar(false);
-                    }
+                    setSearchResults(subs);
                 } catch (error) {
                     console.error('[TrackSelector] Auto-search error:', error);
                 } finally {
@@ -174,6 +256,28 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
             setSearchResults(initialApiSubtitles);
         }
     }, [visible, initialApiSubtitles, searchQuery]);
+
+    // Parse filename for defaults when videoName changes
+    useEffect(() => {
+        if (videoName) {
+            const parsed = FilenameParser.parse(videoName);
+            if (parsed.isTVShow) {
+                setShowSeasonEpisodeInputs(true);
+                if (parsed.season) setManualSeason(parsed.season.toString().padStart(2, '0'));
+                if (parsed.episode) setManualEpisode(parsed.episode.toString().padStart(2, '0'));
+            } else {
+                setShowSeasonEpisodeInputs(false);
+                setManualSeason('');
+                setManualEpisode('');
+            }
+            if (!searchQuery && parsed.title) {
+                setSearchQuery(parsed.title);
+            }
+            if (parsed.year) {
+                setManualYear(parsed.year.toString());
+            }
+        }
+    }, [videoName]);
 
     // ---- Handlers ----
     const handleClose = useCallback(() => {
@@ -218,9 +322,25 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
 
         try {
             setIsSearching(true);
-            const result = await searchAllSubtitles(query);
+            const s = manualSeason ? parseInt(manualSeason) : undefined;
+            const e = manualEpisode ? parseInt(manualEpisode) : undefined;
+            const y = manualYear ? parseInt(manualYear) : undefined;
+
+            console.log('[TrackSelector] handleSearch - query:', query, 'language:', selectedLanguage, 'prioritizeSDH:', preferHI, 'S:', s, 'E:', e, 'Y:', y);
+
+            const result = await searchAllSubtitles(
+                query,
+                selectedLanguage,
+                undefined,
+                preferHI,
+                s,
+                e,
+                y
+            );
+
             if (searchTokenRef.current !== token) return;
 
+            console.log('[TrackSelector] handleSearch - received', result.subtitles?.length || 0, 'subtitles');
             setSearchResults(result.subtitles || []);
         } catch (error) {
             console.error('[TrackSelector] Search error:', error);
@@ -231,7 +351,7 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
                 setIsSearching(false);
             }
         }
-    }, [searchQuery]);
+    }, [searchQuery, selectedLanguage]);
 
     const handleDownloadSubtitle = useCallback(
         async (subtitle: SubtitleResult) => {
@@ -308,7 +428,7 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
                                     ]}
                                     numberOfLines={1}
                                 >
-                                    {item.title || `${type} ${item.index}`}
+                                    {item.title || `${type} ${item.index} `}
                                 </Text>
                                 <Text style={styles.trackSubtitle} numberOfLines={1}>
                                     {item.language} • {item.codec}
@@ -526,56 +646,245 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
         [OffOption, handlePickFile, loading],
     );
 
+    // Handler to change language and re-search
+    const handleLanguageChange = useCallback((langCode: string) => {
+        setSelectedLanguage(langCode);
+        hasAutoSearchedRef.current = false; // Reset to trigger new search
+    }, []);
+
+    // Wrapper to close modal after search trigger
+    const handleAdvancedSearch = useCallback(() => {
+        setAdvancedModalVisible(false);
+        handleSearch();
+    }, [handleSearch]);
+
+    // Advanced Search Modal Component
+    const AdvancedSearchModal = useMemo(() => {
+        return (
+            <Modal
+                visible={advancedModalVisible}
+                animationType="fade"
+                transparent={true}
+                statusBarTranslucent
+                navigationBarTranslucent
+            >
+                <View style={styles.overlay}>
+                    <Pressable style={StyleSheet.absoluteFill} onPress={() => setAdvancedModalVisible(false)} />
+                    <View style={[styles.modalContainer, { height: 'auto', maxHeight: '90%', maxWidth: 480 }]}>
+                        {/* Header */}
+                        <View style={styles.header}>
+                            <View style={styles.headerLeft}>
+                                <View style={styles.iconContainer}>
+                                    <Feather name="sliders" size={20} color="#CCCCCC" />
+                                </View>
+                                <Text style={styles.title}>Advanced Search</Text>
+                            </View>
+                            <Pressable onPress={() => setAdvancedModalVisible(false)} style={styles.closeButton} hitSlop={12}>
+                                <Feather name="x" size={22} color="#808080" />
+                            </Pressable>
+                        </View>
+
+                        <ScrollView style={styles.listContent} contentContainerStyle={{ paddingBottom: 20 }}>
+                            {/* Search Bar & Year Row */}
+                            <View style={[styles.inputGroup, { marginBottom: 16 }]}>
+                                <Text style={styles.inputLabel}>Name</Text>
+                                <View style={styles.searchInputWrapper}>
+                                    <TextInput
+                                        style={styles.searchInput}
+                                        placeholder="Movie or TV Show name..."
+                                        placeholderTextColor="#666666"
+                                        value={searchQuery}
+                                        onChangeText={setSearchQuery}
+                                        returnKeyType="search"
+                                        autoCapitalize="none"
+                                        autoCorrect={false}
+                                    />
+                                    {searchQuery.length > 0 && (
+                                        <Pressable onPress={() => setSearchQuery('')} hitSlop={8} style={{ marginRight: 12 }}>
+                                            <Feather name="x" size={18} color="#666666" />
+                                        </Pressable>
+                                    )}
+                                </View>
+                            </View>
+
+                            <View style={styles.seasonEpisodeRow}>
+                                <View style={[styles.inputGroup, { flex: 1 }]}>
+                                    <Text style={styles.inputLabel}>Year</Text>
+                                    <View style={styles.searchInputWrapper}>
+                                        <TextInput
+                                            style={styles.searchInput}
+                                            placeholder="YYYY"
+                                            placeholderTextColor="#666666"
+                                            value={manualYear}
+                                            onChangeText={setManualYear}
+                                            keyboardType="numeric"
+                                            maxLength={4}
+                                        />
+                                    </View>
+                                </View>
+                                <View style={[styles.inputGroup, { flex: 0, justifyContent: 'flex-end', marginLeft: 16 }]}>
+                                    <View style={{ height: 48, justifyContent: 'center', alignItems: 'center' }}>
+                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                                <Text style={styles.toggleLabel}>TV Show</Text>
+                                                <Switch
+                                                    value={showSeasonEpisodeInputs}
+                                                    onValueChange={setShowSeasonEpisodeInputs}
+                                                />
+                                            </View>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                                <Text style={styles.toggleLabel}>Hearing Impaired</Text>
+                                                <Switch
+                                                    value={preferHI}
+                                                    onValueChange={setPreferHI}
+                                                />
+                                            </View>
+                                        </View>
+                                    </View>
+                                </View>
+                            </View>
+
+                            {/* Season / Episode Inputs (Conditional) */}
+                            {showSeasonEpisodeInputs && (
+                                <View style={styles.seasonEpisodeRow}>
+                                    <View style={styles.inputGroup}>
+                                        <Text style={styles.inputLabel}>Season</Text>
+                                        <TextInput
+                                            style={styles.numberInput}
+                                            placeholder="01"
+                                            placeholderTextColor="#666666"
+                                            value={manualSeason}
+                                            onChangeText={setManualSeason}
+                                            keyboardType="numeric"
+                                            maxLength={3}
+                                        />
+                                    </View>
+                                    <View style={styles.inputGroup}>
+                                        <Text style={styles.inputLabel}>Episode</Text>
+                                        <TextInput
+                                            style={styles.numberInput}
+                                            placeholder="01"
+                                            placeholderTextColor="#666666"
+                                            value={manualEpisode}
+                                            onChangeText={setManualEpisode}
+                                            keyboardType="numeric"
+                                            maxLength={3}
+                                        />
+                                    </View>
+                                </View>
+                            )}
+
+                            {/* Language Selector */}
+                            <Text style={[styles.sectionHeader, { marginTop: 16 }]}>Language</Text>
+                            <ScrollView
+                                horizontal
+                                showsHorizontalScrollIndicator={false}
+                                contentContainerStyle={styles.languageScrollContent}
+                                style={styles.languageScroll}
+                            >
+                                {SUBTITLE_LANGUAGES.map((lang) => {
+                                    const isActive = selectedLanguage === lang.code;
+                                    return (
+                                        <Pressable
+                                            key={lang.code}
+                                            style={[styles.languageChip, isActive && styles.languageChipActive]}
+                                            onPress={() => handleLanguageChange(lang.code)}
+                                        >
+                                            <Text style={[styles.languageChipText, isActive && styles.languageChipTextActive]}>
+                                                {lang.label}
+                                            </Text>
+                                        </Pressable>
+                                    );
+                                })}
+                            </ScrollView>
+
+                            {/* Search Button */}
+                            <Pressable
+                                style={[
+                                    styles.fullWidthSearchButton,
+                                    (!searchQuery.trim()) && styles.searchButtonDisabled,
+                                ]}
+                                onPress={handleAdvancedSearch}
+                                disabled={!searchQuery.trim()}
+                            >
+                                <Text style={styles.searchButtonText}>Search Subtitles</Text>
+                            </Pressable>
+                        </ScrollView>
+                    </View>
+                </View>
+            </Modal>
+        );
+    }, [
+        advancedModalVisible,
+        searchQuery,
+        manualSeason,
+        manualEpisode,
+        manualYear,
+        preferHI,
+        selectedLanguage,
+        showSeasonEpisodeInputs,
+        handleAdvancedSearch,
+        handleLanguageChange,
+    ]);
+
     const OnlineHeader = useMemo(
         () => (
             <>
                 {OffOption}
-                {showSearchBar && (
-                    <View style={styles.searchContainer}>
-                        <View style={styles.searchInputWrapper}>
-                            <Feather
-                                name="search"
-                                size={18}
-                                color="#666666"
-                                style={styles.searchIcon}
-                            />
-                            <TextInput
-                                style={styles.searchInput}
-                                placeholder="Search movie or series name..."
-                                placeholderTextColor="#666666"
-                                value={searchQuery}
-                                onChangeText={setSearchQuery}
-                                onSubmitEditing={handleSearch}
-                                returnKeyType="search"
-                                autoCapitalize="none"
-                                autoCorrect={false}
-                            />
-                            {searchQuery.length > 0 && (
-                                <Pressable onPress={() => setSearchQuery('')} hitSlop={8}>
-                                    <Feather name="x" size={18} color="#666666" />
-                                </Pressable>
-                            )}
-                        </View>
+
+                {/* Search Bar with Integrated Advanced Options */}
+                <View style={styles.searchContainer}>
+                    <View style={styles.searchInputWrapper}>
+                        <TextInput
+                            style={styles.searchInput}
+                            placeholder="Search..."
+                            placeholderTextColor="#666666"
+                            value={searchQuery}
+                            onChangeText={setSearchQuery}
+                            onSubmitEditing={handleSearch}
+                            returnKeyType="search"
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                        />
+                        {searchQuery.length > 0 && (
+                            <Pressable onPress={() => setSearchQuery('')} hitSlop={8} style={{ marginRight: 8 }}>
+                                <Feather name="x" size={18} color="#666666" />
+                            </Pressable>
+                        )}
+                        {/* Advanced Settings Icon */}
+                        <Pressable
+                            style={styles.actionIconButton}
+                            onPress={() => setAdvancedModalVisible(true)}
+                            hitSlop={8}
+                        >
+                            <Feather name="sliders" size={18} color="#CCCCCC" />
+                        </Pressable>
+
+                        {/* Search Action Button */}
                         <Pressable
                             style={[
-                                styles.searchButton,
-                                (isSearching || !searchQuery.trim()) && styles.searchButtonDisabled,
+                                styles.actionIconButton,
+                                (!searchQuery.trim() || isSearching) && { opacity: 0.3 }
                             ]}
                             onPress={handleSearch}
                             disabled={isSearching || !searchQuery.trim()}
+                            hitSlop={8}
                         >
                             {isSearching ? (
                                 <ActivityIndicator size="small" color="#FFFFFF" />
                             ) : (
-                                <Text style={styles.searchButtonText}>Search</Text>
+                                <Feather name="search" size={20} color={searchQuery.trim() ? "#FFFFFF" : "#666666"} />
                             )}
                         </Pressable>
                     </View>
-                )}
+                </View>
+
+                {AdvancedSearchModal}
             </>
         ),
-        [OffOption, showSearchBar, searchQuery, handleSearch, isSearching],
+        [OffOption, searchQuery, isSearching, handleSearch, AdvancedSearchModal],
     );
+
 
     const TabBar = useMemo(() => {
         if (type === 'audio') {
@@ -681,7 +990,7 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
     const ExternalEmpty = useMemo(
         () => (
             <EmptyState
-                message="No external subtitles loaded yet.\nUse the button above to browse files."
+                message="No external subtitles loaded yet. Use the button above to browse files."
                 iconName="folder"
             />
         ),
@@ -783,7 +1092,7 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
                 <FlashList
                     data={filteredTracks}
                     renderItem={renderTrackItem}
-                    keyExtractor={(item, index) => item.index?.toString() ?? `audio-${index}`}
+                    keyExtractor={(item, index) => item.index?.toString() ?? `audio - ${index} `}
                     contentContainerStyle={styles.listContent}
                     showsVerticalScrollIndicator={false}
                     ListEmptyComponent={
@@ -799,7 +1108,7 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
                     <FlashList
                         data={filteredTracks}
                         renderItem={renderTrackItem}
-                        keyExtractor={(item, index) => item.index?.toString() ?? `sub-${index}`}
+                        keyExtractor={(item, index) => item.index?.toString() ?? `sub - ${index} `}
                         ListHeaderComponent={OffOption}
                         contentContainerStyle={styles.listContent}
                         showsVerticalScrollIndicator={false}
@@ -812,7 +1121,7 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
                     <FlashList
                         data={externalSubtitles}
                         renderItem={renderExternalItem}
-                        keyExtractor={(item, index) => `${item.name}-${index}`}
+                        keyExtractor={(item, index) => `${item.name} -${index} `}
                         ListHeaderComponent={ExternalHeader}
                         contentContainerStyle={styles.listContent}
                         showsVerticalScrollIndicator={false}
@@ -825,7 +1134,7 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
                     <FlashList
                         data={searchResults}
                         renderItem={renderOnlineItem}
-                        keyExtractor={(item, index) => item.id ?? `online-${index}`}
+                        keyExtractor={(item, index) => item.id ?? `online - ${index} `}
                         ListHeaderComponent={OnlineHeader}
                         contentContainerStyle={styles.listContent}
                         showsVerticalScrollIndicator={false}
@@ -869,8 +1178,9 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
             statusBarTranslucent
             navigationBarTranslucent
         >
-            <Pressable style={styles.overlay} onPress={handleClose}>
-                <Pressable style={styles.modalContainer} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.overlay}>
+                <Pressable style={StyleSheet.absoluteFill} onPress={handleClose} />
+                <View style={styles.modalContainer}>
                     {/* Header */}
                     <View style={styles.header}>
                         <View style={styles.headerLeft}>
@@ -904,8 +1214,8 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
 
                     {/* Content */}
                     <View style={styles.contentWrapper}>{renderContent()}</View>
-                </Pressable>
-            </Pressable>
+                </View>
+            </View>
         </Modal>
     );
 });
@@ -1117,11 +1427,9 @@ const styles = StyleSheet.create({
         borderRadius: 12,
         borderWidth: 1.5,
         borderColor: '#1A1A1A',
-        paddingHorizontal: 12,
+        paddingLeft: 16,
+        paddingRight: 0,
         height: 48,
-    },
-    searchIcon: {
-        marginRight: 8,
     },
     searchInput: {
         flex: 1,
@@ -1129,18 +1437,11 @@ const styles = StyleSheet.create({
         fontSize: 14,
         paddingVertical: 0,
     },
-    searchButton: {
-        backgroundColor: '#2A2A2A',
-        borderRadius: 12,
-        height: 44,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
     searchButtonDisabled: {
         opacity: 0.5,
     },
     searchButtonText: {
-        color: '#FFFFFF',
+        color: '#000000',
         fontSize: 14,
         fontWeight: '600',
     },
@@ -1272,5 +1573,139 @@ const styles = StyleSheet.create({
         color: '#CCCCCC',
         fontSize: 11,
         fontWeight: '600',
+    },
+    // Language selector styles
+    languageScroll: {
+        marginBottom: 12,
+        marginHorizontal: -20,
+    },
+    languageScrollContent: {
+        paddingHorizontal: 20,
+        gap: 8,
+    },
+    languageChip: {
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 16,
+        backgroundColor: '#1F1F1F',
+        borderWidth: 1,
+        borderColor: '#333',
+    },
+    languageChipActive: {
+        backgroundColor: '#FFFFFF',
+        borderColor: '#FFFFFF',
+    },
+    languageChipText: {
+        color: '#CCCCCC',
+        fontSize: 12,
+        fontWeight: '500',
+    },
+    languageChipTextActive: {
+        color: '#000000',
+    },
+    // Advanced Options Styles
+    advancedPanel: {
+        backgroundColor: '#1A1A1A',
+        borderRadius: 12,
+        padding: 12,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#333',
+    },
+
+    seasonEpisodeRow: {
+        flexDirection: 'row',
+        gap: 12,
+        marginBottom: 16,
+    },
+    inputGroup: {
+        flex: 1,
+        gap: 6,
+    },
+    inputLabel: {
+        color: '#999',
+        fontSize: 12,
+        fontWeight: '500',
+    },
+    numberInput: {
+        backgroundColor: '#121212',
+        borderRadius: 12,
+        height: 48,
+        paddingHorizontal: 12,
+        color: '#CCCCCC',
+        fontSize: 14,
+        borderWidth: 1.5,
+        borderColor: '#1A1A1A',
+    },
+    hiToggleContainer: {
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 6,
+    },
+    fullWidthSearchButton: {
+        backgroundColor: '#FFFFFF',
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: 44,
+        borderRadius: 8,
+        marginTop: 8,
+    },
+    // Modal Styles
+    actionIconButton: {
+        height: '100%',
+        justifyContent: 'center',
+        paddingHorizontal: 16,
+        borderLeftWidth: 1,
+        borderLeftColor: '#2A2A2A',
+    },
+    // Advanced Modal Styles
+    advancedModalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.85)',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    advancedModalContainer: {
+        backgroundColor: '#1E1E1E',
+        borderRadius: 20,
+        width: '90%',
+        maxWidth: 400,
+        maxHeight: '80%',
+        borderWidth: 1,
+        borderColor: '#333',
+        overflow: 'hidden',
+    },
+    advancedModalHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: 16,
+        borderBottomWidth: 1,
+        borderBottomColor: '#2A2A2A',
+        backgroundColor: '#252525',
+    },
+    advancedModalTitle: {
+        color: '#FFFFFF',
+        fontSize: 16,
+        fontWeight: '700',
+    },
+    advancedModalContent: {
+        padding: 16,
+    },
+    toggleRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 20,
+        backgroundColor: '#252525',
+        padding: 12,
+        borderRadius: 8,
+    },
+    toggleLabel: {
+        color: '#CCCCCC',
+        fontSize: 14,
+        fontWeight: '500',
     },
 });
