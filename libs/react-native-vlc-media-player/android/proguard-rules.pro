@@ -27,3 +27,9 @@
 # https://github.com/pedroSG94/vlc-example-streamplayer/issues/28
 
 -keep class org.videolan.libvlc.** { *; }
+-keep class org.videolan.** { *; }
+-dontwarn org.videolan.**
+
+# MediaSession
+-keep class android.support.v4.media.** { *; }
+-keep class androidx.media.** { *; }

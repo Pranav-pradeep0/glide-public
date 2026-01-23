@@ -37,13 +37,12 @@ repositories {
         url "https://mvnrepository.com/artifact/org.videolan.android"
     }
     google()
-    jcenter()
+    mavenCentral()
 }
 
 dependencies {
     implementation fileTree(dir: 'libs', include: ['*.jar'])
     implementation "com.facebook.react:react-native:+"
-    implementation 'androidx.legacy:legacy-support-v4:1.0.0'
     implementation 'org.videolan.android:libvlc-all:3.6.5'
     implementation 'androidx.media:media:1.6.0'
 }

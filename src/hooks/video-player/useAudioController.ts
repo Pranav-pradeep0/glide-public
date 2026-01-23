@@ -47,7 +47,8 @@ interface UseAudioControllerReturn {
  */
 export function useAudioController(
     vlcRef: React.RefObject<any>,
-    initialVolume: number = 100
+    initialVolume: number = 100,
+    onHardwareVolumeChange?: (volume: number) => void
 ): UseAudioControllerReturn {
     // Volume state per route (session persistence)
     const [volumePerRoute, setVolumePerRoute] = useState<{ [key: string]: number }>({
@@ -159,6 +160,11 @@ export function useAudioController(
                         ...prev,
                         [audioRoute.type]: newVolume
                     }));
+
+                    // Trigger HUD display via callback
+                    if (onHardwareVolumeChange) {
+                        onHardwareVolumeChange(newVolume);
+                    }
                 }
             }
         );
@@ -166,7 +172,7 @@ export function useAudioController(
         return () => {
             subscription.remove();
         };
-    }, [audioRoute.type, vlcRef]);
+    }, [audioRoute.type, vlcRef, onHardwareVolumeChange]);
 
     // Listen for route changes
     useEffect(() => {

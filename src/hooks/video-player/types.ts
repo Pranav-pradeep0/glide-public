@@ -505,9 +505,23 @@ export const getOptimizedInitOptions = (
     // Video Enhancement Options ("Vivid Mode" - User Preferred)
     if (enableEnhancement) {
         baseOptions.push(
-            // Optimized for Performance (Hardware Acceleration Compatible)
-            // We disable Direct Rendering (DR) to allow filters to access frame data.
-            // This keeps HW decoding active but adds a small copy overhead, which is much faster than full SW decoding.
+            // Adjust filter for vividness (Color Enhancement)
+            '--video-filter=adjust',
+            '--brightness=1.03',                // +3% brightness
+            '--contrast=1.08',                  // +8% contrast
+            '--saturation=1.30',                // +30% saturation
+            '--gamma=0.95',                     // -5% gamma
+            '--hue=0'                           // No hue shift
+        );
+    }
+
+    // Decoder Options
+    if (decoder === 'software') {
+        baseOptions.push('--codec=avcodec'); // Force software decoding
+    } else {
+        // Hardware decoders
+        // We disable Direct Rendering (DR) to allow filters to access frame data even in HW mode.
+        baseOptions.push(
             '--no-mediacodec-dr',         // Disable MediaCodec direct rendering (Required for filters)
             '--no-omxil-dr',              // Disable OMXIL direct rendering
 
@@ -516,15 +530,7 @@ export const getOptimizedInitOptions = (
             '--avcodec-threads=4',        // Force multi-threaded decoding
             '--avcodec-fast',             // Allow non-compliant speedup shortcuts
             '--drop-late-frames',         // Drop frames if they arrive too late for display
-            '--skip-frames',              // Proactively skip frames if decoding is too slow
-
-            // Adjust filter for vividness (Color Enhancement)
-            '--video-filter=adjust',
-            '--brightness=1.03',                // +3% brightness
-            '--contrast=1.08',                  // +8% contrast
-            '--saturation=1.30',                // +30% saturation
-            '--gamma=0.95',                     // -5% gamma
-            '--hue=0',                          // No hue shift
+            '--skip-frames'               // Proactively skip frames if decoding is too slow
         );
     }
 

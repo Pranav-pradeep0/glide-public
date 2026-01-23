@@ -112,52 +112,48 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
 
         const isInPipMode = usePipModeListener();
 
-        // Resume Logic
-        const pendingResumeRef = useRef<number | null>(null);
-
-        // Calculate initial resume position only when playerKey changes (reload)
-        useMemo(() => {
-            if (currentTime > 0 && duration > 0) {
+        // Calculate resume time when playerKey changes (component is remounting for decoder/enhancement change)
+        // We'll use VLC's --start-time option for seamless resume without visible seek
+        const resumeTimeSeconds = useMemo(() => {
+            // Only set resume time if:
+            // 1. This is a restart (playerKey > 0) - first mount has playerKey=0
+            // 2. We have valid currentTime and duration
+            // 3. We're not at the very beginning or end
+            if (playerKey > 0 && currentTime > 1 && duration > 1) {
                 const fraction = currentTime / duration;
-                if (fraction > 0 && fraction < 0.99) {
-                    console.log('[AnimatedVideoView] Setting pending resume fraction:', fraction);
-                    pendingResumeRef.current = fraction;
+                if (fraction > 0.01 && fraction < 0.99) {
+                    console.log('[AnimatedVideoView] Setting start-time for seamless resume:', currentTime, 'seconds');
+                    return currentTime;
                 }
-            } else {
-                pendingResumeRef.current = null;
             }
+            return 0; // No resume needed
             // eslint-disable-next-line react-hooks/exhaustive-deps
-        }, [playerKey]); // Only re-calc on mount/key change
+        }, [playerKey]); // Re-calc only when playerKey changes
 
-        // Intercept onPlaying to apply resume
+        // Simple onPlaying handler - no more manual seeking needed!
         const handlePlaying = useCallback(() => {
-            console.log('[DEBUG RACE] AnimatedVideoView.handlePlaying at:', Date.now(), 'pendingResume:', pendingResumeRef.current);
-            // Apply pending resume if exists
-            if (pendingResumeRef.current !== null) {
-                const fraction = pendingResumeRef.current;
-                console.log('[AnimatedVideoView] Applying manual resume seek:', fraction);
-
-                // Use the forwarded ref if available
-                if (ref && 'current' in ref && ref.current) {
-                    ref.current.seek(fraction);
-                }
-
-                // Clear pending resume so we don't loop or re-seek
-                pendingResumeRef.current = null;
-            }
-
-            // Forward event
             console.log('[DEBUG RACE] AnimatedVideoView forwarding onPlaying to parent');
             onPlaying();
-        }, [onPlaying, ref]);
+        }, [onPlaying]);
 
-        // Build source with init options and media options for gapless looping
-        const vlcSource = {
-            ...source,
-            initType: 2 as 1 | 2,
-            initOptions: getOptimizedInitOptions(source.uri, decoder, videoEnhancement),
-            mediaOptions: repeat ? [':input-repeat=65535'] : [],
-        };
+        // Build source with init options and media options
+        // --start-time tells VLC to begin playback at the specified position (in seconds)
+        const vlcSource = useMemo(() => {
+            const mediaOpts = repeat ? [':input-repeat=65535'] : [];
+
+            // Add start-time for seamless resume on player restart
+            if (resumeTimeSeconds > 0) {
+                mediaOpts.push(`:start-time=${resumeTimeSeconds}`);
+                console.log('[AnimatedVideoView] Adding --start-time:', resumeTimeSeconds);
+            }
+
+            return {
+                ...source,
+                initType: 2 as 1 | 2,
+                initOptions: getOptimizedInitOptions(source.uri, decoder, videoEnhancement),
+                mediaOptions: mediaOpts,
+            };
+        }, [source, decoder, videoEnhancement, repeat, resumeTimeSeconds]);
 
         if (playerKey > 0) {
             console.log('[AnimatedVideoView] Init Options:', vlcSource.initOptions);

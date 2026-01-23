@@ -96,8 +96,14 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
     // AUDIO CONTROLLER
     // ========================================================================
 
+    // Callback for hardware volume button presses - show volume HUD
+    const handleHardwareVolumeChange = useCallback((volume: number) => {
+        // Show HUD with isGestureActive=false so it auto-hides
+        hud.showVolumeHUD(volume / 100, false);
+    }, [hud]);
+
     // Initialize Audio Controller (Hybrid System+VLC logic)
-    const audioController = useAudioController(player.videoRef);
+    const audioController = useAudioController(player.videoRef, 100, handleHardwareVolumeChange);
 
     // ========================================================================
     // SHARED VALUES FOR GESTURES

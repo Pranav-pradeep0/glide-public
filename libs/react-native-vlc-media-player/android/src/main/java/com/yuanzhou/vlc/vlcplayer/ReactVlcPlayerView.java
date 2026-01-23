@@ -2,8 +2,13 @@ package com.yuanzhou.vlc.vlcplayer;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
+import android.Manifest;
+import android.content.pm.PackageManager;
+import androidx.core.content.ContextCompat;
 import android.graphics.Bitmap;
 import android.graphics.SurfaceTexture;
+import android.media.AudioAttributes;
+import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Handler;
@@ -90,11 +95,13 @@ class ReactVlcPlayerView extends TextureView implements
     private long mAudioDelay = 0;
 
     private float mProgressUpdateInterval = 0;
-    private Handler mProgressUpdateHandler = new Handler();
+    private Handler mProgressUpdateHandler = new Handler(Looper.getMainLooper());
     private Runnable mProgressUpdateRunnable = null;
 
     private final ThemedReactContext themedReactContext;
     private final AudioManager audioManager;
+    private AudioFocusRequest mAudioFocusRequest; // For API 26+ audio focus management
+    private boolean mHasAudioFocus = false;
 
     private WritableMap mVideoInfo = null;
     private String mVideoInfoHash = null;
@@ -161,6 +168,7 @@ class ReactVlcPlayerView extends TextureView implements
                 vlcOut.attachViews(onNewVideoLayoutListener);
                 isSurfaceViewDestory = false;
                 isPaused = false;
+                requestAudioFocusInternal();
                 mMediaPlayer.play();
             }
         }
@@ -199,6 +207,110 @@ class ReactVlcPlayerView extends TextureView implements
     // AudioManager.OnAudioFocusChangeListener implementation
     @Override
     public void onAudioFocusChange(int focusChange) {
+        Log.d(TAG, "onAudioFocusChange: " + focusChange);
+
+        switch (focusChange) {
+            case AudioManager.AUDIOFOCUS_GAIN:
+                // Regained focus - resume playback at normal volume
+                mHasAudioFocus = true;
+                if (mMediaPlayer != null) {
+                    // Restore volume if we were ducking
+                    setVolumeModifier(preVolume);
+                    // Resume if we were playing before losing focus
+                    if (!isPaused && !mMediaPlayer.isPlaying()) {
+                        mMediaPlayer.play();
+                        Log.i(TAG, "Resumed playback after regaining audio focus");
+                    }
+                }
+                break;
+
+            case AudioManager.AUDIOFOCUS_LOSS:
+                // Permanent loss - pause and release focus
+                mHasAudioFocus = false;
+                if (mMediaPlayer != null && mMediaPlayer.isPlaying()) {
+                    isPaused = true;
+                    mMediaPlayer.pause();
+                    setKeepScreenOn(false);
+
+                    // Notify JS side
+                    WritableMap map = Arguments.createMap();
+                    map.putString("type", "Paused");
+                    eventEmitter.onVideoStateChange(map);
+                    Log.i(TAG, "Paused playback due to permanent audio focus loss");
+                }
+                break;
+
+            case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT:
+                // Temporary loss (e.g., phone call) - pause but keep resources
+                if (mMediaPlayer != null && mMediaPlayer.isPlaying()) {
+                    mMediaPlayer.pause();
+                    Log.i(TAG, "Paused playback due to transient audio focus loss");
+                }
+                break;
+
+            case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK:
+                // Can duck - lower volume temporarily
+                if (mMediaPlayer != null) {
+                    mMediaPlayer.setVolume(30); // Duck to 30%
+                    Log.i(TAG, "Ducking audio due to transient focus loss");
+                }
+                break;
+        }
+    }
+
+    /**
+     * Request audio focus before starting playback.
+     * Uses modern AudioFocusRequest API for Android 8.0+ (API 26+).
+     */
+    private boolean requestAudioFocusInternal() {
+        if (mHasAudioFocus) {
+            return true; // Already have focus
+        }
+
+        int result;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            AudioAttributes audioAttributes = new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+                    .build();
+
+            mAudioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                    .setAudioAttributes(audioAttributes)
+                    .setOnAudioFocusChangeListener(this)
+                    .setAcceptsDelayedFocusGain(true)
+                    .build();
+
+            result = audioManager.requestAudioFocus(mAudioFocusRequest);
+        } else {
+            // Legacy API for pre-Oreo
+            result = audioManager.requestAudioFocus(
+                    this,
+                    AudioManager.STREAM_MUSIC,
+                    AudioManager.AUDIOFOCUS_GAIN);
+        }
+
+        mHasAudioFocus = (result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED);
+        Log.i(TAG, "requestAudioFocus result: " + (mHasAudioFocus ? "GRANTED" : "DENIED"));
+        return mHasAudioFocus;
+    }
+
+    /**
+     * Abandon audio focus when stopping playback.
+     * Uses modern API for Android 8.0+.
+     */
+    private void abandonAudioFocusInternal() {
+        if (!mHasAudioFocus) {
+            return;
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && mAudioFocusRequest != null) {
+            audioManager.abandonAudioFocusRequest(mAudioFocusRequest);
+        } else {
+            audioManager.abandonAudioFocus(this);
+        }
+
+        mHasAudioFocus = false;
+        Log.i(TAG, "Abandoned audio focus");
     }
 
     private void setProgressUpdateRunnable() {
@@ -561,7 +673,7 @@ class ReactVlcPlayerView extends TextureView implements
 
     private void onStopPlayback() {
         setKeepScreenOn(false);
-        audioManager.abandonAudioFocus(this);
+        abandonAudioFocusInternal();
 
         // Clean up buffering handler
         if (pendingBufferingEvent != null) {
@@ -583,8 +695,9 @@ class ReactVlcPlayerView extends TextureView implements
             int initType = srcMap.hasKey("initType") ? srcMap.getInt("initType") : 1;
             ReadableArray mediaOptions = srcMap.hasKey("mediaOptions") ? srcMap.getArray("mediaOptions") : null;
             ReadableArray initOptions = srcMap.hasKey("initOptions") ? srcMap.getArray("initOptions") : null;
-            Integer hwDecoderEnabled = srcMap.hasKey("hwDecoderEnabled") ? srcMap.getInt("hwDecoderEnabled") : null;
-            Integer hwDecoderForced = srcMap.hasKey("hwDecoderForced") ? srcMap.getInt("hwDecoderForced") : null;
+            // Robust Defaults: Enable HW Decoder by default (1), Do not force (0)
+            Integer hwDecoderEnabled = srcMap.hasKey("hwDecoderEnabled") ? srcMap.getInt("hwDecoderEnabled") : 1;
+            Integer hwDecoderForced = srcMap.hasKey("hwDecoderForced") ? srcMap.getInt("hwDecoderForced") : 0;
 
             if (initOptions != null) {
                 ArrayList options = initOptions.toArrayList();
@@ -592,7 +705,24 @@ class ReactVlcPlayerView extends TextureView implements
                     String option = (String) options.get(i);
                     cOptions.add(option);
                 }
+            } else {
+                // Performance optimizations if no custom options provided
+                cOptions.add("--network-caching=1500");
+                cOptions.add("--file-caching=1500");
+                cOptions.add("--live-caching=1500");
+                cOptions.add("--android-display-chroma=RV32");
+                cOptions.add("--avcodec-skip-idct=0");
+                cOptions.add("--avcodec-skiploopfilter=0");
             }
+
+            // CRITICAL: Always add these audio options regardless of custom initOptions
+            // This fixes audio dropouts during speed changes, track switches, and
+            // play/pause
+            cOptions.add("--audio-time-stretch");
+            cOptions.add("--audio-filter=scaletempo");
+            cOptions.add("--scaletempo-overlap=0.30"); // 30% overlap for smoother transitions
+            cOptions.add("--scaletempo-search=15"); // 15ms search window
+            cOptions.add("--audio-desync=100"); // 100ms buffer to smooth glitches
             // Create LibVLC
             if (initType == 1) {
                 libvlc = new LibVLC(getContext());
@@ -683,17 +813,11 @@ class ReactVlcPlayerView extends TextureView implements
                 m = new Media(libvlc, uriString);
             }
             m.setEventListener(mMediaListener);
-            if (hwDecoderEnabled != null && hwDecoderForced != null) {
-                boolean hmEnabled = false;
-                boolean hmForced = false;
-                if (hwDecoderEnabled >= 1) {
-                    hmEnabled = true;
-                }
-                if (hwDecoderForced >= 1) {
-                    hmForced = true;
-                }
-                m.setHWDecoderEnabled(hmEnabled, hmForced);
-            }
+            // Apply HW Decoder settings (always applied due to robust defaults)
+            boolean hmEnabled = (hwDecoderEnabled >= 1);
+            boolean hmForced = (hwDecoderForced >= 1);
+            m.setHWDecoderEnabled(hmEnabled, hmForced);
+            Log.i(TAG, "HW Decoder: enabled=" + hmEnabled + ", forced=" + hmForced);
 
             // Add media options
             if (mediaOptions != null) {
@@ -740,11 +864,13 @@ class ReactVlcPlayerView extends TextureView implements
 
             if (isResume) {
                 if (autoplayResume) {
+                    requestAudioFocusInternal();
                     mMediaPlayer.play();
                 }
             } else {
                 if (autoplay) {
                     isPaused = false;
+                    requestAudioFocusInternal();
                     mMediaPlayer.play();
                 }
             }
@@ -826,6 +952,7 @@ class ReactVlcPlayerView extends TextureView implements
                     // Set position FIRST, then play, to ensure we don't hit EOF immediately
                     // if reviving from the very end of the video.
                     mMediaPlayer.setPosition(position);
+                    requestAudioFocusInternal();
                     mMediaPlayer.play();
                 } else {
                     mMediaPlayer.setPosition(position);
@@ -979,8 +1106,10 @@ class ReactVlcPlayerView extends TextureView implements
                     if (mMediaPlayer.getPosition() >= 0.99f) {
                         mMediaPlayer.setPosition(0);
                     }
+                    requestAudioFocusInternal();
                     mMediaPlayer.play();
                 } else {
+                    requestAudioFocusInternal();
                     mMediaPlayer.play();
                 }
             }
@@ -997,8 +1126,9 @@ class ReactVlcPlayerView extends TextureView implements
      */
     public boolean doSnapshot(String path) {
         if (mMediaPlayer != null) {
+            Bitmap bitmap = null;
             try {
-                Bitmap bitmap = getBitmap();
+                bitmap = getBitmap();
                 if (bitmap == null) {
                     WritableMap event = Arguments.createMap();
                     event.putBoolean("success", false);
@@ -1021,8 +1151,6 @@ class ReactVlcPlayerView extends TextureView implements
                 out.flush();
                 out.close();
 
-                bitmap.recycle();
-
                 WritableMap event = Arguments.createMap();
                 event.putBoolean("success", true);
                 event.putString("path", path);
@@ -1035,6 +1163,10 @@ class ReactVlcPlayerView extends TextureView implements
                 eventEmitter.sendEvent(event, VideoEventEmitter.EVENT_ON_SNAPSHOT);
                 e.printStackTrace();
                 return false;
+            } finally {
+                if (bitmap != null) {
+                    bitmap.recycle();
+                }
             }
         }
         WritableMap event = Arguments.createMap();
@@ -1406,13 +1538,34 @@ class ReactVlcPlayerView extends TextureView implements
             themedReactContext.removeLifecycleEventListener(this);
         }
         stopPlayback();
+
+        // Release surface
+        if (surfaceVideo != null) {
+            surfaceVideo.release();
+            surfaceVideo = null;
+        }
     }
 
     @Override
     public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
         Log.d(TAG, String.format("Surface texture available: %dx%d", width, height));
         surfaceVideo = new Surface(surface);
-        createPlayer(true, false);
+
+        if (mMediaPlayer != null && libvlc != null) {
+            // Player exists (e.g. reusing after background play)
+            Log.i(TAG, "Restoring surface to existing player for seamless background resume");
+            IVLCVout vlcOut = mMediaPlayer.getVLCVout();
+            if (!vlcOut.areViewsAttached()) {
+                vlcOut.setVideoSurface(surface);
+                vlcOut.attachViews(onNewVideoLayoutListener);
+                vlcOut.setWindowSize(width, height);
+                // Ensure resize mode is re-applied
+                requestResizeMode();
+            }
+        } else {
+            // Fresh start
+            createPlayer(true, false);
+        }
     }
 
     @Override
@@ -1648,6 +1801,15 @@ class ReactVlcPlayerView extends TextureView implements
     private void showNotification(int state) {
         if (mMediaSession == null)
             return;
+
+        // Permission check for Android 13+
+        if (Build.VERSION.SDK_INT >= 33) {
+            if (ContextCompat.checkSelfPermission(getContext(),
+                    Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                Log.w(TAG, "Notification permission not granted, skipping notification");
+                return;
+            }
+        }
 
         NotificationCompat.Builder builder = new NotificationCompat.Builder(getContext(), NOTIFICATION_CHANNEL_ID);
 

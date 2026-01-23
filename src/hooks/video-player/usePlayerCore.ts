@@ -234,10 +234,10 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
             currentTime: clampedTime,
         }));
 
-        // Activating timing guard: ignore progress/seek updates for 2000ms
-        // This prevents "snapback" where VLC emits old progress before seek completes
-        // Set guard BEFORE calling VLC to ensure we catch any immediate synchronous events (unlikely but safe)
+        // Activating timing guard: ignore progress/seek updates for only 500ms (Reduced from 2000ms)
+        // With timestamp validation (in handleProgress), we don't need a long timer anymore.
         scrubEndTimeRef.current = Date.now();
+        lastAppliedSeekRef.current = clampedTime; // Track this for validation
 
         // Apply immediately to VLC
         applySeekToVLC(clampedTime);
@@ -413,12 +413,15 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
         // Prevent updates if user is currently scrubbing to avoid fighting
         if (isScrubbingShared.value) return;
 
-        // Ignore progress for 2000ms after seek/scrub to prevent snapback
-        // This gives VLC time to actually perform the seek and start emitting new timestamps
-        if (Date.now() - scrubEndTimeRef.current < 2000) return;
-
         const currentTimeInSeconds = (data.currentTime ?? 0) / 1000;
         const durationInSeconds = (data.duration ?? 0) / 1000;
+
+        // Guard against stale events: Ignore progress if it's OLDER than our last sought time
+        // This replaces the 2000ms timer with a precise timestamp check
+        if (currentTimeInSeconds < lastAppliedSeekRef.current - 1.0) {
+            if (__DEV__) console.log('[usePlayerCore] Ignoring stale progress:', currentTimeInSeconds, 'Expected >', lastAppliedSeekRef.current);
+            return;
+        }
 
         // Guard against junk duration values (0 or 1ms) during media re-init
         if (durationInSeconds <= 1) return;
@@ -437,13 +440,17 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
 
             // Use functional state update to remove state dependencies (prevents recreation)
             setState(prev => {
+                // PIN-POINT FIX: Only update duration if it changes drastically (>1s) (Live Streams)
+                // Otherwise ignore micro-jitter from VLC to prevent re-renders
+                const durationChanged = Math.abs(durationInSeconds - prev.duration) > 1.0;
+
                 // Only update if changed significantly to reduce re-renders
-                if (Math.abs(currentTimeInSeconds - prev.currentTime) > 0.1 ||
-                    Math.abs(durationInSeconds - prev.duration) > 0.1) {
+                if (Math.abs(currentTimeInSeconds - prev.currentTime) > 0.1 || durationChanged) {
                     return {
                         ...prev,
                         currentTime: currentTimeInSeconds,
-                        duration: durationInSeconds,
+                        // Only update duration if it really changed (prevents flicker)
+                        duration: durationChanged ? durationInSeconds : prev.duration,
                     };
                 }
                 return prev;
@@ -621,11 +628,16 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
      * Called when native player positions changes (e.g. from notification).
      */
     const handleSeek = useCallback((data: VLCSeekEvent) => {
-        // Guard against stale events during scrubbing/seeking (2000ms window)
-        if (Date.now() - scrubEndTimeRef.current < 2000) return;
+        // Guard against stale events during scrubbing/seeking (500ms window)
+        if (Date.now() - scrubEndTimeRef.current < 500) return;
 
         const currentTimeInSeconds = (data.currentTime ?? 0) / 1000;
         const durationInSeconds = (data.duration ?? 0) / 1000;
+
+        // Guard against stale seeks: Ignore if it's older than our last requested seek
+        if (currentTimeInSeconds < lastAppliedSeekRef.current - 1.0) {
+            return;
+        }
 
         // Guard against junk duration values (0 or 1ms) during media re-init
         if (durationInSeconds <= 1) return;

@@ -62,4 +62,59 @@ class MainActivity : ReactActivity() {
       android.util.Log.w("MainActivity", "Failed to notify PIP state change: ${e.message}")
     }
   }
+
+  /**
+   * Intercept hardware volume keys to show in-app volume slider instead of system UI.
+   * Only intercepts when the video player is actively listening (AudioControlModule).
+   */
+  override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
+    if (keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP || 
+        keyCode == android.view.KeyEvent.KEYCODE_VOLUME_DOWN) {
+      
+      android.util.Log.d("MainActivity", "Volume key pressed: $keyCode")
+      
+      try {
+        // Use static instance instead of React context lookup (fixes null context issue)
+        val audioModule = AudioControlModule.getInstance()
+        
+        android.util.Log.d("MainActivity", "AudioModule available: ${audioModule != null}")
+        android.util.Log.d("MainActivity", "isListening: ${audioModule?.isListeningForVolumeChanges()}")
+        
+        // Only intercept if AudioControlModule is actively listening (player is open)
+        if (audioModule?.isListeningForVolumeChanges() == true) {
+          val audioManager = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
+          val maxVolume = audioManager.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+          val currentVolume = audioManager.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
+          
+          // Calculate step size (typically 1/15 of max)
+          val step = maxOf(1, maxVolume / 15)
+          
+          val newVolume = if (keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP) {
+            minOf(currentVolume + step, maxVolume)
+          } else {
+            maxOf(currentVolume - step, 0)
+          }
+          
+          android.util.Log.d("MainActivity", "Setting volume: $currentVolume -> $newVolume (max: $maxVolume)")
+          
+          // Set volume silently (no system UI)
+          audioManager.setStreamVolume(
+            android.media.AudioManager.STREAM_MUSIC,
+            newVolume,
+            0 // No flags = silent update
+          )
+          
+          // Emit event to JS
+          audioModule.emitHardwareVolumeChange()
+          
+          android.util.Log.d("MainActivity", "Volume key intercepted successfully!")
+          return true // Consume the event (hide system UI)
+        }
+      } catch (e: Exception) {
+        android.util.Log.e("MainActivity", "Volume key interception failed: ${e.message}", e)
+      }
+    }
+    
+    return super.onKeyDown(keyCode, event)
+  }
 }

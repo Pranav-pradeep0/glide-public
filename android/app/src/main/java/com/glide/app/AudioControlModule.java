@@ -77,10 +77,14 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
     // Broadcast receiver for audio becoming noisy
     private BroadcastReceiver noisyAudioReceiver;
 
+    // Static instance for MainActivity access (avoids React context lookup issues)
+    private static AudioControlModule sInstance;
+
     public AudioControlModule(ReactApplicationContext reactContext) {
         super(reactContext);
         this.reactContext = reactContext;
         this.mainHandler = new Handler(Looper.getMainLooper());
+        sInstance = this; // Store static reference
 
         reactContext.addLifecycleEventListener(this);
 
@@ -88,6 +92,14 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
             audioManager = (AudioManager) reactContext.getSystemService(Context.AUDIO_SERVICE);
             contentResolver = reactContext.getContentResolver();
         }
+    }
+
+    /**
+     * Get the singleton instance for direct access from MainActivity.
+     * Returns null if the module hasn't been created yet.
+     */
+    public static AudioControlModule getInstance() {
+        return sInstance;
     }
 
     @NonNull
@@ -532,6 +544,22 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
     // =========================================================================
     // EVENT EMISSION
     // =========================================================================
+
+    /**
+     * Check if the module is actively listening (video player is open).
+     * Called by MainActivity to determine whether to intercept volume keys.
+     */
+    public boolean isListeningForVolumeChanges() {
+        return isListening;
+    }
+
+    /**
+     * Emit a hardware volume change event to React Native.
+     * Called by MainActivity after intercepting and handling a volume key press.
+     */
+    public void emitHardwareVolumeChange() {
+        handleHardwareVolumeChange();
+    }
 
     private void sendEvent(String eventName, @Nullable WritableMap params) {
         if (reactContext.hasActiveReactInstance()) {
