@@ -259,6 +259,7 @@ export interface UsePlayerCoreReturn {
     togglePlayPause: () => void;
     seek: (timeInSeconds: number) => void;
     seekImmediate: (timeInSeconds: number) => void;
+    seekScrubbing: (timeInSeconds: number) => void;
 
     // VLC event handlers
     handleLoad: (data: VLCLoadData) => void;
@@ -489,12 +490,10 @@ export const getOptimizedInitOptions = (
 
     const baseOptions = [
         '--no-video-title-show',
-        // '--no-osd', // Removed as it disables subtitles
         '--no-sub-autodetect-file',
-        '--stats',
-        '--audio-filter=scaletempo',  // Ensure Time-Stretching is active
-        '--scaletempo-overlap=0.30',  // INCREASED overlap (30%) to smooth out silence during speed changes
-        '--scaletempo-search=15',     // Wider search window (15ms) to find better splice points
+        // Removed --stats to save CPU cycles
+        '--audio-filter=scaletempo',  // Essential for speed control
+        // Removed heavy scaletempo search/overlap overrides (return to VLC defaults)
     ];
 
     // Only use fast-seek for local files
@@ -502,43 +501,41 @@ export const getOptimizedInitOptions = (
         baseOptions.push('--input-fast-seek');
     }
 
-    // Video Enhancement Options ("Vivid Mode" - User Preferred)
+    // Video Enhancement Options ("Vivid Mode")
     if (enableEnhancement) {
         baseOptions.push(
-            // Adjust filter for vividness (Color Enhancement)
             '--video-filter=adjust',
-            '--brightness=1.03',                // +3% brightness
-            '--contrast=1.08',                  // +8% contrast
-            '--saturation=1.30',                // +30% saturation
-            '--gamma=0.95',                     // -5% gamma
-            '--hue=0'                           // No hue shift
+            '--brightness=1.03',
+            '--contrast=1.08',
+            '--saturation=1.30',
+            '--gamma=0.95'
         );
     }
 
     // Decoder Options
     if (decoder === 'software') {
-        baseOptions.push('--codec=avcodec'); // Force software decoding
+        baseOptions.push('--codec=avcodec');
     } else {
         // Hardware decoders
-        // We disable Direct Rendering (DR) to allow filters to access frame data even in HW mode.
-        baseOptions.push(
-            '--no-mediacodec-dr',         // Disable MediaCodec direct rendering (Required for filters)
-            '--no-omxil-dr',              // Disable OMXIL direct rendering
+        if (enableEnhancement) {
+            baseOptions.push(
+                '--no-mediacodec-dr',
+                '--no-omxil-dr'
+            );
+        }
 
-            // Speed optimizations to compensate for filter overhead
-            '--avcodec-skiploopfilter=3', // Skip deblocking filter (essential for smooth playback)
-            '--avcodec-threads=4',        // Force multi-threaded decoding
-            '--avcodec-fast',             // Allow non-compliant speedup shortcuts
-            '--drop-late-frames',         // Drop frames if they arrive too late for display
-            '--skip-frames'               // Proactively skip frames if decoding is too slow
+        baseOptions.push(
+            '--avcodec-fast',             // Standard speed optimization
+            '--avcodec-skiploopfilter=1', // Safe quality compromise (skips only non-ref frames)
+            '--avcodec-threads=0'
         );
     }
 
     if (isNetworkStream) {
         return [
             ...baseOptions,
-            '--network-caching=1500',
-            '--live-caching=1500',
+            '--network-caching=600',
+            '--live-caching=600',
             '--clock-jitter=0',
             '--http-reconnect',
         ];

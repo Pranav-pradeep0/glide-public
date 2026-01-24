@@ -574,8 +574,8 @@ export default function VideoPlayerScreen({ route }: Props) {
     const handleSliderChange = useCallback((val: number) => {
         // Update shared value for smooth HUD display
         gestures.sharedValues.seekTime.value = val;
-        // Use seekImmediate to bypass debounce and refresh the snapback guard continuously
-        player.seekImmediate(val);
+        // Use seekScrubbing to bypass React state updates during drag
+        player.seekScrubbing(val);
         hud.showSeekHUD(val, null, null, true); // isGestureActive=true
     }, [player, hud, gestures]);
 

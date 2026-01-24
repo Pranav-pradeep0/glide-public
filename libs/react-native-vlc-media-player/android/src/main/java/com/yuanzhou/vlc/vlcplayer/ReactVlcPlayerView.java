@@ -38,6 +38,9 @@ import java.io.File;
 import java.io.FileDescriptor;
 import java.io.FileOutputStream;
 import java.util.ArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import android.os.ParcelFileDescriptor;
 
 import android.support.v4.media.session.MediaSessionCompat;
@@ -97,6 +100,9 @@ class ReactVlcPlayerView extends TextureView implements
     private float mProgressUpdateInterval = 0;
     private Handler mProgressUpdateHandler = new Handler(Looper.getMainLooper());
     private Runnable mProgressUpdateRunnable = null;
+
+    // Executor for background seeking to prevent UI thread blocking
+    private final ExecutorService seekExecutor = Executors.newSingleThreadExecutor();
 
     private final ThemedReactContext themedReactContext;
     private final AudioManager audioManager;
@@ -263,34 +269,41 @@ class ReactVlcPlayerView extends TextureView implements
      * Uses modern AudioFocusRequest API for Android 8.0+ (API 26+).
      */
     private boolean requestAudioFocusInternal() {
-        if (mHasAudioFocus) {
-            return true; // Already have focus
+        if (!mHasAudioFocus) {
+            int result;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                AudioAttributes audioAttributes = new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+                        .build();
+
+                mAudioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                        .setAudioAttributes(audioAttributes)
+                        .setOnAudioFocusChangeListener(this)
+                        .setAcceptsDelayedFocusGain(true)
+                        .build();
+
+                result = audioManager.requestAudioFocus(mAudioFocusRequest);
+            } else {
+                // Legacy API for pre-Oreo
+                result = audioManager.requestAudioFocus(
+                        this,
+                        AudioManager.STREAM_MUSIC,
+                        AudioManager.AUDIOFOCUS_GAIN);
+            }
+
+            mHasAudioFocus = (result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED);
+            Log.i(TAG, "requestAudioFocus result: " + (mHasAudioFocus ? "GRANTED" : "DENIED"));
         }
 
-        int result;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            AudioAttributes audioAttributes = new AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
-                    .build();
-
-            mAudioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                    .setAudioAttributes(audioAttributes)
-                    .setOnAudioFocusChangeListener(this)
-                    .setAcceptsDelayedFocusGain(true)
-                    .build();
-
-            result = audioManager.requestAudioFocus(mAudioFocusRequest);
-        } else {
-            // Legacy API for pre-Oreo
-            result = audioManager.requestAudioFocus(
-                    this,
-                    AudioManager.STREAM_MUSIC,
-                    AudioManager.AUDIOFOCUS_GAIN);
+        // Force re-apply volume when we have focus.
+        // This ensures the AudioTrack is active and volume is correct.
+        // CHECK mMuted: If muted, we should not unmute just because we got focus.
+        if (mHasAudioFocus && mMediaPlayer != null && !mMuted) {
+            mMediaPlayer.setVolume(preVolume);
+            Log.d(TAG, "Enforced volume " + preVolume + " after focus check");
         }
 
-        mHasAudioFocus = (result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED);
-        Log.i(TAG, "requestAudioFocus result: " + (mHasAudioFocus ? "GRANTED" : "DENIED"));
         return mHasAudioFocus;
     }
 
@@ -707,12 +720,11 @@ class ReactVlcPlayerView extends TextureView implements
                 }
             } else {
                 // Performance optimizations if no custom options provided
-                cOptions.add("--network-caching=1500");
-                cOptions.add("--file-caching=1500");
-                cOptions.add("--live-caching=1500");
-                cOptions.add("--android-display-chroma=RV32");
-                cOptions.add("--avcodec-skip-idct=0");
-                cOptions.add("--avcodec-skiploopfilter=0");
+                cOptions.add("--network-caching=600");
+                cOptions.add("--file-caching=600");
+                cOptions.add("--live-caching=600");
+                // Removed aggressive quality flags (RV32, skip-idct=0) that caused lag on
+                // low-end devices
             }
 
             // CRITICAL: Always add these audio options regardless of custom initOptions
@@ -934,32 +946,44 @@ class ReactVlcPlayerView extends TextureView implements
      *
      * @param position
      */
-    public void setPosition(float position) {
+    public void setPosition(final float position) {
         if (mMediaPlayer != null) {
             if (position >= 0 && position <= 1) {
-                // Skip only if seeking to nearly identical position
-                if (Math.abs(position - lastSeekPosition) < SEEK_THRESHOLD) {
-                    return;
-                }
+                // Submit seek to background thread to avoid blocking UI
+                seekExecutor.submit(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            // Skip only if seeking to nearly identical position
+                            if (Math.abs(position - lastSeekPosition) < SEEK_THRESHOLD) {
+                                return;
+                            }
 
-                lastSeekPosition = position;
+                            lastSeekPosition = position;
 
-                // Handle 'revival' from Ended/Stopped states
-                // If player is stopped (e.g. after reaching end), it won't respond to
-                // setPosition
-                // unless we call play() or it's currently in a state that accepts seeking.
-                if (!mMediaPlayer.isPlaying() && !isPaused) {
-                    // Set position FIRST, then play, to ensure we don't hit EOF immediately
-                    // if reviving from the very end of the video.
-                    mMediaPlayer.setPosition(position);
-                    requestAudioFocusInternal();
-                    mMediaPlayer.play();
-                } else {
-                    mMediaPlayer.setPosition(position);
-                }
+                            // Handle 'revival' from Ended/Stopped states
+                            if (mMediaPlayer != null) {
+                                if (!mMediaPlayer.isPlaying() && !isPaused) {
+                                    mMediaPlayer.setPosition(position);
+                                    // Need to post to main thread for audio focus?
+                                    // LibVLC calls are thread safe, but audio focus should be main thread typically
+                                    // But requestAudioFocusInternal is just Android AudioManager, which is thread
+                                    // safe.
+                                    requestAudioFocusInternal();
+                                    mMediaPlayer.play();
 
-                updatePlayPauseState(mMediaPlayer.isPlaying() ? PlaybackStateCompat.STATE_PLAYING
-                        : PlaybackStateCompat.STATE_PAUSED);
+                                    // Only update state if we actually changed play state
+                                    // We can post this back to main thread or skip during rapid scrubbing
+                                    // updatePlayPauseState(...) - SKIPPED for performance during seek
+                                } else {
+                                    mMediaPlayer.setPosition(position);
+                                }
+                            }
+                        } catch (Exception e) {
+                            Log.e(TAG, "Error in background seek: " + e.getMessage());
+                        }
+                    }
+                });
             }
         }
     }
@@ -1048,9 +1072,10 @@ class ReactVlcPlayerView extends TextureView implements
      * @param volumeModifier
      */
     public void setVolumeModifier(int volumeModifier) {
+        // Clamp to libVLC's supported range (0-200)
+        int clampedVolume = Math.max(0, Math.min(200, volumeModifier));
+        this.preVolume = clampedVolume; // CRITICAL FIX: Update preVolume to track state
         if (mMediaPlayer != null) {
-            // Clamp to libVLC's supported range (0-200)
-            int clampedVolume = Math.max(0, Math.min(200, volumeModifier));
             mMediaPlayer.setVolume(clampedVolume);
         }
     }
@@ -1064,9 +1089,12 @@ class ReactVlcPlayerView extends TextureView implements
         mMuted = muted;
         if (mMediaPlayer != null) {
             if (muted) {
-                this.preVolume = mMediaPlayer.getVolume();
+                // Don't overwrite preVolume with getVolume() as it might be unreliable or
+                // already 0
+                // Just set player to 0
                 mMediaPlayer.setVolume(0);
             } else {
+                // Restore the tracked preVolume
                 mMediaPlayer.setVolume(this.preVolume);
             }
         }
@@ -1530,6 +1558,11 @@ class ReactVlcPlayerView extends TextureView implements
     }
 
     public void cleanUpResources() {
+        // Shutdown executor
+        if (seekExecutor != null && !seekExecutor.isShutdown()) {
+            seekExecutor.shutdownNow();
+        }
+
         if (surfaceView != null) {
             surfaceView.removeOnLayoutChangeListener(onLayoutChangeListener);
         }

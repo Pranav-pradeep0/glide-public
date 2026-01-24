@@ -152,10 +152,9 @@ const Scrubber: React.FC<ScrubberProps> = ({
             const targetTime = newProgress * (duration.value || 0);
             scrubPosition.value = targetTime;
 
-            // Throttle JS updates by time (max 25 updates per second) to keep UI thread silky
-            // The slider animation (scrubPosition) remains 60/120fps
+            // Throttle JS updates by time (max ~33 updates per second) to keep UI thread silky
             const now = Date.now();
-            if (now - lastUpdateJS.value > 40) {
+            if (now - lastUpdateJS.value > 30) { // Updates every ~30ms (33fps)
                 lastUpdateJS.value = now;
                 runOnJS(onSeek)(targetTime);
             }

@@ -244,6 +244,28 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
     }, [state.duration, debouncedSeek, applySeekToVLC, currentTimeShared]);
 
     /**
+     * Perform seek for scrubbing (NO STATE UPDATE).
+     * Used during dragging to update native player without triggering re-renders.
+     * UI updates are handled by SharedValues and Reanimated.
+     */
+    const seekScrubbing = useCallback((timeInSeconds: number) => {
+        const clampedTime = Math.max(0, Math.min(state.duration || 0, timeInSeconds));
+
+        // Update refs and shared value immediately
+        currentTimeRef.current = clampedTime;
+        currentTimeShared.value = clampedTime;
+
+        // NO SET STATE here - prevents re-renders during drag
+
+        // Activating timing guard
+        scrubEndTimeRef.current = Date.now();
+        lastAppliedSeekRef.current = clampedTime;
+
+        // Apply immediately to VLC
+        applySeekToVLC(clampedTime);
+    }, [state.duration, applySeekToVLC, currentTimeShared]);
+
+    /**
      * Set seeking state - called by gesture handlers.
      * Used primarily for UI feedback, not blocking.
      */
@@ -701,6 +723,7 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
         togglePlayPause,
         seek,
         seekImmediate,
+        seekScrubbing,
 
         // VLC event handlers
         handleLoad,
@@ -720,7 +743,7 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
     }), [
         videoRef, currentTimeRef, state,
         currentTimeShared, durationShared, isScrubbingShared,
-        play, pause, stop, togglePlayPause, seek, seekImmediate,
+        play, pause, stop, togglePlayPause, seek, seekImmediate, seekScrubbing,
         handleLoad, handleProgress, handleEnd, handleError, handleBuffering, handlePlaying, handlePaused, handleStopped, handleSeek,
         displayTime, formattedTime, formattedDuration
     ]);
