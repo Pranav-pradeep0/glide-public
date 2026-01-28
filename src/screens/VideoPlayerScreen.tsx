@@ -139,6 +139,13 @@ export default function VideoPlayerScreen({ route }: Props) {
     const hasIncrementedView = useRef(false);
     const controlsInsetsRef = useRef(insets);
     const savePlaybackRef = useRef<() => void>(() => { });
+    const isMounted = useRef(true);
+
+    useEffect(() => {
+        return () => {
+            isMounted.current = false;
+        };
+    }, []);
 
     // Brightness tracking
     const brightnessRef = useRef<number | undefined>(undefined);
@@ -771,6 +778,8 @@ export default function VideoPlayerScreen({ route }: Props) {
             const startTime = Date.now();
 
             while (Date.now() - startTime < maxWaitMs) {
+                if (!isMounted.current) return false;
+
                 // Check fresh values from refs
                 if (subtitleCuesRef.current.length > 0) {
                     return true;
@@ -799,25 +808,30 @@ export default function VideoPlayerScreen({ route }: Props) {
                 const cuesLoaded = await waitForCues(10000);
 
                 if (!cuesLoaded) {
-                    setRecapText(null);
-                    setRecapVisible(false);
-                    setIsGeneratingRecap(false);
-                    setRecapLoadingMessage(undefined);
-                    bookmarksHook.showToastWithMessage('Subtitle extraction taking too long - please try again', 'info');
+                    if (isMounted.current) {
+                        setRecapText(null);
+                        setRecapVisible(false);
+                        setIsGeneratingRecap(false);
+                        setRecapLoadingMessage(undefined);
+                        bookmarksHook.showToastWithMessage('Subtitle extraction taking too long - please try again', 'info');
+                    }
                     return;
                 }
             } else {
                 // No tracks yet - wait a bit for FFprobe to find them
-                setRecapLoadingMessage('Scanning for subtitles...');
+                if (isMounted.current) setRecapLoadingMessage('Scanning for subtitles...');
                 await new Promise(resolve => setTimeout(resolve, 3000));
+                if (!isMounted.current) return;
 
                 // Check if tracks appeared
                 if (subtitleTracksRef.current.length === 0) {
-                    setRecapText(null);
-                    setRecapVisible(false);
-                    setIsGeneratingRecap(false);
-                    setRecapLoadingMessage(undefined);
-                    bookmarksHook.showToastWithMessage('Recap unavailable: No subtitles found in video', 'info');
+                    if (isMounted.current) {
+                        setRecapText(null);
+                        setRecapVisible(false);
+                        setIsGeneratingRecap(false);
+                        setRecapLoadingMessage(undefined);
+                        bookmarksHook.showToastWithMessage('Recap unavailable: No subtitles found in video', 'info');
+                    }
                     return;
                 }
 

@@ -77,7 +77,7 @@ class ReactVlcPlayerView extends TextureView implements
     private boolean netStrTag;
     private ReadableMap srcMap;
     private int mVideoHeight = 0;
-    private TextureView surfaceView;
+
     private Surface surfaceVideo;
     private int mVideoWidth = 0;
     private int mVideoVisibleHeight = 0;
@@ -161,7 +161,7 @@ class ReactVlcPlayerView extends TextureView implements
     @Override
     protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
-        stopPlayback();
+        cleanUpResources();
     }
 
     // LifecycleEventListener implementation
@@ -207,7 +207,7 @@ class ReactVlcPlayerView extends TextureView implements
 
     @Override
     public void onHostDestroy() {
-        stopPlayback();
+        cleanUpResources();
     }
 
     // AudioManager.OnAudioFocusChangeListener implementation
@@ -1574,9 +1574,8 @@ class ReactVlcPlayerView extends TextureView implements
             seekExecutor.shutdownNow();
         }
 
-        if (surfaceView != null) {
-            surfaceView.removeOnLayoutChangeListener(onLayoutChangeListener);
-        }
+        this.removeOnLayoutChangeListener(onLayoutChangeListener);
+
         // Unregister lifecycle listener
         if (themedReactContext != null) {
             themedReactContext.removeLifecycleEventListener(this);
