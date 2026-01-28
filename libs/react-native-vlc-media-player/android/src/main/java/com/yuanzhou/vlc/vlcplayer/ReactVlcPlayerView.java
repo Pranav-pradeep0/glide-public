@@ -464,6 +464,17 @@ class ReactVlcPlayerView extends TextureView implements
             // events.
             switch (event.type) {
                 case MediaPlayer.Event.EndReached: {
+                    // CRITICAL FIX: Emit final 100% progress event before Ending
+                    // This ensures the seekbar always snaps to the very end
+                    WritableMap progressMap = Arguments.createMap();
+                    if (progressMap != null && mMediaPlayer != null) {
+                        progressMap.putBoolean("isPlaying", false);
+                        progressMap.putDouble("position", 1.0);
+                        progressMap.putDouble("currentTime", mMediaPlayer.getLength());
+                        progressMap.putDouble("duration", mMediaPlayer.getLength());
+                        eventEmitter.sendEvent(progressMap, VideoEventEmitter.EVENT_PROGRESS);
+                    }
+
                     WritableMap map = createEventMap();
                     if (map == null)
                         return;

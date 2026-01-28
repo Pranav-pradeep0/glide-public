@@ -296,6 +296,7 @@ export default function VideoPlayerScreen({ route }: Props) {
             (tracksHook as any).setAudioTracksFromVLC?.(tracks);
         },
         initialPaused: shouldResume,
+        playbackRate: hud.state.speed.rate,
     });
 
     // PIP Mode State from native listener
