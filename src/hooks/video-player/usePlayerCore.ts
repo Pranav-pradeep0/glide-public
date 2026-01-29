@@ -689,12 +689,9 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
     const handlePlaying = useCallback(() => {
 
         // Guard against rapid oscillation: ignore if we just processed a pause event
-        const now = Date.now();
-        const lastEvent = lastPlayPauseEventRef.current;
-        if (lastEvent && lastEvent.type === 'pause' && (now - lastEvent.time) < PLAY_PAUSE_DEBOUNCE_MS) {
-            return;
-        }
+        // DEBOUNCE REMOVED: Redundant as events no longer update 'paused' state
 
+        const now = Date.now();
         // Record this event
         lastPlayPauseEventRef.current = { type: 'play', time: now };
 
@@ -706,12 +703,11 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
 
         setState(prev => {
             // Skip if already in desired state to prevent unnecessary re-renders
-            if (!prev.paused && prev.isPlaying) {
+            if (prev.isPlaying) {
                 return prev;
             }
             return {
                 ...prev,
-                paused: false,
                 isPlaying: true,
                 isBuffering: false,
                 playerStopped: false,
@@ -726,12 +722,9 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
     const handlePaused = useCallback(() => {
 
         // Guard against rapid oscillation: ignore if we just processed a play event
-        const now = Date.now();
-        const lastEvent = lastPlayPauseEventRef.current;
-        if (lastEvent && lastEvent.type === 'play' && (now - lastEvent.time) < PLAY_PAUSE_DEBOUNCE_MS) {
-            return;
-        }
+        // DEBOUNCE REMOVED: Redundant as events no longer update 'paused' state
 
+        const now = Date.now();
         // Record this event
         lastPlayPauseEventRef.current = { type: 'pause', time: now };
 
@@ -739,12 +732,11 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
 
         setState(prev => {
             // Skip if already in desired state to prevent unnecessary re-renders
-            if (prev.paused && !prev.isPlaying) {
+            if (!prev.isPlaying) {
                 return prev;
             }
             return {
                 ...prev,
-                paused: true,
                 isPlaying: false,
             };
         });
