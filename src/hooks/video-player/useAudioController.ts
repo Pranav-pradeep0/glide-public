@@ -172,7 +172,7 @@ export function useAudioController(
         return () => {
             subscription.remove();
         };
-    }, [audioRoute.type, vlcRef, onHardwareVolumeChange]);
+    }, [audioRoute.type]); // Removed vlcRef and onHardwareVolumeChange (stable or ref-based)
 
     // Listen for route changes
     useEffect(() => {
@@ -220,7 +220,21 @@ export function useAudioController(
     // Track last VLC volume to avoid redundant native calls
     const lastVlcVolumeRef = useRef(100);
 
+    // Refs for stable callback access
+    const audioRouteRef = useRef(audioRoute);
+    const vlcRefInternal = useRef(vlcRef.current);
+
+    useEffect(() => {
+        audioRouteRef.current = audioRoute;
+    }, [audioRoute]);
+
+    useEffect(() => {
+        vlcRefInternal.current = vlcRef.current;
+    }, [vlcRef.current]);
+
+
     // Apply volume (called during gestures and manual sets)
+    // STABLE CALLBACK: Uses refs to avoid recreation and stale closures
     const applyVolume = useCallback((normalizedValue: number, fromGesture: boolean = false) => {
         if (!AudioControlModule) return;
 
@@ -231,10 +245,11 @@ export function useAudioController(
 
         // Clamp based on route
         let effectiveValue = normalizedValue;
-        const routeMaxNormal = audioRoute.maxVolume / 100;
+        const currentRoute = audioRouteRef.current;
+        const routeMaxNormal = currentRoute.maxVolume / 100;
 
         // Speaker protection
-        if (audioRoute.type === 'speaker' && effectiveValue > 1.0) {
+        if (currentRoute.type === 'speaker' && effectiveValue > 1.0) {
             effectiveValue = 1.0;
         }
 
@@ -252,12 +267,16 @@ export function useAudioController(
         const systemPercentage = Math.min(percentage, 100);
 
         // Use sync method during gestures for better performance (no promise overhead)
-        if (fromGesture && AudioControlModule.setVolumeSync) {
-            AudioControlModule.setVolumeSync(systemPercentage);
-        } else {
-            AudioControlModule.setVolume(systemPercentage).catch(() => {
-                // Silently ignore errors
-            });
+        try {
+            if (fromGesture && AudioControlModule.setVolumeSync) {
+                AudioControlModule.setVolumeSync(systemPercentage);
+            } else {
+                AudioControlModule.setVolume(systemPercentage).catch((err: any) => {
+                    if (__DEV__) console.warn('[AudioController] setVolume error:', err);
+                });
+            }
+        } catch (error) {
+            if (__DEV__) console.warn('[AudioController] Native setVolume failed:', error);
         }
 
         // Handle VLC boost for 100-200%
@@ -265,8 +284,8 @@ export function useAudioController(
         const targetVlcVolume = percentage <= 100 ? 100 : percentage;
         if (targetVlcVolume !== lastVlcVolumeRef.current) {
             lastVlcVolumeRef.current = targetVlcVolume;
-            if (vlcRef.current?.setVolume) {
-                vlcRef.current.setVolume(targetVlcVolume);
+            if (vlcRefInternal.current?.setVolume) {
+                vlcRefInternal.current.setVolume(targetVlcVolume);
             }
         }
 
@@ -276,11 +295,11 @@ export function useAudioController(
             setVolumeState(percentage);
             setVolumePerRoute(prev => ({
                 ...prev,
-                [audioRoute.type]: percentage
+                [currentRoute.type]: percentage
             }));
         }
 
-    }, [audioRoute, vlcRef]);
+    }, []);
 
     // Set volume (0-200 range)
     const setVolume = useCallback((val: number) => {

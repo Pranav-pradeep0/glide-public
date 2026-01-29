@@ -142,8 +142,9 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
     // SCREEN ZONES
     // ========================================================================
 
-    const leftZoneWidth = useMemo(() => width * 0.15, [width]);
-    const rightZoneWidth = useMemo(() => width * 0.15, [width]);
+    const ZONE_RATIO = 0.15;
+    const leftZoneWidth = width * ZONE_RATIO;
+    const rightZoneWidth = width * ZONE_RATIO;
 
 
 

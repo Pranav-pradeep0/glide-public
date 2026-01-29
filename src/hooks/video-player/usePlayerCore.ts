@@ -331,11 +331,22 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
         // is also being toggled leads to race conditions and "simultaneous play/pause" glitches.
         // The VLCPlayer component will handle the play/pause transition itself via the 'paused' prop.
 
-
         // Optimistic update for UI smoothness
         isPlayingShared.value = true;
 
         setState(prev => {
+            // REPLAY FIX: If we are restarting (stopped or at end), reset all sync refs
+            // This prevents "Stale Event Guard" from blocking the 0.0s update
+            if (prev.playerStopped || (prev.duration > 0 && Math.abs(currentTimeRef.current - prev.duration) < 1.0)) {
+                lastAppliedSeekRef.current = 0;
+                currentTimeRef.current = 0;
+                currentTimeShared.value = 0;
+                lastSyncPosition.value = 0;
+                lastSyncTimestamp.value = Date.now();
+                scrubEndTimeRef.current = Date.now(); // reset scrub timer
+                if (__DEV__) console.log('[usePlayerCore] Replay detected - resetting sync refs');
+            }
+
             return {
                 ...prev,
                 paused: false,
@@ -429,7 +440,7 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
         }
 
         if (__DEV__) {
-            console.log('[usePlayerCore] VLC Media loaded:', {
+            if (__DEV__) console.log('[usePlayerCore] VLC Media loaded:', {
                 duration: durationInSeconds,
                 audioTracks: data.audioTracks?.length ?? 0,
             });
@@ -445,7 +456,7 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
             const resumeTime = resumePosRef.current;
 
             if (__DEV__) {
-                console.log('[usePlayerCore] Resuming from:', resumeTime);
+                if (__DEV__) console.log('[usePlayerCore] Resuming from:', resumeTime);
             }
 
             // Update all time tracking
@@ -507,10 +518,15 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
         // If Native reports a time BEHIND our smooth UI, it's likely lag/jitter. We ignore it.
         // Exception: If drift is huge (>1.5s), we assume it's a real seek/buffer event we missed.
         if (isPlayingShared.value && currentTimeInSeconds < currentTimeShared.value - 0.5) {
-            const backwardDrift = currentTimeShared.value - currentTimeInSeconds;
-            if (backwardDrift < 1.5) {
-                if (__DEV__) console.log('[usePlayerCore] Ignored backward jitter:', backwardDrift.toFixed(3), 's');
-                return;
+            // REPLAY FIX: If the new time is near zero (< 0.5s), it's likely a restart/replay.
+            // We MUST allow this, even if it's a "backward" jump.
+            if (currentTimeInSeconds < 0.5) {
+                // Allow restart - do nothing (fall through to sync)
+            } else {
+                const backwardDrift = currentTimeShared.value - currentTimeInSeconds;
+                if (backwardDrift < 1.5) {
+                    return;
+                }
             }
         }
 
@@ -809,7 +825,7 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
                 clearTimeout(bufferingTimeoutRef.current);
             }
         };
-    }, [debouncedSeek]);
+    }, []);
 
     // ========================================================================
     // RETURN

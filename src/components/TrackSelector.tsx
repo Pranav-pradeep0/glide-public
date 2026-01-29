@@ -197,9 +197,17 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
     const [preferHI, setPreferHI] = useState(false);
 
     const searchTokenRef = useRef<number>(0);
+    const abortControllerRef = useRef<AbortController | null>(null);
     const hasAutoSearchedRef = useRef(false);
 
     // ---- Effects ----
+    useEffect(() => {
+        // Cleanup any pending requests when the component unmounts
+        return () => {
+            abortControllerRef.current?.abort();
+        };
+    }, []);
+
     useEffect(() => {
         if (visible) {
             setActiveTab(defaultTab);
@@ -210,6 +218,9 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
             setSearchQuery('');
             setIsSearching(false);
             setDownloadingId(null);
+            // Abort any ongoing search when the modal closes
+            abortControllerRef.current?.abort();
+            abortControllerRef.current = null;
         }
     }, [visible, defaultTab]);
 
@@ -232,10 +243,14 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
             const autoSearch = async () => {
                 try {
                     setIsSearching(true);
-                    console.log('[TrackSelector] autoSearch - videoName:', videoName, 'imdbId:', imdbId, 'language:', selectedLanguage, 'prioritizeSDH: false');
-                    const result = await searchAllSubtitles(videoName, selectedLanguage, imdbId, false);
+                    // Cancel previous
+                    abortControllerRef.current?.abort();
+                    abortControllerRef.current = new AbortController();
+
+                    if (__DEV__) console.log('[TrackSelector] autoSearch - videoName:', videoName, 'imdbId:', imdbId, 'language:', selectedLanguage, 'prioritizeSDH: false');
+                    const result = await searchAllSubtitles(videoName, selectedLanguage, imdbId, false, abortControllerRef.current.signal);
                     const subs = result.subtitles || [];
-                    console.log('[TrackSelector] autoSearch - received', subs.length, 'subtitles');
+                    if (__DEV__) console.log('[TrackSelector] autoSearch - received', subs.length, 'subtitles');
                     setSearchResults(subs);
 
                     setSearchResults(subs);
@@ -326,13 +341,18 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
             const e = manualEpisode ? parseInt(manualEpisode) : undefined;
             const y = manualYear ? parseInt(manualYear) : undefined;
 
-            console.log('[TrackSelector] handleSearch - query:', query, 'language:', selectedLanguage, 'prioritizeSDH:', preferHI, 'S:', s, 'E:', e, 'Y:', y);
+            if (__DEV__) console.log('[TrackSelector] handleSearch - query:', query, 'language:', selectedLanguage, 'prioritizeSDH:', preferHI, 'S:', s, 'E:', e, 'Y:', y);
+
+            // Cancel previous
+            abortControllerRef.current?.abort();
+            abortControllerRef.current = new AbortController();
 
             const result = await searchAllSubtitles(
                 query,
                 selectedLanguage,
                 undefined,
                 preferHI,
+                abortControllerRef.current.signal,
                 s,
                 e,
                 y
@@ -340,7 +360,7 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
 
             if (searchTokenRef.current !== token) return;
 
-            console.log('[TrackSelector] handleSearch - received', result.subtitles?.length || 0, 'subtitles');
+            if (__DEV__) console.log('[TrackSelector] handleSearch - received', result.subtitles?.length || 0, 'subtitles');
             setSearchResults(result.subtitles || []);
         } catch (error) {
             console.error('[TrackSelector] Search error:', error);

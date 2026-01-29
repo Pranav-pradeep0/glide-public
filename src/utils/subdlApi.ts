@@ -84,6 +84,7 @@ export async function searchAllSubtitles(
     language: string = 'en',
     imdbId?: string,
     prioritizeSDH: boolean = true,
+    signal?: AbortSignal,
     manualSeason?: number,
     manualEpisode?: number,
     manualYear?: number // Added
@@ -159,6 +160,7 @@ export async function searchAllSubtitles(
         const response = await fetch(`${SUBDL_API_URL}?${params}`, {
             method: 'GET',
             headers: { 'Content-Type': 'application/json' },
+            signal,
         });
 
         if (!response.ok) {
@@ -206,6 +208,7 @@ export async function searchAllSubtitles(
                 const fallbackResponse = await fetch(`${SUBDL_API_URL}?${fallbackParams}`, {
                     method: 'GET',
                     headers: { 'Content-Type': 'application/json' },
+                    signal,
                 });
 
                 if (fallbackResponse.ok) {
