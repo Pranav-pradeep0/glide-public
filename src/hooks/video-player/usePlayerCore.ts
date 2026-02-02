@@ -477,11 +477,11 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
 
             // Block progress updates for a moment to prevent VLC from emitting 0 before seek applies
             scrubEndTimeRef.current = Date.now();
+            lastAppliedSeekRef.current = resumeTime; // Set immediately in seconds to block stale progress
 
             // Apply the actual seek to VLC after a short delay to ensure player is ready
             setTimeout(() => {
                 const fraction = resumeTime / durationInSeconds;
-                lastAppliedSeekRef.current = fraction;
                 videoRef.current?.seek(fraction);
                 if (__DEV__) console.log('[usePlayerCore] Applied resume seek:', fraction);
             }, 100);
