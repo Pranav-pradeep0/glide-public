@@ -242,7 +242,8 @@ export default function VideoPlayerScreen({ route }: Props) {
                 subtitleTrackIndex: history.selectedSubtitleTrackId,
                 audioDelay: history.audioDelay,
                 subtitleDelay: history.subtitleDelay,
-                brightness: history.brightness
+                brightness: history.brightness,
+                duration: history.duration,
             };
         }
         return { resumePosition: null };
@@ -255,7 +256,8 @@ export default function VideoPlayerScreen({ route }: Props) {
         subtitleTrackIndex: initialSubtitleTrackIndex,
         audioDelay: initialAudioDelay,
         subtitleDelay: initialSubtitleDelay,
-        brightness: initialVideoBrightness
+        brightness: initialVideoBrightness,
+        duration: savedDuration
     } = useMemo(() => getResumeState(), [getResumeState]);
 
     // Determine initial brightness based on mode
@@ -1123,7 +1125,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                         muted={settingsHook.settings.muted || resumeModalVisible}
                         repeat={settingsHook.settings.repeat}
                         resizeMode={settingsHook.settings.resizeMode}
-                        playInBackground={settingsHook.settings.backgroundPlayEnabled || isInPipMode}
+                        playInBackground={settingsHook.settings.backgroundPlayEnabled}
                         currentTime={player.currentTimeRef.current}
                         duration={player.state.duration}
                         videoEnhancement={settingsHook.settings.videoEnhancement}
@@ -1430,6 +1432,8 @@ export default function VideoPlayerScreen({ route }: Props) {
                     videoName={videoName}
                     resumeTime={resumePosition || 0}
                     formattedResumeTime={formatTime(resumePosition || 0)}
+                    remainingTime={savedDuration && resumePosition ? Math.max(0, savedDuration - resumePosition) : undefined}
+                    finishByTime={savedDuration && resumePosition ? new Date(Date.now() + Math.max(0, savedDuration - resumePosition) * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : undefined}
                     showRecapOption={!!resumePosition && resumePosition > 120 && (!!imdbId || !!albumName)}
                     isGeneratingRecap={isGeneratingRecap}
                     onResume={() => handleResumeModalAction('resume')}

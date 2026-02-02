@@ -2,7 +2,9 @@ package com.yuanzhou.vlc.vlcplayer;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
+import android.text.TextUtils;
 import android.Manifest;
+import android.content.res.Configuration;
 import android.content.pm.PackageManager;
 import androidx.core.content.ContextCompat;
 import android.graphics.Bitmap;
@@ -93,9 +95,12 @@ class ReactVlcPlayerView extends TextureView implements
     private boolean autoAspectRatio = false;
     private boolean acceptInvalidCertificates = false;
     private boolean playInBackground = false;
+    private boolean isInPipMode = false;
     private String resizeMode = "contain";
     private boolean isResizeModeApplied = false;
     private long mAudioDelay = 0;
+    private boolean wasPlayingBeforeHostPause = false;
+    private float mSavedPosition = 0f; // Save position across player recreation
 
     private float mProgressUpdateInterval = 0;
     private Handler mProgressUpdateHandler = new Handler(Looper.getMainLooper());
@@ -168,47 +173,168 @@ class ReactVlcPlayerView extends TextureView implements
 
     @Override
     public void onHostResume() {
-        if (mMediaPlayer != null && isSurfaceViewDestory && isHostPaused) {
+        Log.i(TAG, "onHostResume: isSurfaceViewDestory=" + isSurfaceViewDestory + ", isHostPaused=" + isHostPaused
+                + ", wasPlayingBefore=" + wasPlayingBeforeHostPause);
+
+        // Resume playback if we were playing before pause, OR if surface needs
+        // restoration
+        // logic: if player exists AND (surface was destroyed OR we were playing) AND we
+        // are currently paused by host
+        if (mMediaPlayer != null && (isSurfaceViewDestory || wasPlayingBeforeHostPause) && isHostPaused) {
             IVLCVout vlcOut = mMediaPlayer.getVLCVout();
             if (!vlcOut.areViewsAttached()) {
                 vlcOut.attachViews(onNewVideoLayoutListener);
                 isSurfaceViewDestory = false;
+            }
+
+            // Auto-resume playback if it was playing before backgrounding
+            // CRITICAL CHANGE: Removed '!isPaused' check because onSurfacesDestroyed NOW
+            // sets isPaused=true.
+            // We rely on 'wasPlayingBeforeHostPause' as the source of truth for user
+            // intent.
+            if (wasPlayingBeforeHostPause) {
                 isPaused = false;
                 requestAudioFocusInternal();
                 mMediaPlayer.play();
+                Log.i(TAG, "onHostResume: Resumed playback (wasPlayingBefore=true)!");
+            }
+        }
+
+        isHostPaused = false;
+
+        // FORCE SYNC: Tell JS the actual state of the player to ensure UI matches
+        // Native
+        if (mMediaPlayer != null) {
+            WritableMap map = Arguments.createMap();
+            if (mMediaPlayer.isPlaying()) {
+                map.putString("type", "Playing");
+                // CORRECT EVENT: Tell JS we are playing
+                eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_ON_IS_PLAYING);
+            } else {
+                map.putString("type", "Paused");
+                // CORRECT EVENT: Tell JS we are paused
+                eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_ON_PAUSED);
             }
         }
     }
 
     @Override
     public void onHostPause() {
-        boolean isInPipMode = false;
+        // 1. Capture playing state BEFORE we pause
+        // If player is playing, OR if our internal flag says we are not paused (intent
+        // to play)
+        wasPlayingBeforeHostPause = (mMediaPlayer != null && mMediaPlayer.isPlaying()) || !isPaused;
+
+        // 2. Mark host as paused
+        isHostPaused = true;
+
+        Log.i(TAG, "onHostPause: wasPlaying=" + wasPlayingBeforeHostPause + ", playInBackground=" + playInBackground);
+
+        // 3. Update PiP state
+        boolean currentIsInPipMode = false;
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
             try {
                 android.app.Activity activity = themedReactContext.getCurrentActivity();
                 if (activity != null) {
-                    isInPipMode = activity.isInPictureInPictureMode();
+                    currentIsInPipMode = activity.isInPictureInPictureMode();
                 }
             } catch (Exception e) {
                 Log.w(TAG, "Failed to check PIP mode: " + e.getMessage());
             }
         }
 
-        if (!playInBackground && !isInPipMode && !isPaused && mMediaPlayer != null) {
-            isPaused = true;
-            isHostPaused = true;
-            mMediaPlayer.pause();
-            WritableMap map = Arguments.createMap();
-            map.putString("type", "Paused");
-            eventEmitter.onVideoStateChange(map);
+        // Update internal state just in case
+        this.isInPipMode = currentIsInPipMode;
+
+        // 4. Pause if needed
+        if (!playInBackground && !currentIsInPipMode) {
+            if (mMediaPlayer != null && mMediaPlayer.isPlaying()) {
+                isPaused = true;
+                mMediaPlayer.pause();
+
+                WritableMap map = Arguments.createMap();
+                map.putString("type", "Paused");
+                // CORRECT EVENT: Tell JS we are paused
+                eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_ON_PAUSED);
+                Log.i(TAG, "onHostPause: Paused playback (Background)");
+            }
         }
-        Log.i(TAG, "onHostPause: playInBackground=" + playInBackground + ", isInPipMode=" + isInPipMode);
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+
+        // CRITICAL: Detect PiP Exit here
+        boolean newIsInPipMode = false;
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            try {
+                android.app.Activity activity = themedReactContext.getCurrentActivity();
+                if (activity != null) {
+                    newIsInPipMode = activity.isInPictureInPictureMode();
+                }
+            } catch (Exception e) {
+            }
+        }
+
+        Log.i(TAG, "onConfigurationChanged: PiP=" + newIsInPipMode + " (prev=" + this.isInPipMode + "), isHostPaused="
+                + isHostPaused);
+
+        // Transition detected: PiP -> No PiP (Close or Maximize)
+        if (this.isInPipMode && !newIsInPipMode) {
+            // If Host is Paused, it means the user CLOSED the PiP window (stayed in
+            // background)
+            // If Host is Resumed (not paused), it means user MAXIMIZED the window
+            // (foreground)
+            if (isHostPaused && !playInBackground) {
+                Log.i(TAG, "PiP Exit detected while Host Paused -> Stopping Playback (User Closed PiP)");
+                if (mMediaPlayer != null && mMediaPlayer.isPlaying()) {
+                    isPaused = true;
+                    mMediaPlayer.pause();
+                    setKeepScreenOn(false);
+
+                    WritableMap map = Arguments.createMap();
+                    map.putString("type", "Paused");
+                    // CORRECT EVENT: Tell JS we are paused
+                    eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_ON_PAUSED);
+                }
+            }
+        }
+
+        this.isInPipMode = newIsInPipMode;
     }
 
     @Override
     public void onHostDestroy() {
         cleanUpResources();
     }
+
+    IVLCVout.Callback callback = new IVLCVout.Callback() {
+        @Override
+        public void onSurfacesCreated(IVLCVout ivlcVout) {
+            isSurfaceViewDestory = false;
+        }
+
+        @Override
+        public void onSurfacesDestroyed(IVLCVout ivlcVout) {
+            isSurfaceViewDestory = true;
+            // CRITICAL FIX: Pausing player when surface is destroyed (Background/Minimize)
+            // This prevents "Run to End" bug where video finishes in background and resets
+            // to 0.
+            if (!playInBackground) {
+                if (mMediaPlayer != null && mMediaPlayer.isPlaying()) {
+                    isPaused = true;
+                    mMediaPlayer.pause();
+
+                    WritableMap map = Arguments.createMap();
+                    map.putString("type", "Paused");
+                    eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_ON_PAUSED);
+                    Log.i(TAG, "onSurfacesDestroyed: Paused playback (!playInBackground)");
+                }
+            }
+        }
+
+    };
 
     // AudioManager.OnAudioFocusChangeListener implementation
     @Override
@@ -673,19 +799,6 @@ class ReactVlcPlayerView extends TextureView implements
         }
     };
 
-    IVLCVout.Callback callback = new IVLCVout.Callback() {
-        @Override
-        public void onSurfacesCreated(IVLCVout ivlcVout) {
-            isSurfaceViewDestory = false;
-        }
-
-        @Override
-        public void onSurfacesDestroyed(IVLCVout ivlcVout) {
-            isSurfaceViewDestory = true;
-        }
-
-    };
-
     /*************
      * MediaPlayer
      *************/
@@ -714,6 +827,10 @@ class ReactVlcPlayerView extends TextureView implements
         try {
             final ArrayList<String> cOptions = new ArrayList<>();
             String uriString = srcMap.hasKey("uri") ? srcMap.getString("uri") : null;
+            if (TextUtils.isEmpty(uriString)) {
+                Log.w(TAG, "createPlayer: URI is empty or null, skipping.");
+                return;
+            }
             boolean isNetwork = srcMap.hasKey("isNetwork") ? srcMap.getBoolean("isNetwork") : false;
             boolean autoplay = srcMap.hasKey("autoplay") ? srcMap.getBoolean("autoplay") : true;
             int initType = srcMap.hasKey("initType") ? srcMap.getInt("initType") : 1;
@@ -885,16 +1002,51 @@ class ReactVlcPlayerView extends TextureView implements
                 vlcOut.attachViews(onNewVideoLayoutListener);
             }
 
-            if (isResume) {
-                if (autoplayResume) {
-                    requestAudioFocusInternal();
-                    mMediaPlayer.play();
+            // RESTORE SAVED POSITION if available
+            if (mSavedPosition > 0f) {
+                final float positionToRestore = mSavedPosition;
+                mSavedPosition = 0f; // Clear saved position
+
+                Log.i(TAG, "Will restore position: " + positionToRestore);
+
+                // Start playback first, then seek
+                if (isResume) {
+                    if (autoplayResume) {
+                        requestAudioFocusInternal();
+                        mMediaPlayer.play();
+                    }
+                } else {
+                    if (autoplay) {
+                        isPaused = false;
+                        requestAudioFocusInternal();
+                        mMediaPlayer.play();
+                    }
                 }
+
+                // Restore position after player has started with a small delay
+                new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (mMediaPlayer != null) {
+                            // Use our background seek method
+                            setPosition(positionToRestore);
+                            Log.i(TAG, "Restored position to: " + positionToRestore);
+                        }
+                    }
+                }, 200);
+
             } else {
-                if (autoplay) {
-                    isPaused = false;
-                    requestAudioFocusInternal();
-                    mMediaPlayer.play();
+                if (isResume) {
+                    if (autoplayResume) {
+                        requestAudioFocusInternal();
+                        mMediaPlayer.play();
+                    }
+                } else {
+                    if (autoplay) {
+                        isPaused = false;
+                        requestAudioFocusInternal();
+                        mMediaPlayer.play();
+                    }
                 }
             }
 
@@ -919,6 +1071,22 @@ class ReactVlcPlayerView extends TextureView implements
         }
 
         if (mMediaPlayer != null) {
+            // SAVE POSITION before releasing
+            try {
+                // Only save if we are not at the very beginning or very end (to avoid restart
+                // loops)
+                float currentPos = mMediaPlayer.getPosition();
+                if (currentPos > 0.01f && currentPos < 0.99f) {
+                    mSavedPosition = currentPos;
+                    Log.i(TAG, "Saved position before release: " + mSavedPosition);
+                } else {
+                    mSavedPosition = 0f;
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to save position: " + e.getMessage());
+                mSavedPosition = 0f;
+            }
+
             final IVLCVout vout = mMediaPlayer.getVLCVout();
             vout.removeCallback(callback);
             vout.detachViews();
@@ -1015,11 +1183,31 @@ class ReactVlcPlayerView extends TextureView implements
     public void setSrc(String uri, boolean isNetStr, boolean autoplay) {
         this.src = uri;
         this.netStrTag = isNetStr;
+
+        // CRITICAL FIX: Ensure clean state for new source even in this overload
+        releasePlayer();
+        mSavedPosition = 0f;
+
         createPlayer(autoplay, false);
     }
 
     public void setSrc(ReadableMap src) {
+        String newUri = src.hasKey("uri") ? src.getString("uri") : null;
+        // Optimization: If URI is identical AND player exists, DO NOT recreate player.
+        if (newUri != null && this.src != null && newUri.equals(this.src) && mMediaPlayer != null) {
+            Log.i(TAG, "setSrc: URI is identical (" + newUri + "), skipping player recreation.");
+            this.srcMap = src;
+            return;
+        }
+
+        this.src = newUri;
         this.srcMap = src;
+
+        // CRITICAL FIX: Changing source!
+        // We must release the old player and Explicitly CLEAN saved position.
+        releasePlayer();
+        mSavedPosition = 0f; // Clear position for new video
+
         createPlayer(true, false);
     }
 
@@ -1325,6 +1513,36 @@ class ReactVlcPlayerView extends TextureView implements
     public void setPlayInBackground(boolean playInBackground) {
         this.playInBackground = playInBackground;
         Log.i(TAG, "Set playInBackground to: " + playInBackground);
+    }
+
+    /**
+     * Set the PiP mode state from JS
+     * Critical for deciding whether to pause when PiP is closed (and app is in
+     * background)
+     */
+    public void setIsInPipMode(boolean isInPipMode) {
+        boolean wasInPipMode = this.isInPipMode;
+        this.isInPipMode = isInPipMode;
+        Log.i(TAG, "Set isInPipMode to: " + isInPipMode + " (was: " + wasInPipMode + ")");
+
+        // CRITICAL FIX: Handle PiP Close event
+        // If we transitioned from PiP -> No PiP
+        // AND we are NOT supposed to play in background
+        // AND the host is paused (meaning app is in background, not foreground)
+        if (wasInPipMode && !isInPipMode) {
+            if (!playInBackground && isHostPaused) {
+                Log.i(TAG, "PiP closed while PlayInBackground is OFF and Host is Paused -> Pausing Player");
+                if (mMediaPlayer != null && mMediaPlayer.isPlaying()) {
+                    isPaused = true;
+                    mMediaPlayer.pause();
+                    setKeepScreenOn(false);
+
+                    WritableMap map = Arguments.createMap();
+                    map.putString("type", "Paused");
+                    eventEmitter.onVideoStateChange(map);
+                }
+            }
+        }
     }
 
     /**

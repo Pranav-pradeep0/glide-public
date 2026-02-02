@@ -44,6 +44,7 @@ public class ReactVlcPlayerViewManager extends SimpleViewManager<ReactVlcPlayerV
     private static final String PROP_TITLE = "title";
     private static final String PROP_ARTIST = "artist";
     private static final String PROP_AUDIO_EQUALIZER = "audioEqualizer";
+    private static final String PROP_IS_IN_PIP_MODE = "isInPipMode";
 
     @Override
     public String getName() {
@@ -186,6 +187,11 @@ public class ReactVlcPlayerViewManager extends SimpleViewManager<ReactVlcPlayerV
     @ReactProp(name = "audioDelay", defaultFloat = 0f)
     public void setAudioDelay(final ReactVlcPlayerView videoView, final float delayMs) {
         videoView.setAudioDelay((long) delayMs);
+    }
+
+    @ReactProp(name = PROP_IS_IN_PIP_MODE, defaultBoolean = false)
+    public void setIsInPipMode(final ReactVlcPlayerView videoView, final boolean isInPipMode) {
+        videoView.setIsInPipMode(isInPipMode);
     }
 
     public void startRecording(final ReactVlcPlayerView videoView, final String recordingPath) {

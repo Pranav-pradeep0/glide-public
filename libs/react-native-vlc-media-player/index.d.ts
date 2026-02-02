@@ -291,6 +291,13 @@ export type VLCPlayerProps = VLCPlayerCallbackProps & {
   playInBackground?: boolean;
 
   /**
+   * Set to `true` if the app is currently in PiP mode.
+   * This is used to handle PiP to Background transitions properly.
+   * @default false
+   */
+  isInPipMode?: boolean;
+
+  /**
    * Video aspect ratio
    */
   videoAspectRatio?: PlayerAspectRatio;

@@ -171,7 +171,7 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
                     style={styles.video}
                     audioTrack={audioTrack}
                     textTrack={textTrack ?? -1}
-                    autoplay={true}
+                    autoplay={!paused}
                     muted={muted}
                     resizeMode={resizeMode}
                     repeat={repeat}
@@ -188,7 +188,8 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
                     onPaused={onPaused}
                     onStopped={onStopped}
                     onSeek={onSeek}
-                    playInBackground={playInBackground || isInPipMode}
+                    playInBackground={playInBackground}
+                    isInPipMode={isInPipMode}
                 />
             </Animated.View>
         );
