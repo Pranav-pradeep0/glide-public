@@ -76,6 +76,7 @@ class ReactVlcPlayerView extends TextureView implements
     private String _subtitleUri;
     private int _textTrack = -1; // Store desired text track, default to -1 (disabled)
     private int _audioTrack = -1; // Store desired audio track, default to -1 (disabled)
+    private int currentlyAppliedAudioTrack = -1; // Track which audio track is currently active in VLC
     private boolean netStrTag;
     private ReadableMap srcMap;
     private int mVideoHeight = 0;
@@ -113,6 +114,9 @@ class ReactVlcPlayerView extends TextureView implements
     private final AudioManager audioManager;
     private AudioFocusRequest mAudioFocusRequest; // For API 26+ audio focus management
     private boolean mHasAudioFocus = false;
+
+    // Bridge-level seek filtering state (Main thread)
+    private float mLastBridgeSeekValue = Float.NaN;
 
     private WritableMap mVideoInfo = null;
     private String mVideoInfoHash = null;
@@ -173,8 +177,7 @@ class ReactVlcPlayerView extends TextureView implements
 
     @Override
     public void onHostResume() {
-        Log.i(TAG, "onHostResume: isSurfaceViewDestory=" + isSurfaceViewDestory + ", isHostPaused=" + isHostPaused
-                + ", wasPlayingBefore=" + wasPlayingBeforeHostPause);
+        long timestamp = System.currentTimeMillis();
 
         // Resume playback if we were playing before pause, OR if surface needs
         // restoration
@@ -194,9 +197,11 @@ class ReactVlcPlayerView extends TextureView implements
             // intent.
             if (wasPlayingBeforeHostPause) {
                 isPaused = false;
+
                 requestAudioFocusInternal();
+
                 mMediaPlayer.play();
-                Log.i(TAG, "onHostResume: Resumed playback (wasPlayingBefore=true)!");
+
             }
         }
 
@@ -220,6 +225,7 @@ class ReactVlcPlayerView extends TextureView implements
 
     @Override
     public void onHostPause() {
+        long timestamp = System.currentTimeMillis();
         // 1. Capture playing state BEFORE we pause
         // If player is playing, OR if our internal flag says we are not paused (intent
         // to play)
@@ -265,6 +271,7 @@ class ReactVlcPlayerView extends TextureView implements
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
 
+        long timestamp = System.currentTimeMillis();
         // CRITICAL: Detect PiP Exit here
         boolean newIsInPipMode = false;
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
@@ -276,9 +283,6 @@ class ReactVlcPlayerView extends TextureView implements
             } catch (Exception e) {
             }
         }
-
-        Log.i(TAG, "onConfigurationChanged: PiP=" + newIsInPipMode + " (prev=" + this.isInPipMode + "), isHostPaused="
-                + isHostPaused);
 
         // Transition detected: PiP -> No PiP (Close or Maximize)
         if (this.isInPipMode && !newIsInPipMode) {
@@ -313,17 +317,20 @@ class ReactVlcPlayerView extends TextureView implements
         @Override
         public void onSurfacesCreated(IVLCVout ivlcVout) {
             isSurfaceViewDestory = false;
+
         }
 
         @Override
         public void onSurfacesDestroyed(IVLCVout ivlcVout) {
             isSurfaceViewDestory = true;
+
             // CRITICAL FIX: Pausing player when surface is destroyed (Background/Minimize)
             // This prevents "Run to End" bug where video finishes in background and resets
             // to 0.
             if (!playInBackground) {
                 if (mMediaPlayer != null && mMediaPlayer.isPlaying()) {
                     isPaused = true;
+
                     mMediaPlayer.pause();
 
                     WritableMap map = Arguments.createMap();
@@ -339,7 +346,6 @@ class ReactVlcPlayerView extends TextureView implements
     // AudioManager.OnAudioFocusChangeListener implementation
     @Override
     public void onAudioFocusChange(int focusChange) {
-        Log.d(TAG, "onAudioFocusChange: " + focusChange);
 
         switch (focusChange) {
             case AudioManager.AUDIOFOCUS_GAIN:
@@ -419,15 +425,16 @@ class ReactVlcPlayerView extends TextureView implements
             }
 
             mHasAudioFocus = (result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED);
-            Log.i(TAG, "requestAudioFocus result: " + (mHasAudioFocus ? "GRANTED" : "DENIED"));
+
         }
 
         // Force re-apply volume when we have focus.
         // This ensures the AudioTrack is active and volume is correct.
         // CHECK mMuted: If muted, we should not unmute just because we got focus.
         if (mHasAudioFocus && mMediaPlayer != null && !mMuted) {
+
             mMediaPlayer.setVolume(preVolume);
-            Log.d(TAG, "Enforced volume " + preVolume + " after focus check");
+
         }
 
         return mHasAudioFocus;
@@ -449,7 +456,7 @@ class ReactVlcPlayerView extends TextureView implements
         }
 
         mHasAudioFocus = false;
-        Log.i(TAG, "Abandoned audio focus");
+
     }
 
     private void setProgressUpdateRunnable() {
@@ -631,10 +638,16 @@ class ReactVlcPlayerView extends TextureView implements
                         Log.i(TAG, "Applied text track " + _textTrack + " in Playing event");
                     }
 
-                    // Apply stored audio track if set
-                    if (_audioTrack != -1) {
+                    // Apply stored audio track ONLY if it has changed
+                    // CRITICAL FIX: Don't blindly reapply audio track on every Playing event
+                    // as it causes VLC to reinitialize the audio decoder → 2 second silence
+                    if (_audioTrack != -1 && _audioTrack != currentlyAppliedAudioTrack) {
+
                         mMediaPlayer.setAudioTrack(_audioTrack);
+                        currentlyAppliedAudioTrack = _audioTrack;
                         Log.i(TAG, "Applied audio track " + _audioTrack + " in Playing event");
+                    } else {
+
                     }
 
                     // Apply stored audio delay if set (safety net)
@@ -978,6 +991,8 @@ class ReactVlcPlayerView extends TextureView implements
             mVideoInfo = null;
             mVideoInfoHash = null;
             isResizeModeApplied = false;
+            currentlyAppliedAudioTrack = -1; // Reset to force audio track reapplication for new media
+            mLastBridgeSeekValue = Float.NaN; // Reset seek filter for new media
 
             mMediaPlayer.setMedia(m);
             m.release();
@@ -1007,30 +1022,34 @@ class ReactVlcPlayerView extends TextureView implements
                 final float positionToRestore = mSavedPosition;
                 mSavedPosition = 0f; // Clear saved position
 
-                Log.i(TAG, "Will restore position: " + positionToRestore);
-
                 // Start playback first, then seek
                 if (isResume) {
                     if (autoplayResume) {
+
                         requestAudioFocusInternal();
+
                         mMediaPlayer.play();
                     }
                 } else {
                     if (autoplay) {
                         isPaused = false;
+
                         requestAudioFocusInternal();
+
                         mMediaPlayer.play();
                     }
                 }
 
                 // Restore position after player has started with a small delay
+
                 new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
                     @Override
                     public void run() {
                         if (mMediaPlayer != null) {
+
                             // Use our background seek method
                             setPosition(positionToRestore);
-                            Log.i(TAG, "Restored position to: " + positionToRestore);
+
                         }
                     }
                 }, 200);
@@ -1076,14 +1095,16 @@ class ReactVlcPlayerView extends TextureView implements
                 // Only save if we are not at the very beginning or very end (to avoid restart
                 // loops)
                 float currentPos = mMediaPlayer.getPosition();
+
                 if (currentPos > 0.01f && currentPos < 0.99f) {
                     mSavedPosition = currentPos;
-                    Log.i(TAG, "Saved position before release: " + mSavedPosition);
+
                 } else {
                     mSavedPosition = 0f;
+
                 }
             } catch (Exception e) {
-                Log.e(TAG, "Failed to save position: " + e.getMessage());
+
                 mSavedPosition = 0f;
             }
 
@@ -1111,6 +1132,8 @@ class ReactVlcPlayerView extends TextureView implements
         releaseMediaSession();
 
         isResizeModeApplied = false;
+        currentlyAppliedAudioTrack = -1; // Reset tracking state
+        mLastBridgeSeekValue = Float.NaN; // Reset seek filter
     }
 
     // Track last seek to prevent identical repeated seeks
@@ -1121,11 +1144,35 @@ class ReactVlcPlayerView extends TextureView implements
     private static final float SEEK_THRESHOLD = 0.0001f;
 
     /**
+     * Determines if a seek call from the React bridge should be skipped.
+     * Prevents spamming the native player with identical position requests.
+     * Called on the Main UI Thread.
+     */
+    public boolean shouldSkipSeek(float seek) {
+        // Value -1 means "no seek requested" from JS side (sentinel value)
+        if (seek < 0) {
+            return true;
+        }
+
+        // Skip identical consecutive values (common during React
+        // re-renders/reconciliation)
+        // We use strict equality here as we are filtering the exact values sent over
+        // the bridge
+        if (seek == mLastBridgeSeekValue) {
+            return true;
+        }
+
+        mLastBridgeSeekValue = seek;
+        return false;
+    }
+
+    /**
      * 视频进度调整
      *
      * @param position
      */
     public void setPosition(final float position) {
+
         if (mMediaPlayer != null) {
             if (position >= 0 && position <= 1) {
                 // Submit seek to background thread to avoid blocking UI
@@ -1133,8 +1180,10 @@ class ReactVlcPlayerView extends TextureView implements
                     @Override
                     public void run() {
                         try {
+                            long seekStartTime = System.currentTimeMillis();
                             // Skip only if seeking to nearly identical position
                             if (Math.abs(position - lastSeekPosition) < SEEK_THRESHOLD) {
+
                                 return;
                             }
 
@@ -1143,6 +1192,7 @@ class ReactVlcPlayerView extends TextureView implements
                             // Handle 'revival' from Ended/Stopped states
                             if (mMediaPlayer != null) {
                                 if (!mMediaPlayer.isPlaying() && !isPaused) {
+
                                     mMediaPlayer.setPosition(position);
                                     // Need to post to main thread for audio focus?
                                     // LibVLC calls are thread safe, but audio focus should be main thread typically
@@ -1155,11 +1205,13 @@ class ReactVlcPlayerView extends TextureView implements
                                     // We can post this back to main thread or skip during rapid scrubbing
                                     // updatePlayPauseState(...) - SKIPPED for performance during seek
                                 } else {
+
                                     mMediaPlayer.setPosition(position);
+
                                 }
                             }
                         } catch (Exception e) {
-                            Log.e(TAG, "Error in background seek: " + e.getMessage());
+
                         }
                     }
                 });
@@ -1217,10 +1269,16 @@ class ReactVlcPlayerView extends TextureView implements
      * @param rateModifier
      */
     public void setRateModifier(float rateModifier) {
+        long timestamp = System.currentTimeMillis();
+
         if (mMediaPlayer != null) {
+            int currentAudioTrack = mMediaPlayer.getAudioTrack();
+
             mMediaPlayer.setRate(rateModifier);
+
             updatePlayPauseState(
                     mMediaPlayer.isPlaying() ? PlaybackStateCompat.STATE_PLAYING : PlaybackStateCompat.STATE_PAUSED);
+
         }
     }
 

@@ -121,6 +121,10 @@ public class ReactVlcPlayerViewManager extends SimpleViewManager<ReactVlcPlayerV
 
     @ReactProp(name = PROP_SEEK)
     public void setSeek(final ReactVlcPlayerView videoView, final float seek) {
+        if (videoView.shouldSkipSeek(seek)) {
+            return;
+        }
+
         videoView.setPosition(seek);
     }
 
