@@ -33,7 +33,7 @@ function App() {
   useEffect(() => {
     if (appReady && navReady) {
       const elapsed = Date.now() - startTime.current;
-      const minDuration = 500;
+      const minDuration = 1000;
       const remaining = Math.max(0, minDuration - elapsed);
 
       const timer = setTimeout(() => {
