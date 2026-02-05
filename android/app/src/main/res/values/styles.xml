@@ -2,6 +2,10 @@
 
     <!-- Base application theme. -->
     <style name="AppTheme" parent="Theme.EdgeToEdge">
+        <!-- Match window background to splash background for flicker-free load in debug -->
+        <item name="android:windowBackground">@color/splash_background</item>
+        <item name="android:colorBackground">@color/splash_background</item>
+        
         <!-- Customize your theme here. -->
         <item name="android:editTextBackground">@drawable/rn_edit_text_material</item>
 
@@ -14,9 +18,11 @@
         <item name="android:navigationBarDividerColor">@android:color/transparent</item>
     </style>
 
-    <!-- Splash theme for cold start - shows dark background immediately -->
-    <style name="SplashTheme" parent="AppTheme">
-        <item name="android:windowBackground">@drawable/splash_background</item>
+    <!-- Splash theme for cold start - modern Android 12+ API -->
+    <style name="SplashTheme" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/logo_animated</item>
+        <item name="postSplashScreenTheme">@style/AppTheme</item>
     </style>
 
 </resources>

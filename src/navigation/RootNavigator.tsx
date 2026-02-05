@@ -127,7 +127,10 @@ export default function RootNavigator({ onReady }: RootNavigatorProps) {
 
     const onNavigationReady = useCallback(() => {
         console.log('[RootNavigator] Navigation ready');
-        onReady?.();
+        // Wait for one frame to ensure paint has started
+        requestAnimationFrame(() => {
+            onReady?.();
+        });
     }, [onReady]);
 
     return (

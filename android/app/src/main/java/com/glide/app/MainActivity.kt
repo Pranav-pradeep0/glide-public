@@ -11,14 +11,24 @@ import com.facebook.react.defaults.DefaultReactActivityDelegate
 import com.facebook.react.bridge.ReactContext
 import com.glide.app.pip.PipModule
 
-class MainActivity : ReactActivity() {
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 
-  /**
-   * Reset theme from SplashTheme to AppTheme once React Native loads
-   */
+class MainActivity : ReactActivity() {
+  private var isReactReady = false
+
   override fun onCreate(savedInstanceState: Bundle?) {
-    setTheme(R.style.AppTheme)
+    val splashScreen = installSplashScreen()
+    // In debug, we only keep it until the activity is created to see bundling progress.
+    // In release, we keep it until React Native is ready for a perfect transition.
+    splashScreen.setKeepOnScreenCondition { !BuildConfig.DEBUG && !isReactReady }
     super.onCreate(savedInstanceState)
+    
+    // Programmatically set background to ensure it's applied correctly during debug bundling gap
+    window.setBackgroundDrawableResource(R.color.splash_background)
+  }
+
+  fun onReactReady() {
+    isReactReady = true
   }
 
   /**
@@ -32,7 +42,17 @@ class MainActivity : ReactActivity() {
    * which allows you to enable New Architecture with a single boolean flags [fabricEnabled]
    */
   override fun createReactActivityDelegate(): ReactActivityDelegate =
-      DefaultReactActivityDelegate(this, mainComponentName, fabricEnabled)
+      object : DefaultReactActivityDelegate(this, mainComponentName, fabricEnabled) {
+          override fun createRootView(): com.facebook.react.ReactRootView? {
+              val rootView = super.createRootView()
+              // Ensure the root view has the same background as the splash to prevent black flash
+              rootView?.let {
+                val color = androidx.core.content.ContextCompat.getColor(this@MainActivity, R.color.splash_background)
+                it.setBackgroundColor(color)
+              }
+              return rootView
+          }
+      }
 
   /**
    * Handle new intent when app is already running (singleTask mode)

@@ -2,12 +2,10 @@
 <resources>
     <!-- Splash theme for Android 12+ (API 31+) -->
     <!-- This allows us to override the default "Icon in Circle" look -->
-    <style name="SplashTheme" parent="AppTheme">
-        <item name="android:windowSplashScreenBackground">@color/splash_background</item>
-        <item name="android:windowSplashScreenAnimatedIcon">@drawable/logo_vector</item>
-        <item name="android:windowSplashScreenAnimationDuration">1000</item>
-        
-        <!-- Keep windowBackground for compatibility / good measure, though 12 uses the above -->
-        <item name="android:windowBackground">@drawable/splash_background</item>
+    <style name="SplashTheme" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/logo_animated</item>
+        <item name="android:windowSplashScreenAnimationDuration">800</item>
+        <item name="postSplashScreenTheme">@style/AppTheme</item>
     </style>
 </resources>

@@ -164,6 +164,7 @@ dependencies {
     implementation 'com.arthenica:ffmpeg-kit-https:6.0-2'
 
     implementation 'com.arthenica:smart-exception-java:0.2.1'
+    implementation "androidx.core:core-splashscreen:1.0.1"
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")

@@ -4,21 +4,20 @@ import { FileService } from '@/services/FileService';
 import { useTheme } from '@/hooks/useTheme';
 import { useVideoIndexStore } from '@/store/videoIndexStore';
 import { ErrorBoundary } from 'ErrorBoundary';
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { SystemBars } from 'react-native-edge-to-edge';
 import { withStallion } from 'react-native-stallion';
-import { SplashScreen } from '@/components/SplashScreen';
-
-const MINIMUM_SPLASH_DURATION = 1000;
+import { NativeModules } from 'react-native';
 
 function App() {
   const [appReady, setAppReady] = useState(false);
   const [navReady, setNavReady] = useState(false);
-  const [minimumTimeElapsed, setMinimumTimeElapsed] = useState(false);
-  const [showSplash, setShowSplash] = useState(true);
   const theme = useTheme();
+
+  const { initialize } = useVideoIndexStore();
+
   useSettings();
 
   useEffect(() => {
@@ -26,25 +25,30 @@ function App() {
   }, [theme])
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setMinimumTimeElapsed(true);
-    }, MINIMUM_SPLASH_DURATION);
-
-    return () => clearTimeout(timer);
-  }, []);
-
-  useEffect(() => {
     initializeApp();
   }, []);
+
+  const startTime = useRef(Date.now());
+
+  useEffect(() => {
+    if (appReady && navReady) {
+      const elapsed = Date.now() - startTime.current;
+      const minDuration = 500;
+      const remaining = Math.max(0, minDuration - elapsed);
+
+      const timer = setTimeout(() => {
+        NativeModules.SplashModule?.hide();
+      }, remaining);
+      return () => clearTimeout(timer);
+    }
+  }, [appReady, navReady]);
 
   async function initializeApp() {
     try {
       const subtitleCacheDir = FileService.getSubtitleCacheDir();
       await FileService.ensureDir(subtitleCacheDir);
 
-      // Start background video indexing for search
-      // This runs async and doesn't block app startup
-      useVideoIndexStore.getState().initialize();
+      initialize();
 
       setAppReady(true);
       console.log('App initialized successfully');
@@ -53,12 +57,6 @@ function App() {
       setAppReady(true);
     }
   }
-
-  // App is fully ready when all conditions are met
-  const isFullyReady = appReady && navReady;
-
-  // Hide splash only when fully ready AND minimum time has elapsed
-  const shouldHideSplash = isFullyReady && minimumTimeElapsed;
 
   return (
     <SafeAreaProvider style={{ flex: 1, backgroundColor: theme.colors.background }}>
@@ -69,13 +67,6 @@ function App() {
         >
           <RootNavigator onReady={() => setNavReady(true)} />
         </ErrorBoundary>
-
-        {showSplash && (
-          <SplashScreen
-            visible={!shouldHideSplash}
-            onAnimationEnd={() => setShowSplash(false)}
-          />
-        )}
       </GestureHandlerRootView>
     </SafeAreaProvider>
   );

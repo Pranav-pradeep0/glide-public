@@ -1,0 +1,9 @@
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/logo_pause">
+    <target
+        android:name="bar1"
+        android:animation="@animator/logo_morph_bar1"/>
+    <target
+        android:name="bar2"
+        android:animation="@animator/logo_morph_bar2"/>
+</animated-vector>
