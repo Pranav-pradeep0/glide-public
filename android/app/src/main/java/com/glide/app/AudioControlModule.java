@@ -580,12 +580,37 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
 
     @Override
     public void onHostPause() {
-        // Keep listening in background
+        // Do NOT reset brightness on pause - the user may just be switching apps
+        // briefly
+        // and expects to return to the same brightness level.
+        // Only onHostDestroy should reset the brightness to system default.
     }
 
     @Override
     public void onHostDestroy() {
         stopListening();
+        android.app.Activity activity = getCurrentActivity();
+        if (activity != null) {
+            resetBrightnessInternal(activity);
+        }
+    }
+
+    /**
+     * Internal helper to reset brightness to system default (-1f).
+     */
+    private void resetBrightnessInternal(android.app.Activity activity) {
+        if (activity == null)
+            return;
+        activity.runOnUiThread(() -> {
+            try {
+                android.view.WindowManager.LayoutParams params = activity.getWindow().getAttributes();
+                params.screenBrightness = android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE; // -1f
+                activity.getWindow().setAttributes(params);
+                Log.d(TAG, "Brightness reset to system default internally");
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to reset brightness internally: " + e.getMessage());
+            }
+        });
     }
 
     // =========================================================================
@@ -703,17 +728,8 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
                 promise.reject("ERROR", "No activity available");
                 return;
             }
-
-            activity.runOnUiThread(() -> {
-                try {
-                    android.view.WindowManager.LayoutParams params = activity.getWindow().getAttributes();
-                    params.screenBrightness = -1f; // -1 means use system default
-                    activity.getWindow().setAttributes(params);
-                    promise.resolve(true);
-                } catch (Exception e) {
-                    promise.reject("ERROR", e.getMessage());
-                }
-            });
+            resetBrightnessInternal(activity);
+            promise.resolve(true);
         } catch (Exception e) {
             Log.e(TAG, "Error resetting brightness: " + e.getMessage());
             promise.reject("ERROR", e.getMessage());

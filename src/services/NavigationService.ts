@@ -1,5 +1,6 @@
 import { ContentDetector } from './ContentDetector';
 import { CommonActions } from '@react-navigation/native';
+import { NativeModules } from 'react-native';
 
 export class NavigationService {
     /**
@@ -32,7 +33,7 @@ export class NavigationService {
         // For network streams, always go directly to VideoPlayer (skip PlayerDetail)
         if (this.isNetworkStream(videoPath)) {
             console.log('[NavigationService] Network stream detected, skipping PlayerDetail');
-            navigation.navigate('VideoPlayer', {
+            NativeModules.VideoPlayerModule.startPlayer({
                 videoPath,
                 videoName: extraParams.videoName || 'Stream',
                 playMode: 'normal', // No haptics for streams
@@ -58,7 +59,7 @@ export class NavigationService {
             });
         } else {
             // It's a Home Video / Unknown -> Play Directly
-            navigation.navigate('VideoPlayer', {
+            NativeModules.VideoPlayerModule.startPlayer({
                 videoPath,
                 videoName: extraParams.videoName,
                 ...extraParams

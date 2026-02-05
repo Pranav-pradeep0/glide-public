@@ -17,10 +17,19 @@ import { SystemBars } from 'react-native-edge-to-edge';
 const Stack = createNativeStackNavigator();
 
 type Props = {
-    videoUri?: string;
+    videoPath?: string;
+    videoName?: string;
+    contentUri?: string;
+    playMode?: string;
+    albumName?: string;
+    imdbId?: string;
+    cleanTitle?: string;
+    hapticCues?: any;
+    apiSubtitles?: any;
 };
 
-export default function VideoPlayerRoot({ videoUri }: Props) {
+export default function VideoPlayerRoot(props: Props) {
+    const { videoPath, videoName: initialVideoName, playMode } = props;
     const theme = useTheme();
     useSettings(); // Initialize settings
 
@@ -32,36 +41,51 @@ export default function VideoPlayerRoot({ videoUri }: Props) {
 
     useEffect(() => {
         const prepare = async () => {
-            if (videoUri) {
-                const videoName = DeepLinkService.getVideoNameFromUri(videoUri);
-                // Resolve content URI to file path
-                const resolvedPath = await DeepLinkService.resolveToFilePath(videoUri);
+            if (videoPath) {
+                // Determine if this is an internal launch or external open
+                // Internal launches from VideoPlayerModule will have playMode
+                const isInternal = !!playMode;
 
-                const isStream = NavigationService.isNetworkStream(resolvedPath);
+                let resolvedPath = videoPath;
+                let videoName = initialVideoName || DeepLinkService.getVideoNameFromUri(videoPath);
 
-                let targetRoute = 'VideoPlayer';
+                // For external opens (no playMode), we might need to resolve URI and classify
+                if (!isInternal) {
+                    resolvedPath = await DeepLinkService.resolveToFilePath(videoPath);
+                    const isStream = NavigationService.isNetworkStream(resolvedPath);
 
-                if (!isStream) {
-                    // Check if content is movie/series
-                    const classification = ContentDetector.classifySync(resolvedPath);
-                    if (classification.contentType === 'movie' || classification.contentType === 'series') {
-                        targetRoute = 'PlayerDetail';
+                    let targetRoute = 'VideoPlayer';
+                    if (!isStream) {
+                        const classification = ContentDetector.classifySync(resolvedPath);
+                        if (classification.contentType === 'movie' || classification.contentType === 'series') {
+                            targetRoute = 'PlayerDetail';
+                        }
                     }
+
+                    setInitialState({
+                        routeName: targetRoute,
+                        params: {
+                            ...props,
+                            videoPath: resolvedPath,
+                            videoName: videoName,
+                            isExternalOpen: true,
+                        }
+                    });
+                } else {
+                    // Internal launch - always go to VideoPlayer
+                    setInitialState({
+                        routeName: 'VideoPlayer',
+                        params: {
+                            ...props,
+                            isExternalOpen: false,
+                        }
+                    });
                 }
-
-                setInitialState({
-                    routeName: targetRoute,
-                    params: {
-                        videoPath: resolvedPath,
-                        videoName: videoName,
-                        isExternalOpen: true,
-                    }
-                });
             }
             setReady(true);
         };
         prepare();
-    }, [videoUri]);
+    }, [videoPath, initialVideoName, playMode]);
 
     // Set dark mode for system bars since player is usually dark
     useEffect(() => {
@@ -92,13 +116,13 @@ export default function VideoPlayerRoot({ videoUri }: Props) {
                             <Stack.Screen
                                 name="PlayerDetail"
                                 component={PlayerDetailScreen}
-                                initialParams={initialState.routeName === 'PlayerDetail' ? initialState.params : undefined}
+                                initialParams={initialState.params}
                             />
                             <Stack.Screen
                                 name="VideoPlayer"
                                 // @ts-ignore
                                 component={VideoPlayerScreen}
-                                initialParams={initialState.routeName === 'VideoPlayer' ? initialState.params : undefined}
+                                initialParams={initialState.params}
                             />
                         </Stack.Navigator>
                     </NavigationContainer>

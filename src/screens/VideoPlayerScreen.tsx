@@ -284,7 +284,7 @@ export default function VideoPlayerScreen({ route }: Props) {
         showToast: (message, icon) => bookmarksHook.showToastWithMessage(message, icon),
         onSleepTimerEnd: () => {
             player.stop();
-            navigation.goBack();
+            NativeModules.VideoPlayerModule.closePlayer();
         },
         initialAudioDelay,
         initialSubtitleDelay,
@@ -298,7 +298,7 @@ export default function VideoPlayerScreen({ route }: Props) {
         sleepTimer: settingsHook.settings.sleepTimer,
         onSleepTimerEnd: () => {
             player.stop();
-            navigation.goBack();
+            NativeModules.VideoPlayerModule.closePlayer();
         },
         onProgressSave: () => savePlaybackRef.current(),
         onAudioTracksLoaded: (tracks) => {
@@ -509,8 +509,12 @@ export default function VideoPlayerScreen({ route }: Props) {
 
         if (isExternalOpen) {
             BackHandler.exitApp();
-        } else {
+        } else if (navigation.canGoBack()) {
+            // There's a screen to go back to within this activity (e.g. PlayerDetail)
             navigation.goBack();
+        } else {
+            // This was the root of the player activity, so finish the activity
+            NativeModules.VideoPlayerModule.closePlayer();
         }
         ui.showControls();
         ui.scheduleAutoHide();
@@ -518,12 +522,17 @@ export default function VideoPlayerScreen({ route }: Props) {
 
     const handlePlayVideo = useCallback((video: VideoFile) => {
         ui.closeAllPanels();
-        // @ts-ignore
-        navigation.replace('VideoPlayer', {
+        // Stop current playback and save state before starting the new video
+        forceSave();
+        player.stop();
+        // Use native module to start new video (will trigger onNewIntent -> recreate)
+        NativeModules.VideoPlayerModule.startPlayer({
             videoPath: video.path,
             videoName: video.name,
+            albumName: albumName,
+            playMode: 'normal',
         });
-    }, [navigation, ui]);
+    }, [ui, forceSave, player, albumName]);
 
     // ========================================================================
     // CONTROL HANDLERS
@@ -1042,9 +1051,6 @@ export default function VideoPlayerScreen({ route }: Props) {
         useCallback(() => {
             VideoOrientationService.enableAuto();
             return () => {
-                if (AudioControlModule?.resetBrightness) {
-                    AudioControlModule.resetBrightness();
-                }
                 VideoOrientationService.release();
             };
         }, [])
@@ -1065,9 +1071,6 @@ export default function VideoPlayerScreen({ route }: Props) {
             forceSave();
             player.stop();
             VideoOrientationService.release();
-            if (AudioControlModule?.resetBrightness) {
-                AudioControlModule.resetBrightness();
-            }
         });
         return unsubscribe;
     }, [navigation, forceSave, player]);

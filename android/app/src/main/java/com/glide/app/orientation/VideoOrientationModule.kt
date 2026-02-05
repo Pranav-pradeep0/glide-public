@@ -1,11 +1,14 @@
 package com.glide.app.orientation
 
-import android.app.Activity
-import android.content.Context
+import android.content.res.Configuration
 import android.content.pm.ActivityInfo
 import com.facebook.react.bridge.*
 
-class VideoOrientationModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
+class VideoOrientationModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext), LifecycleEventListener {
+
+    init {
+        reactContext.addLifecycleEventListener(this)
+    }
 
     override fun getName(): String {
         return "VideoOrientation"
@@ -35,27 +38,14 @@ class VideoOrientationModule(reactContext: ReactApplicationContext) : ReactConte
 
     @ReactMethod
     fun disableAuto() {
-        // To "lock" the current orientation, we ask the system what the configuration is right now,
-        // and then explicitly set that as the requested orientation.
+        // To "lock" the current orientation, we check the configuration and set
+        // a specific orientation to freeze the current state.
         val activity = currentActivity ?: return
         
         val configuration = activity.resources.configuration
-        val rotation = activity.windowManager.defaultDisplay.rotation
-        
-        // Map current rotation to specific orientation to "freeze" it exactly as is
-        // (android.view.Surface.ROTATION_0 etc used naturally by mapping logic if needed, 
-        // but simpler is checking configuration orientation)
         
         if (configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) {
-             // It could be normal landscape or reverse landscape.
-             // A simple lock to SENSOR_LANDSCAPE keeps it horizontal but allows 180 flips,
-             // or strictly LANDSCAPE locks it to one side.
-             // Usually "Lock" means "don't change at all". 
-             // Let's rely on standard LANDSCAPE for now, or if we want exact current:
-             // We can check rotation.
-             
-             // For simplicity and user expectation: "Lock" usually just means "Stop rotating automatically".
-             // If I am in Landscape, keep me in Landscape.
+             // Lock to SENSOR_LANDSCAPE to allow 180-degree flips while staying horizontal
              activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         } else {
              activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
@@ -64,8 +54,41 @@ class VideoOrientationModule(reactContext: ReactApplicationContext) : ReactConte
 
     @ReactMethod
     fun release() {
-        val activity = currentActivity
-        // Reset to UNSPECIFIED to let the system decide (usually means following system settings)
-        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        releaseInternal()
+    }
+
+    /**
+     * Internal release with "Portrait Snap".
+     * Explicitly sets portrait first to force the OS to re-evaluate layout, 
+     * then resets to UNSPECIFIED.
+     */
+    private fun releaseInternal() {
+        val activity = currentActivity ?: return
+        activity.runOnUiThread {
+            try {
+                // Phase 1: Force Portrait to snap the UI back immediately
+                activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                
+                // Phase 2: Release to system (delayed slightly to ensure OS registers Phase 1)
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                }, 100)
+            } catch (e: Exception) {
+                // Fallback: just reset
+                activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            }
+        }
+    }
+
+    override fun onHostResume() {}
+
+    override fun onHostPause() {
+        // Do NOT release orientation on pause - the user may just be switching apps briefly
+        // and expects to return to the same orientation state.
+        // Only onHostDestroy should release the orientation.
+    }
+
+    override fun onHostDestroy() {
+        releaseInternal()
     }
 }

@@ -64,6 +64,29 @@ class MainActivity : ReactActivity() {
   }
 
   /**
+   * Reset screen brightness to system default when the activity is destroyed.
+   * This prevents brightness from persisting after the player exits on some devices
+   * where the React Native cleanup may not run before the activity is destroyed.
+   */
+  override fun onDestroy() {
+    try {
+      // Force Portrait snap before release to clear stuck sensors
+      requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+      
+      val params = window.attributes
+      params.screenBrightness = android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+      window.attributes = params
+
+      android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+        requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+      }, 100)
+    } catch (e: Exception) {
+      android.util.Log.w("MainActivity", "Failed to reset state: ${e.message}")
+    }
+    super.onDestroy()
+  }
+
+  /**
    * Called when the activity enters or exits PIP mode
    */
   override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
