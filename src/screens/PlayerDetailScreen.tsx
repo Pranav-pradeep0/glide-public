@@ -18,7 +18,6 @@ import {
     Animated, // Added
     Easing,   // Added
     useWindowDimensions, // Added
-    NativeModules, // Added
 } from 'react-native';
 import FastImage from 'react-native-fast-image';
 import { RouteProp, useRoute, useNavigation } from '@react-navigation/native';
@@ -242,7 +241,7 @@ export default function PlayerDetailScreen() {
     }
 
     function navigateToPlayer(cues?: SubtitleCue[] | null) {
-        NativeModules.VideoPlayerModule.startPlayer({
+        navigation.navigate('VideoPlayer', {
             videoPath,
             videoName,
             cleanTitle: movieDetails?.Title,
@@ -417,13 +416,7 @@ export default function PlayerDetailScreen() {
     return (
         <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
             <TouchableOpacity
-                onPress={() => {
-                    if (navigation.canGoBack()) {
-                        navigation.goBack();
-                    } else {
-                        NativeModules.VideoPlayerModule.closePlayer();
-                    }
-                }}
+                onPress={() => navigation.goBack()}
                 style={[
                     styles.floatingBack,
                     {

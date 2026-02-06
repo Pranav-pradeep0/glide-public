@@ -15,6 +15,7 @@ import SettingsScreen from '@/screens/SettingsScreen';
 import FoldersScreen from '@/screens/FoldersScreen';
 import SearchScreen from '@/screens/SearchScreen';
 import PlayerDetailScreen from '@/screens/PlayerDetailScreen';
+import VideoPlayerScreen from '@/screens/VideoPlayerScreen';
 import AlbumVideosScreen from '@/screens/AlbumVideosScreen';
 import { MainTabParamList, RootStackParamList } from '@/types';
 
@@ -180,6 +181,16 @@ export default function RootNavigator({ onReady }: RootNavigatorProps) {
                             options={{
                                 headerShown: false,
                                 animation: 'slide_from_right',
+                            }}
+                        />
+                        <Stack.Screen
+                            name="VideoPlayer"
+                            component={VideoPlayerScreen}
+                            options={{
+                                headerShown: false,
+                                animation: 'ios_from_right',
+                                animationDuration: 150,
+                                gestureEnabled: false,
                             }}
                         />
                         <Stack.Screen
