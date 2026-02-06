@@ -1042,9 +1042,6 @@ export default function VideoPlayerScreen({ route }: Props) {
         useCallback(() => {
             VideoOrientationService.enableAuto();
             return () => {
-                if (AudioControlModule?.resetBrightness) {
-                    AudioControlModule.resetBrightness();
-                }
                 VideoOrientationService.release();
             };
         }, [])
@@ -1065,9 +1062,6 @@ export default function VideoPlayerScreen({ route }: Props) {
             forceSave();
             player.stop();
             VideoOrientationService.release();
-            if (AudioControlModule?.resetBrightness) {
-                AudioControlModule.resetBrightness();
-            }
         });
         return unsubscribe;
     }, [navigation, forceSave, player]);

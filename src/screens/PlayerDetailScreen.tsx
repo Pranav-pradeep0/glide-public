@@ -674,7 +674,7 @@ export default function PlayerDetailScreen() {
             </ScrollView>
 
             {/* Manual subtitle picker modal */}
-            <Modal visible={showManualPicker} animationType="slide" transparent>
+            <Modal visible={showManualPicker} animationType="slide" transparent statusBarTranslucent navigationBarTranslucent>
                 <View style={styles.modalContainer}>
                     <View
                         style={[
