@@ -4,7 +4,6 @@ import { Feather } from '@react-native-vector-icons/feather';
 import Animated, {
     FadeIn,
     FadeOut,
-    LinearTransition,
 } from 'react-native-reanimated';
 import { RecapIcon } from './PlayerIcons';
 
@@ -81,16 +80,15 @@ export const ResumeModal: React.FC<ResumeModalProps> = ({
         <Modal
             transparent
             visible={visible}
-            animationType="fade"
+            animationType="none"
             onRequestClose={onClose}
             statusBarTranslucent
             navigationBarTranslucent
         >
             <Pressable style={styles.overlay} onPress={onResume}>
                 <Animated.View
-                    entering={FadeIn.duration(250)}
+                    entering={FadeIn.duration(300)}
                     exiting={FadeOut.duration(200)}
-                    layout={LinearTransition.duration(200)}
                     style={[
                         styles.container,
                         { maxWidth: 420 }

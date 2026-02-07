@@ -275,6 +275,24 @@ export default function VideoPlayerScreen({ route }: Props) {
 
     const [resumeModalVisible, setResumeModalVisible] = React.useState(shouldResume);
 
+    // Memoize resume modal data to prevent recalculations on every render during animations
+    const resumeModalData = useMemo(() => {
+        if (!resumePosition) return null;
+
+        const remaining = savedDuration ? Math.max(0, savedDuration - resumePosition) : 0;
+        // Calculate finish time once based on current time when history is loaded
+        const finishBy = savedDuration
+            ? new Date(Date.now() + remaining * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : undefined;
+
+        return {
+            formattedTime: formatTime(resumePosition),
+            remainingTime: savedDuration ? remaining : undefined,
+            finishByTime: finishBy,
+            showRecap: resumePosition > 120 && (!!imdbId || !!albumName)
+        };
+    }, [resumePosition, savedDuration, imdbId, albumName]);
+
     // ========================================================================
     // PLAYER HOOKS (ORDER MATTERS - dependencies flow down)
     // ========================================================================
@@ -1392,10 +1410,10 @@ export default function VideoPlayerScreen({ route }: Props) {
                     visible={resumeModalVisible}
                     videoName={videoName}
                     resumeTime={resumePosition || 0}
-                    formattedResumeTime={formatTime(resumePosition || 0)}
-                    remainingTime={savedDuration && resumePosition ? Math.max(0, savedDuration - resumePosition) : undefined}
-                    finishByTime={savedDuration && resumePosition ? new Date(Date.now() + Math.max(0, savedDuration - resumePosition) * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : undefined}
-                    showRecapOption={!!resumePosition && resumePosition > 120 && (!!imdbId || !!albumName)}
+                    formattedResumeTime={resumeModalData?.formattedTime || ''}
+                    remainingTime={resumeModalData?.remainingTime}
+                    finishByTime={resumeModalData?.finishByTime}
+                    showRecapOption={!!resumeModalData?.showRecap}
                     isGeneratingRecap={isGeneratingRecap}
                     onResume={() => handleResumeModalAction('resume')}
                     onRestart={() => handleResumeModalAction('restart')}
