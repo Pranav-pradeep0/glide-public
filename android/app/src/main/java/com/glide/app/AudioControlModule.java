@@ -47,15 +47,14 @@ import com.facebook.react.modules.core.DeviceEventManagerModule;
  * 200%</li>
  * <li><b>Hardware Button Detection:</b> Filters app-initiated changes to avoid
  * feedback loops</li>
- * <li><b>Brightness Control:</b> Automatic caching and restoration with custom
- * ROM compatibility</li>
+ * <li><b>Brightness Control:</b> Hybrid system-wide and window-level control
+ * with Android 15 HDR support</li>
  * </ul>
  * 
  * <h2>Lifecycle Management:</h2>
  * <ul>
- * <li>{@link #startListening()} - Called when video player opens (auto-caches
- * brightness)</li>
- * <li>{@link #stopListening()} - Called when video player closes (auto-resets
+ * <li>{@link #startListening()} - Called when video player opens</li>
+ * <li>{@link #stopListening()} - Called when video player closes (auto-releases
  * brightness)</li>
  * <li>{@link #onHostDestroy()} - Safety net for unexpected termination</li>
  * </ul>
@@ -67,7 +66,7 @@ import com.facebook.react.modules.core.DeviceEventManagerModule;
  * race conditions during rapid gesture input.
  * </p>
  * 
- * @version 2.0.0
+ * @version 2.2.0
  * @since 2024-12-01
  */
 public class AudioControlModule extends ReactContextBaseJavaModule implements LifecycleEventListener {
@@ -88,13 +87,11 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
 
     // Timing constants
     private static final long APP_CHANGE_DEBOUNCE_MS = 200;
-    private static final long BRIGHTNESS_RESET_DELAY_MS = 100;
     private static final long VOLUME_FLAG_CLEAR_DELAY_MS = 50;
 
     // Brightness constants
-    private static final int DEFAULT_BRIGHTNESS_VALUE = 128; // 50% of 255
-    private static final float DEFAULT_BRIGHTNESS_NORMALIZED = 0.5f;
-    private static final float BRIGHTNESS_CHANGE_THRESHOLD = 0.01f; // 1% tolerance
+    private static final float BRIGHTNESS_RELEASE_VALUE = -1.0f;
+    private static final int SYSTEM_BRIGHTNESS_MAX = 255;
 
     // React Native context and system services
     private final ReactApplicationContext reactContext;
@@ -112,10 +109,6 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
     // Volume change detection (prevents feedback loops)
     private volatile boolean isAppChangingVolume = false;
     private volatile long lastAppVolumeChangeTime = 0;
-
-    // Brightness state (thread-safe with volatile)
-    private volatile float initialSystemBrightness = -1f;
-    private volatile boolean brightnessInitialized = false;
 
     // Observers and callbacks
     private ContentObserver volumeObserver;
@@ -562,11 +555,6 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
         currentMaxVolume = getMaxVolumeForRoute(currentRoute);
         Log.d(TAG, "Initial route: " + currentRoute + ", maxVolume: " + currentMaxVolume);
 
-        // AUTOMATIC BRIGHTNESS CACHING
-        // This ensures we capture the system brightness before any video player
-        // adjustments
-        cacheSystemBrightness();
-
         // Register observers
         registerVolumeObserver();
         registerAudioDeviceCallback();
@@ -603,14 +591,10 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
         unregisterAudioDeviceCallback();
         unregisterNoisyAudioReceiver();
 
-        // AUTOMATIC BRIGHTNESS RESET
-        // Reset brightness to cached system value when video player closes
-        if (brightnessInitialized && initialSystemBrightness >= 0) {
-            Log.i(TAG, "Auto-resetting brightness on stopListening");
-            resetBrightnessSync();
-        } else {
-            Log.w(TAG, "Skipping brightness reset: not initialized or invalid cached value");
-        }
+        // AUTOMATIC BRIGHTNESS RELEASE
+        // We release control back to system by setting window brightness to -1.0
+        Log.i(TAG, "Releasing brightness control on stopListening");
+        resetBrightnessSync();
     }
 
     /**
@@ -903,10 +887,8 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
 
         // SAFETY NET: Reset brightness before cleanup
         // This handles cases where stopListening() wasn't called (e.g., app crash/kill)
-        if (brightnessInitialized && initialSystemBrightness >= 0) {
-            Log.i(TAG, "Auto-resetting brightness on destroy (safety net)");
-            resetBrightnessSync();
-        }
+        Log.i(TAG, "Auto-resetting brightness on destroy (safety net)");
+        resetBrightnessSync();
 
         // Stop listening (will unregister all observers)
         stopListening();
@@ -917,76 +899,29 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
     // =========================================================================
 
     /**
-     * Caches the current system brightness value.
+     * Checks if the app has permission to write system settings.
      * 
-     * <p>
-     * <b>Called automatically by {@link #startListening()}.</b>
-     * </p>
-     * 
-     * <p>
-     * This captures the system brightness before any video player adjustments,
-     * ensuring we can restore it accurately when the player closes.
-     * </p>
-     * 
-     * <p>
-     * <b>Custom ROM Compatibility:</b>
-     * </p>
-     * <ul>
-     * <li>Works on MIUI, ColorOS, FunTouch OS (iQOO), OneUI, etc.</li>
-     * <li>Uses standard Android Settings API (universally supported)</li>
-     * <li>Fallback to 50% if settings unavailable</li>
-     * </ul>
+     * @param promise Promise resolving to boolean
      */
-    private void cacheSystemBrightness() {
-        if (contentResolver == null) {
-            Log.w(TAG, "ContentResolver not available, using default brightness");
-            initialSystemBrightness = DEFAULT_BRIGHTNESS_NORMALIZED;
-            brightnessInitialized = true;
-            return;
-        }
-
-        try {
-            int systemBrightness = Settings.System.getInt(
-                    contentResolver,
-                    Settings.System.SCREEN_BRIGHTNESS,
-                    DEFAULT_BRIGHTNESS_VALUE);
-
-            // Normalize to 0.0-1.0 range
-            initialSystemBrightness = systemBrightness / 255f;
-            brightnessInitialized = true;
-
-            Log.i(TAG, "Cached system brightness: " + initialSystemBrightness +
-                    " (raw: " + systemBrightness + "/255)");
-        } catch (Exception e) {
-            Log.w(TAG, "Error caching system brightness, using default", e);
-            initialSystemBrightness = DEFAULT_BRIGHTNESS_NORMALIZED;
-            brightnessInitialized = true;
+    @ReactMethod
+    public void hasWriteSettingsPermission(Promise promise) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            promise.resolve(Settings.System.canWrite(reactContext));
+        } else {
+            promise.resolve(true); // Permission not required before Android M
         }
     }
 
     /**
-     * Manually caches the current system brightness.
-     * 
-     * <p>
-     * <b>NOTE:</b> This is <b>OPTIONAL</b> - {@link #startListening()} already
-     * calls this automatically. Only use this if you need to update the cached
-     * value mid-session (rare).
-     * </p>
-     * 
-     * @param promise Promise resolving to brightness data
+     * Opens the system settings screen to grant WRITE_SETTINGS permission.
      */
     @ReactMethod
-    public void saveInitialBrightness(Promise promise) {
-        try {
-            cacheSystemBrightness();
-
-            WritableMap result = Arguments.createMap();
-            result.putDouble("brightness", initialSystemBrightness);
-            result.putBoolean("success", brightnessInitialized);
-            promise.resolve(result);
-        } catch (Exception e) {
-            Log.e(TAG, "Error in saveInitialBrightness", e);
-            promise.reject("ERROR", e.getMessage());
+    public void requestWriteSettingsPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            Intent intent = new Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS);
+            intent.setData(android.net.Uri.parse("package:" + reactContext.getPackageName()));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            reactContext.startActivity(intent);
         }
     }
 
@@ -994,36 +929,65 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
      * Sets app brightness (0.0 to 1.0).
      * 
      * <p>
-     * This only affects the current activity's window, not system brightness.
-     * The change is temporary and will be reset when the video player closes.
+     * <b>Hybrid Strategy:</b>
      * </p>
+     * <ul>
+     * <li>If WRITE_SETTINGS granted: Updates system brightness directly (iQOO/MIUI
+     * fix)</li>
+     * <li>Fallback: Updates current activity window brightness</li>
+     * <li>Android 15+: Applies HDR headroom control to prevent UI blowout</li>
+     * </ul>
      * 
      * @param brightness Brightness level (0.0 = black, 1.0 = full)
      * @param promise    Promise resolving to the set brightness value
      */
     @ReactMethod
     public void setBrightness(float brightness, Promise promise) {
+        final float finalBrightness = Math.max(0f, Math.min(1f, brightness));
         android.app.Activity activity = getCurrentActivity();
-        if (activity == null) {
-            promise.reject("ERROR", "No activity available");
-            return;
+
+        // 1. SYSTEM BRIGHTNESS (Requires WRITE_SETTINGS)
+        // This is the "Nuclear" option for devices like iQOO/MIUI
+        boolean systemUpdated = false;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.System.canWrite(reactContext)) {
+            try {
+                int systemValue = Math.round(finalBrightness * SYSTEM_BRIGHTNESS_MAX);
+                Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, systemValue);
+                systemUpdated = true;
+                Log.d(TAG, "System brightness updated to: " + systemValue);
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to update system brightness despite permission", e);
+            }
         }
 
-        final float finalBrightness = Math.max(0f, Math.min(1f, brightness));
+        // 2. WINDOW BRIGHTNESS (Always applied as fallback/complement)
+        if (activity != null) {
+            final boolean finalSystemUpdated = systemUpdated;
+            activity.runOnUiThread(() -> {
+                try {
+                    android.view.Window window = activity.getWindow();
+                    android.view.WindowManager.LayoutParams params = window.getAttributes();
 
-        activity.runOnUiThread(() -> {
-            try {
-                android.view.WindowManager.LayoutParams params = activity.getWindow().getAttributes();
-                params.screenBrightness = finalBrightness;
-                activity.getWindow().setAttributes(params);
+                    // Android 15 HDR Headroom Control
+                    if (Build.VERSION.SDK_INT >= 35) { // Android 15
+                        // Prevent SDR UI from being too bright when HDR video is playing
+                        params.setDesiredHdrHeadroom(1.0f);
+                    }
 
-                Log.d(TAG, "Brightness set to: " + finalBrightness);
-                promise.resolve(finalBrightness);
-            } catch (Exception e) {
-                Log.e(TAG, "Error setting brightness", e);
-                promise.reject("ERROR", e.getMessage());
-            }
-        });
+                    // If we updated system settings, we release window control to avoid conflict
+                    params.screenBrightness = finalSystemUpdated ? BRIGHTNESS_RELEASE_VALUE : finalBrightness;
+                    window.setAttributes(params);
+
+                    Log.d(TAG, "Window brightness set to: " + params.screenBrightness);
+                    promise.resolve(finalBrightness);
+                } catch (Exception e) {
+                    Log.e(TAG, "Error setting brightness", e);
+                    promise.reject("ERROR", e.getMessage());
+                }
+            });
+        } else {
+            promise.resolve(finalBrightness);
+        }
     }
 
     /**
@@ -1036,24 +1000,48 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
      * 
      * @param brightness Brightness level (0.0 to 1.0)
      */
+    /**
+     * Fast synchronous brightness setter for gesture performance.
+     * 
+     * @param brightness Brightness level (0.0 to 1.0)
+     */
     @ReactMethod
     public void setBrightnessSync(float brightness) {
+        final float finalBrightness = Math.max(0f, Math.min(1f, brightness));
         android.app.Activity activity = getCurrentActivity();
-        if (activity == null) {
-            return;
+
+        // System update if permitted
+        boolean systemUpdated = false;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.System.canWrite(reactContext)) {
+            try {
+                int systemValue = Math.round(finalBrightness * SYSTEM_BRIGHTNESS_MAX);
+                Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, systemValue);
+                systemUpdated = true;
+            } catch (Exception e) {
+                // Silent intended for sync gesture
+            }
         }
 
-        final float finalBrightness = Math.max(0f, Math.min(1f, brightness));
+        // Window update
+        if (activity != null) {
+            final boolean finalSystemUpdated = systemUpdated;
+            activity.runOnUiThread(() -> {
+                try {
+                    android.view.Window window = activity.getWindow();
+                    android.view.WindowManager.LayoutParams params = window.getAttributes();
 
-        activity.runOnUiThread(() -> {
-            try {
-                android.view.WindowManager.LayoutParams params = activity.getWindow().getAttributes();
-                params.screenBrightness = finalBrightness;
-                activity.getWindow().setAttributes(params);
-            } catch (Exception e) {
-                Log.e(TAG, "Error in setBrightnessSync", e);
-            }
-        });
+                    // Android 15 HDR Headroom
+                    if (Build.VERSION.SDK_INT >= 35) {
+                        params.setDesiredHdrHeadroom(1.0f);
+                    }
+
+                    params.screenBrightness = finalSystemUpdated ? BRIGHTNESS_RELEASE_VALUE : finalBrightness;
+                    window.setAttributes(params);
+                } catch (Exception e) {
+                    // Silent
+                }
+            });
+        }
     }
 
     /**
@@ -1080,14 +1068,12 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
 
                 // If brightness is -1 (system default), get actual system brightness
                 if (brightness < 0) {
-                    if (contentResolver != null) {
-                        int systemBrightness = Settings.System.getInt(
-                                contentResolver,
-                                Settings.System.SCREEN_BRIGHTNESS,
-                                DEFAULT_BRIGHTNESS_VALUE);
+                    try {
+                        int systemBrightness = Settings.System.getInt(contentResolver,
+                                Settings.System.SCREEN_BRIGHTNESS);
                         brightness = systemBrightness / 255f;
-                    } else {
-                        brightness = DEFAULT_BRIGHTNESS_NORMALIZED;
+                    } catch (Exception e) {
+                        brightness = 0.5f; // Fallback
                     }
                 }
 
@@ -1100,22 +1086,7 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
     }
 
     /**
-     * Resets brightness to cached system default.
-     * 
-     * <p>
-     * <b>Custom ROM Compatibility (iQOO, MIUI, etc.):</b>
-     * </p>
-     * <ul>
-     * <li><b>Primary:</b> Uses cached brightness from
-     * {@link #cacheSystemBrightness()}</li>
-     * <li><b>Fallback 1:</b> Reads current system brightness</li>
-     * <li><b>Fallback 2:</b> Uses -1 (system default flag)</li>
-     * </ul>
-     * 
-     * <p>
-     * This multi-layer approach ensures reliable brightness restoration even
-     * on heavily customized Android skins.
-     * </p>
+     * Resets brightness to system default by releasing app control.
      * 
      * @param promise Promise resolving to true on success
      */
@@ -1129,41 +1100,12 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
 
         activity.runOnUiThread(() -> {
             try {
-                android.view.WindowManager.LayoutParams params = activity.getWindow().getAttributes();
+                android.view.Window window = activity.getWindow();
+                android.view.WindowManager.LayoutParams params = window.getAttributes();
+                params.screenBrightness = BRIGHTNESS_RELEASE_VALUE;
+                window.setAttributes(params);
 
-                // PRIMARY: Use cached system brightness
-                if (brightnessInitialized && initialSystemBrightness >= 0) {
-                    Log.i(TAG, "Resetting to cached brightness: " + initialSystemBrightness);
-                    params.screenBrightness = initialSystemBrightness;
-                } else {
-                    // FALLBACK 1: Read current system brightness
-                    if (contentResolver != null) {
-                        int systemBrightness = Settings.System.getInt(
-                                contentResolver,
-                                Settings.System.SCREEN_BRIGHTNESS,
-                                DEFAULT_BRIGHTNESS_VALUE);
-                        float normalizedBrightness = systemBrightness / 255f;
-
-                        // FALLBACK 2: Use -1 if invalid value
-                        if (normalizedBrightness <= 0) {
-                            Log.w(TAG, "System brightness invalid, using -1 fallback");
-                            params.screenBrightness = -1f;
-                        } else {
-                            Log.i(TAG, "Resetting to current system brightness: " + normalizedBrightness);
-                            params.screenBrightness = normalizedBrightness;
-                        }
-                    } else {
-                        Log.w(TAG, "No ContentResolver, using -1 fallback");
-                        params.screenBrightness = -1f;
-                    }
-                }
-
-                activity.getWindow().setAttributes(params);
-
-                // VERIFICATION (for stubborn ROMs like iQOO)
-                // Double-check after delay and retry if needed
-                mainHandler.postDelayed(() -> verifyBrightnessReset(activity), BRIGHTNESS_RESET_DELAY_MS);
-
+                Log.i(TAG, "Brightness control released to system");
                 promise.resolve(true);
             } catch (Exception e) {
                 Log.e(TAG, "Error resetting brightness", e);
@@ -1173,76 +1115,23 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
     }
 
     /**
-     * Verifies brightness was reset correctly and retries if needed.
-     * 
-     * <p>
-     * Some custom ROMs (iQOO, etc.) may ignore the first brightness change.
-     * This verification step catches and fixes that.
-     * </p>
-     * 
-     * @param activity The current activity
-     */
-    private void verifyBrightnessReset(android.app.Activity activity) {
-        if (activity == null || !brightnessInitialized || initialSystemBrightness < 0) {
-            return;
-        }
-
-        try {
-            android.view.WindowManager.LayoutParams params = activity.getWindow().getAttributes();
-            float currentBrightness = params.screenBrightness;
-            float delta = Math.abs(currentBrightness - initialSystemBrightness);
-
-            if (delta > BRIGHTNESS_CHANGE_THRESHOLD) {
-                Log.w(TAG, "Brightness reset verification failed (delta: " + delta + "), retrying...");
-                params.screenBrightness = initialSystemBrightness;
-                activity.getWindow().setAttributes(params);
-            } else {
-                Log.d(TAG, "Brightness reset verified successfully");
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Error in brightness verification", e);
-        }
-    }
-
-    /**
-     * Synchronous version of {@link #resetBrightness(Promise)}.
-     * 
-     * <p>
-     * Used for cleanup in lifecycle events where promises aren't needed.
-     * </p>
+     * Synchronous version of resetBrightness for lifecycle cleanup.
      */
     @ReactMethod
     public void resetBrightnessSync() {
         android.app.Activity activity = getCurrentActivity();
         if (activity == null) {
-            Log.w(TAG, "Cannot reset brightness: no activity");
             return;
         }
 
         activity.runOnUiThread(() -> {
             try {
-                android.view.WindowManager.LayoutParams params = activity.getWindow().getAttributes();
+                android.view.Window window = activity.getWindow();
+                android.view.WindowManager.LayoutParams params = window.getAttributes();
+                params.screenBrightness = BRIGHTNESS_RELEASE_VALUE;
+                window.setAttributes(params);
 
-                if (brightnessInitialized && initialSystemBrightness >= 0) {
-                    params.screenBrightness = initialSystemBrightness;
-                    Log.d(TAG, "Brightness reset (sync) to: " + initialSystemBrightness);
-                } else if (contentResolver != null) {
-                    int systemBrightness = Settings.System.getInt(
-                            contentResolver,
-                            Settings.System.SCREEN_BRIGHTNESS,
-                            DEFAULT_BRIGHTNESS_VALUE);
-                    float normalizedBrightness = systemBrightness / 255f;
-
-                    if (normalizedBrightness > 0) {
-                        params.screenBrightness = normalizedBrightness;
-                    } else {
-                        params.screenBrightness = -1f;
-                    }
-                } else {
-                    params.screenBrightness = -1f;
-                }
-
-                activity.getWindow().setAttributes(params);
+                Log.i(TAG, "Brightness control released (sync)");
             } catch (Exception e) {
                 Log.e(TAG, "Error in resetBrightnessSync", e);
             }

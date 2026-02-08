@@ -20,6 +20,8 @@ import { FileService } from '@/services/FileService';
 import { LANGUAGES } from '@/utils/languages';
 import HapticModule from '../native/HapticModule';
 import { Feather } from '@react-native-vector-icons/feather';
+import { useNavigation } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { useSharedValue, useAnimatedStyle, runOnJS } from 'react-native-reanimated';
 
 // Reanimated Text for smooth preview
@@ -119,6 +121,26 @@ const INTENSITY_PRESETS = [
 
 export default function SettingsScreen() {
     const theme = useTheme();
+    const navigation = useNavigation();
+    const insets = useSafeAreaInsets();
+
+    const renderHeader = () => (
+        <View style={[styles.header, { paddingTop: insets.top + 16 }]}>
+            <TouchableOpacity
+                style={[styles.backButton, { backgroundColor: theme.colors.surface }]}
+                onPress={() => navigation.goBack()}
+                activeOpacity={0.7}
+            >
+                <Feather name="arrow-left" size={20} color={theme.colors.text} />
+            </TouchableOpacity>
+            <View style={styles.headerInfo}>
+                <Text style={[styles.title, { color: theme.colors.text }]}>
+                    Settings
+                </Text>
+            </View>
+        </View>
+    );
+
     const {
         settings,
         toggleDarkMode,
@@ -129,6 +151,7 @@ export default function SettingsScreen() {
         setHapticIntensity,
         resetHapticSettings,
         setBrightnessMode,
+        setPipBrightnessMode,
         setSubtitleFontWeight,
         setSubtitleOutlineWidth,
         setSubtitleBackgroundColor,
@@ -263,525 +286,546 @@ export default function SettingsScreen() {
     }
 
     return (
-        <ScrollView
-            style={[styles.container, { backgroundColor: theme.colors.background }]}>
-            <View style={styles.section}>
-                <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
-                    Appearance
-                </Text>
-                <View style={[styles.item, { backgroundColor: theme.colors.card }]}>
-                    <View style={styles.itemContent}>
-                        <Text style={[styles.itemLabel, { color: theme.colors.text }]}>
-                            Dark Mode
-                        </Text>
-                        <Text style={[styles.itemDescription, { color: theme.colors.textSecondary }]}>
-                            Switch between light and dark theme
-                        </Text>
+        <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
+            {renderHeader()}
+            <ScrollView
+                style={[styles.container, { backgroundColor: theme.colors.background }]}
+                contentContainerStyle={{ paddingBottom: 40 }}
+            >
+                <View style={styles.section}>
+                    <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
+                        Appearance
+                    </Text>
+                    <View style={[styles.item, { backgroundColor: theme.colors.card }]}>
+                        <View style={styles.itemContent}>
+                            <Text style={[styles.itemLabel, { color: theme.colors.text }]}>
+                                Dark Mode
+                            </Text>
+                            <Text style={[styles.itemDescription, { color: theme.colors.textSecondary }]}>
+                                Switch between light and dark theme
+                            </Text>
+                        </View>
+                        <Switch value={settings.darkMode} onValueChange={toggleDarkMode} />
                     </View>
-                    <Switch value={settings.darkMode} onValueChange={toggleDarkMode} />
-                </View>
-            </View>
-
-
-
-            <View style={styles.section}>
-                <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
-                    Playback
-                </Text>
-
-                {/* Auto-Play Next */}
-                <View style={[styles.item, { backgroundColor: theme.colors.card }]}>
-                    <View style={styles.itemContent}>
-                        <Text style={[styles.itemLabel, { color: theme.colors.text }]}>
-                            Auto-Play Next
-                        </Text>
-                        <Text style={[styles.itemDescription, { color: theme.colors.textSecondary }]}>
-                            Automatically play the next video in the folder when the current one ends.
-                        </Text>
-                    </View>
-                    <Switch
-                        value={settings.autoPlayNext}
-                        onValueChange={setAutoPlayNext}
-                    />
                 </View>
 
-                {/* Default Audio Language */}
-                <View style={[styles.item, { backgroundColor: theme.colors.card, marginTop: 1, flexDirection: 'column', alignItems: 'flex-start' }]}>
-                    <View style={styles.itemContent}>
-                        <Text style={[styles.itemLabel, { color: theme.colors.text }]}>
-                            Preferred Audio Language
-                        </Text>
-                        <Text style={[styles.itemDescription, { color: theme.colors.textSecondary }]}>
-                            Select preferred language for auto-selection
-                        </Text>
+
+
+                <View style={styles.section}>
+                    <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
+                        Playback
+                    </Text>
+
+                    {/* Auto-Play Next */}
+                    <View style={[styles.item, { backgroundColor: theme.colors.card }]}>
+                        <View style={styles.itemContent}>
+                            <Text style={[styles.itemLabel, { color: theme.colors.text }]}>
+                                Auto-Play Next
+                            </Text>
+                            <Text style={[styles.itemDescription, { color: theme.colors.textSecondary }]}>
+                                Automatically play the next video in the folder when the current one ends.
+                            </Text>
+                        </View>
+                        <Switch
+                            value={settings.autoPlayNext}
+                            onValueChange={setAutoPlayNext}
+                        />
                     </View>
-                    <TouchableOpacity
-                        style={[styles.input, {
-                            borderColor: theme.colors.border,
-                            backgroundColor: theme.colors.background,
-                            flexDirection: 'row',
-                            justifyContent: 'space-between',
-                            alignItems: 'center'
-                        }]}
-                        onPress={() => setLanguageModalVisible(true)}
-                    >
-                        <Text style={{ color: settings.defaultAudioLanguage ? theme.colors.text : theme.colors.textSecondary }}>
-                            {settings.defaultAudioLanguage || 'Auto (Default)'}
-                        </Text>
-                        <Feather name="chevron-down" size={20} color={theme.colors.textSecondary} />
-                    </TouchableOpacity>
+
+                    {/* Default Audio Language */}
+                    <View style={[styles.item, { backgroundColor: theme.colors.card, marginTop: 1, flexDirection: 'column', alignItems: 'flex-start' }]}>
+                        <View style={styles.itemContent}>
+                            <Text style={[styles.itemLabel, { color: theme.colors.text }]}>
+                                Preferred Audio Language
+                            </Text>
+                            <Text style={[styles.itemDescription, { color: theme.colors.textSecondary }]}>
+                                Select preferred language for auto-selection
+                            </Text>
+                        </View>
+                        <TouchableOpacity
+                            style={[styles.input, {
+                                borderColor: theme.colors.border,
+                                backgroundColor: theme.colors.background,
+                                flexDirection: 'row',
+                                justifyContent: 'space-between',
+                                alignItems: 'center'
+                            }]}
+                            onPress={() => setLanguageModalVisible(true)}
+                        >
+                            <Text style={{ color: settings.defaultAudioLanguage ? theme.colors.text : theme.colors.textSecondary }}>
+                                {settings.defaultAudioLanguage || 'Auto (Default)'}
+                            </Text>
+                            <Feather name="chevron-down" size={20} color={theme.colors.textSecondary} />
+                        </TouchableOpacity>
+                    </View>
+
+                    {/* Brightness Mode */}
+                    <View style={[styles.item, { backgroundColor: theme.colors.card, marginTop: 1 }]}>
+                        <View style={styles.itemContent}>
+                            <Text style={[styles.itemLabel, { color: theme.colors.text }]}>
+                                Global Brightness
+                            </Text>
+                            <Text style={[styles.itemDescription, { color: theme.colors.textSecondary }]}>
+                                Use the same brightness level for all videos. When disabled, player remembers brightness for each video.
+                            </Text>
+                        </View>
+                        <Switch
+                            value={settings.brightnessMode === 'global'}
+                            onValueChange={(val) => setBrightnessMode(val ? 'global' : 'video')}
+                        />
+                    </View>
+
+                    {/* PiP Brightness Behavior */}
+                    <View style={[styles.item, { backgroundColor: theme.colors.card, marginTop: 1 }]}>
+                        <View style={styles.itemContent}>
+                            <Text style={[styles.itemLabel, { color: theme.colors.text }]}>
+                                Use Device Brightness in PiP
+                            </Text>
+                            <Text style={[styles.itemDescription, { color: theme.colors.textSecondary }]}>
+                                When enabled, the screen brightness will revert to the system setting when entering Picture-in-Picture mode.
+                            </Text>
+                        </View>
+                        <Switch
+                            value={settings.pipBrightnessMode === 'system'}
+                            onValueChange={(val) => setPipBrightnessMode(val ? 'system' : 'player')}
+                        />
+                    </View>
+
+                    {/* Show Seek Buttons */}
+                    <View style={[styles.item, { backgroundColor: theme.colors.card, marginTop: 1 }]}>
+                        <View style={styles.itemContent}>
+                            <Text style={[styles.itemLabel, { color: theme.colors.text }]}>
+                                Show Seek Buttons
+                            </Text>
+                            <Text style={[styles.itemDescription, { color: theme.colors.textSecondary }]}>
+                                Show ±{settings.seekDuration}s buttons in player controls
+                            </Text>
+                        </View>
+                        <Switch
+                            value={settings.showSeekButtons}
+                            onValueChange={setShowSeekButtons}
+                        />
+                    </View>
+
+                    {/* Seek Duration Slider */}
+                    {settings.showSeekButtons && (
+                        <View style={[styles.sliderCard, { backgroundColor: theme.colors.card, marginTop: 1 }]}>
+                            <View style={styles.sliderHeader}>
+                                <Text style={[styles.itemLabel, { color: theme.colors.text }]}>
+                                    Seek Duration
+                                </Text>
+                                <Text style={[styles.intensityValue, { color: theme.colors.primary }]}>
+                                    {settings.seekDuration}s
+                                </Text>
+                            </View>
+                            <Slider
+                                style={styles.slider}
+                                minimumValue={5}
+                                maximumValue={60}
+                                step={5}
+                                value={settings.seekDuration}
+                                onValueChange={setSeekDuration}
+                                minimumTrackTintColor={theme.colors.primary}
+                                maximumTrackTintColor={theme.colors.border}
+                                thumbTintColor={theme.colors.primary}
+                            />
+                            <View style={styles.sliderLabels}>
+                                <Text style={[styles.sliderLabel, { color: theme.colors.textSecondary }]}>
+                                    5s
+                                </Text>
+                                <Text style={[styles.sliderLabel, { color: theme.colors.textSecondary }]}>
+                                    60s
+                                </Text>
+                            </View>
+                        </View>
+                    )}
                 </View>
 
-                {/* Brightness Mode */}
-                <View style={[styles.item, { backgroundColor: theme.colors.card, marginTop: 1 }]}>
-                    <View style={styles.itemContent}>
-                        <Text style={[styles.itemLabel, { color: theme.colors.text }]}>
-                            Global Brightness
-                        </Text>
-                        <Text style={[styles.itemDescription, { color: theme.colors.textSecondary }]}>
-                            Use the same brightness level for all videos. When disabled, player remembers brightness for each video.
-                        </Text>
-                    </View>
-                    <Switch
-                        value={settings.brightnessMode === 'global'}
-                        onValueChange={(val) => setBrightnessMode(val ? 'global' : 'video')}
-                    />
-                </View>
+                <View style={styles.section}>
+                    <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
+                        Haptic Feedback
+                    </Text>
 
-                {/* Show Seek Buttons */}
-                <View style={[styles.item, { backgroundColor: theme.colors.card, marginTop: 1 }]}>
-                    <View style={styles.itemContent}>
-                        <Text style={[styles.itemLabel, { color: theme.colors.text }]}>
-                            Show Seek Buttons
-                        </Text>
-                        <Text style={[styles.itemDescription, { color: theme.colors.textSecondary }]}>
-                            Show ±{settings.seekDuration}s buttons in player controls
-                        </Text>
+                    {/* Enable/Disable Toggle */}
+                    <View style={[styles.item, { backgroundColor: theme.colors.card }]}>
+                        <View style={styles.itemContent}>
+                            <Text style={[styles.itemLabel, { color: theme.colors.text }]}>
+                                Enable Haptics
+                            </Text>
+                            <Text style={[styles.itemDescription, { color: theme.colors.textSecondary }]}>
+                                Vibrate phone when effects trigger
+                            </Text>
+                        </View>
+                        <Switch value={hapticSettings.enabled} onValueChange={toggleHaptics} />
                     </View>
-                    <Switch
-                        value={settings.showSeekButtons}
-                        onValueChange={setShowSeekButtons}
-                    />
-                </View>
 
-                {/* Seek Duration Slider */}
-                {settings.showSeekButtons && (
-                    <View style={[styles.sliderCard, { backgroundColor: theme.colors.card, marginTop: 1 }]}>
+                    {/* Quick Presets */}
+                    <View style={[styles.presetsCard, { backgroundColor: theme.colors.card }]}>
+                        <Text style={[styles.presetsTitle, { color: theme.colors.text }]}>
+                            Quick Presets
+                        </Text>
+                        <View style={styles.presetsRow}>
+                            {INTENSITY_PRESETS.map((preset) => (
+                                <TouchableOpacity
+                                    key={preset.value}
+                                    style={[
+                                        styles.presetButton,
+                                        {
+                                            backgroundColor: Math.abs(hapticSettings.intensity - preset.value) < 20
+                                                ? theme.colors.cardElevated
+                                                : theme.colors.card,
+                                            borderColor: theme.colors.border,
+                                            elevation: 4
+                                        },
+                                    ]}
+                                    onPress={() => handlePresetSelect(preset.value)}
+                                    activeOpacity={0.7}
+                                    disabled={!hapticSettings.enabled}
+                                >
+                                    <Feather
+                                        name={preset.icon as any}
+                                        size={18}
+                                        color={theme.colors.text}
+                                    />
+                                    <Text style={[
+                                        styles.presetLabel,
+                                        { color: theme.colors.text }
+                                    ]}>
+                                        {preset.label}
+                                    </Text>
+                                    <Text style={[
+                                        styles.presetDescription,
+                                        { color: theme.colors.textSecondary }
+                                    ]}>
+                                        {preset.description}
+                                    </Text>
+                                </TouchableOpacity>
+                            ))}
+                        </View>
+                    </View>
+
+                    {/* Intensity Slider */}
+                    <View style={[styles.sliderCard, { backgroundColor: theme.colors.card }]}>
                         <View style={styles.sliderHeader}>
                             <Text style={[styles.itemLabel, { color: theme.colors.text }]}>
-                                Seek Duration
+                                Fine-tune Intensity
                             </Text>
                             <Text style={[styles.intensityValue, { color: theme.colors.primary }]}>
-                                {settings.seekDuration}s
+                                {Math.round(hapticSettings.intensity)} ({getIntensityLabel(hapticSettings.intensity)})
                             </Text>
                         </View>
                         <Slider
                             style={styles.slider}
-                            minimumValue={5}
-                            maximumValue={60}
-                            step={5}
-                            value={settings.seekDuration}
-                            onValueChange={setSeekDuration}
+                            minimumValue={1}
+                            maximumValue={255}
+                            step={1}
+                            value={hapticSettings.intensity}
+                            onValueChange={handleIntensityChange}
                             minimumTrackTintColor={theme.colors.primary}
                             maximumTrackTintColor={theme.colors.border}
                             thumbTintColor={theme.colors.primary}
+                            disabled={!hapticSettings.enabled}
                         />
                         <View style={styles.sliderLabels}>
                             <Text style={[styles.sliderLabel, { color: theme.colors.textSecondary }]}>
-                                5s
+                                Subtle
                             </Text>
                             <Text style={[styles.sliderLabel, { color: theme.colors.textSecondary }]}>
-                                60s
+                                Intense
                             </Text>
                         </View>
                     </View>
-                )}
-            </View>
 
-            <View style={styles.section}>
-                <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
-                    Haptic Feedback
-                </Text>
-
-                {/* Enable/Disable Toggle */}
-                <View style={[styles.item, { backgroundColor: theme.colors.card }]}>
-                    <View style={styles.itemContent}>
-                        <Text style={[styles.itemLabel, { color: theme.colors.text }]}>
-                            Enable Haptics
-                        </Text>
-                        <Text style={[styles.itemDescription, { color: theme.colors.textSecondary }]}>
-                            Vibrate phone when effects trigger
+                    {/* Tip */}
+                    <View style={[styles.tipCard, { backgroundColor: theme.colors.card }]}>
+                        <Feather name="info" size={16} color={theme.colors.primary} />
+                        <Text style={[styles.tipText, { color: theme.colors.textSecondary }]}>
+                            Use Light for quiet environments, Strong for outdoors or noisy places.
+                            Adjust during playback via QuickSettings.
                         </Text>
                     </View>
-                    <Switch value={hapticSettings.enabled} onValueChange={toggleHaptics} />
+
+                    {/* Reset Button */}
+                    <TouchableOpacity
+                        style={[styles.resetButton, { backgroundColor: theme.colors.card }]}
+                        onPress={handleResetHaptics}
+                        activeOpacity={0.7}>
+                        <Text style={[styles.resetButtonText, { color: theme.colors.textSecondary }]}>
+                            Reset to Default
+                        </Text>
+                    </TouchableOpacity>
                 </View>
 
-                {/* Quick Presets */}
-                <View style={[styles.presetsCard, { backgroundColor: theme.colors.card }]}>
-                    <Text style={[styles.presetsTitle, { color: theme.colors.text }]}>
-                        Quick Presets
+                <View style={styles.section}>
+                    <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
+                        Subtitles
                     </Text>
-                    <View style={styles.presetsRow}>
-                        {INTENSITY_PRESETS.map((preset) => (
-                            <TouchableOpacity
-                                key={preset.value}
-                                style={[
-                                    styles.presetButton,
-                                    {
-                                        backgroundColor: Math.abs(hapticSettings.intensity - preset.value) < 20
-                                            ? theme.colors.cardElevated
-                                            : theme.colors.card,
-                                        borderColor: theme.colors.border,
-                                        elevation: 4
-                                    },
-                                ]}
-                                onPress={() => handlePresetSelect(preset.value)}
-                                activeOpacity={0.7}
-                                disabled={!hapticSettings.enabled}
-                            >
-                                <Feather
-                                    name={preset.icon as any}
-                                    size={18}
-                                    color={theme.colors.text}
-                                />
-                                <Text style={[
-                                    styles.presetLabel,
-                                    { color: theme.colors.text }
-                                ]}>
-                                    {preset.label}
-                                </Text>
-                                <Text style={[
-                                    styles.presetDescription,
-                                    { color: theme.colors.textSecondary }
-                                ]}>
-                                    {preset.description}
-                                </Text>
-                            </TouchableOpacity>
-                        ))}
-                    </View>
-                </View>
 
-                {/* Intensity Slider */}
-                <View style={[styles.sliderCard, { backgroundColor: theme.colors.card }]}>
-                    <View style={styles.sliderHeader}>
-                        <Text style={[styles.itemLabel, { color: theme.colors.text }]}>
-                            Fine-tune Intensity
-                        </Text>
-                        <Text style={[styles.intensityValue, { color: theme.colors.primary }]}>
-                            {Math.round(hapticSettings.intensity)} ({getIntensityLabel(hapticSettings.intensity)})
+
+                    {/* Subtitle Appearance */}
+                    <View style={[styles.item, { backgroundColor: theme.colors.card }]}>
+                        <Text style={[styles.itemLabel, { color: theme.colors.text }]}>Appearance</Text>
+                    </View>
+
+                    {/* VISUALIZER PREVIEW (Reanimated) */}
+                    <SubtitlePreviewSection fontSizeSV={fontSizeSV} settings={settings} theme={theme} />
+
+                    {/* Pinch-to-zoom tip */}
+                    <View style={[styles.tipCard, { backgroundColor: theme.colors.card }]}>
+                        <Feather name="info" size={16} color={theme.colors.textSecondary} />
+                        <Text style={[styles.tipText, { color: theme.colors.textSecondary }]}>
+                            Tip: You can pinch-to-zoom subtitles in the player to adjust size on-the-fly, or drag to reposition.
                         </Text>
                     </View>
-                    <Slider
-                        style={styles.slider}
-                        minimumValue={1}
-                        maximumValue={255}
-                        step={1}
-                        value={hapticSettings.intensity}
-                        onValueChange={handleIntensityChange}
-                        minimumTrackTintColor={theme.colors.primary}
-                        maximumTrackTintColor={theme.colors.border}
-                        thumbTintColor={theme.colors.primary}
-                        disabled={!hapticSettings.enabled}
+
+                    {/* Reset All Button */}
+                    <TouchableOpacity
+                        style={[styles.resetButton, { backgroundColor: theme.colors.card, marginBottom: 16 }]}
+                        onPress={resetSubtitleSettings}
+                    >
+                        <Feather name="refresh-cw" size={14} color={theme.colors.textSecondary} style={{ marginRight: 6 }} />
+                        <Text style={[styles.resetButtonText, { color: theme.colors.textSecondary }]}>Reset to Defaults</Text>
+                    </TouchableOpacity>
+
+                    {/* Font Size Slider (Isolated) */}
+                    <FontSizeSliderControl
+                        fontSizeSV={fontSizeSV}
+                        onFinalChange={setSubtitleFontSize}
+                        theme={theme}
                     />
-                    <View style={styles.sliderLabels}>
-                        <Text style={[styles.sliderLabel, { color: theme.colors.textSecondary }]}>
-                            Subtle
-                        </Text>
-                        <Text style={[styles.sliderLabel, { color: theme.colors.textSecondary }]}>
-                            Intense
-                        </Text>
+
+                    {/* Font Weight Slider */}
+                    <View style={[styles.sliderCard, { backgroundColor: theme.colors.card }]}>
+                        <View style={styles.sliderHeader}>
+                            <Text style={[styles.itemLabel, { color: theme.colors.text }]}>Weight</Text>
+                            <Text style={{ color: theme.colors.textSecondary }}>{Math.round(settings.subtitleFontWeight)}</Text>
+                        </View>
+                        <Slider
+                            style={styles.slider}
+                            minimumValue={300}
+                            maximumValue={900}
+                            step={100}
+                            value={settings.subtitleFontWeight}
+                            onValueChange={setSubtitleFontWeight}
+                            minimumTrackTintColor={theme.colors.primary}
+                            maximumTrackTintColor={theme.colors.border}
+                            thumbTintColor={theme.colors.primary}
+                        />
                     </View>
-                </View>
 
-                {/* Tip */}
-                <View style={[styles.tipCard, { backgroundColor: theme.colors.card }]}>
-                    <Feather name="info" size={16} color={theme.colors.primary} />
-                    <Text style={[styles.tipText, { color: theme.colors.textSecondary }]}>
-                        Use Light for quiet environments, Strong for outdoors or noisy places.
-                        Adjust during playback via QuickSettings.
-                    </Text>
-                </View>
-
-                {/* Reset Button */}
-                <TouchableOpacity
-                    style={[styles.resetButton, { backgroundColor: theme.colors.card }]}
-                    onPress={handleResetHaptics}
-                    activeOpacity={0.7}>
-                    <Text style={[styles.resetButtonText, { color: theme.colors.textSecondary }]}>
-                        Reset to Default
-                    </Text>
-                </TouchableOpacity>
-            </View>
-
-            <View style={styles.section}>
-                <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
-                    Subtitles
-                </Text>
-
-
-                {/* Subtitle Appearance */}
-                <View style={[styles.item, { backgroundColor: theme.colors.card }]}>
-                    <Text style={[styles.itemLabel, { color: theme.colors.text }]}>Appearance</Text>
-                </View>
-
-                {/* VISUALIZER PREVIEW (Reanimated) */}
-                <SubtitlePreviewSection fontSizeSV={fontSizeSV} settings={settings} theme={theme} />
-
-                {/* Pinch-to-zoom tip */}
-                <View style={[styles.tipCard, { backgroundColor: theme.colors.card }]}>
-                    <Feather name="info" size={16} color={theme.colors.textSecondary} />
-                    <Text style={[styles.tipText, { color: theme.colors.textSecondary }]}>
-                        Tip: You can pinch-to-zoom subtitles in the player to adjust size on-the-fly, or drag to reposition.
-                    </Text>
-                </View>
-
-                {/* Reset All Button */}
-                <TouchableOpacity
-                    style={[styles.resetButton, { backgroundColor: theme.colors.card, marginBottom: 16 }]}
-                    onPress={resetSubtitleSettings}
-                >
-                    <Feather name="refresh-cw" size={14} color={theme.colors.textSecondary} style={{ marginRight: 6 }} />
-                    <Text style={[styles.resetButtonText, { color: theme.colors.textSecondary }]}>Reset to Defaults</Text>
-                </TouchableOpacity>
-
-                {/* Font Size Slider (Isolated) */}
-                <FontSizeSliderControl
-                    fontSizeSV={fontSizeSV}
-                    onFinalChange={setSubtitleFontSize}
-                    theme={theme}
-                />
-
-                {/* Font Weight Slider */}
-                <View style={[styles.sliderCard, { backgroundColor: theme.colors.card }]}>
-                    <View style={styles.sliderHeader}>
-                        <Text style={[styles.itemLabel, { color: theme.colors.text }]}>Weight</Text>
-                        <Text style={{ color: theme.colors.textSecondary }}>{Math.round(settings.subtitleFontWeight)}</Text>
-                    </View>
-                    <Slider
-                        style={styles.slider}
-                        minimumValue={300}
-                        maximumValue={900}
-                        step={100}
-                        value={settings.subtitleFontWeight}
-                        onValueChange={setSubtitleFontWeight}
-                        minimumTrackTintColor={theme.colors.primary}
-                        maximumTrackTintColor={theme.colors.border}
-                        thumbTintColor={theme.colors.primary}
-                    />
-                </View>
-
-                {/* Font Color */}
-                <View style={[styles.controlRow, { borderColor: theme.colors.border }]}>
-                    <Text style={[styles.controlLabel, { color: theme.colors.text }]}>Color</Text>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.colorScroll}>
-                        {SUBTITLE_COLORS?.map(color => (
-                            <TouchableOpacity
-                                key={color.value}
-                                style={[
-                                    styles.colorSwatch,
-                                    { backgroundColor: color.value },
-                                    settings.subtitleColor === color.value && { borderWidth: 2, borderColor: theme.colors.primary }
-                                ]}
-                                onPress={() => setSubtitleColor(color.value)}
-                            />
-                        ))}
-                    </ScrollView>
-                </View>
-
-                {/* Background Style */}
-                <View style={[styles.controlRow, { borderColor: theme.colors.border }]}>
-                    <Text style={[styles.controlLabel, { color: theme.colors.text }]}>Style</Text>
-                    <View style={styles.optionsRow}>
-                        {['none', 'outline', 'box'].map(opt => {
-                            const isSelected = opt === 'box'
-                                ? settings.subtitleBackgroundColor !== 'transparent' && settings.subtitleEdgeStyle === 'none'
-                                : (opt === 'none' ? settings.subtitleEdgeStyle === 'none' && settings.subtitleBackgroundColor === 'transparent'
-                                    : settings.subtitleEdgeStyle === 'outline');
-
-                            return (
+                    {/* Font Color */}
+                    <View style={[styles.controlRow, { borderColor: theme.colors.border }]}>
+                        <Text style={[styles.controlLabel, { color: theme.colors.text }]}>Color</Text>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.colorScroll}>
+                            {SUBTITLE_COLORS?.map(color => (
                                 <TouchableOpacity
-                                    key={opt}
+                                    key={color.value}
                                     style={[
-                                        styles.optionButton,
-                                        isSelected && { backgroundColor: theme.colors.primary }
+                                        styles.colorSwatch,
+                                        { backgroundColor: color.value },
+                                        settings.subtitleColor === color.value && { borderWidth: 2, borderColor: theme.colors.primary }
                                     ]}
-                                    onPress={() => {
-                                        if (opt === 'none') {
-                                            setSubtitleBackgroundColor('transparent');
-                                            setSubtitleEdgeStyle('none');
-                                        } else if (opt === 'outline') {
-                                            setSubtitleBackgroundColor('transparent');
-                                            setSubtitleEdgeStyle('outline');
-                                        } else {
-                                            setSubtitleBackgroundColor('#000000'); // Default black box
-                                            setSubtitleEdgeStyle('none');
-                                        }
-                                    }}
-                                >
-                                    <Text style={[styles.optionButtonText, { color: isSelected ? '#FFF' : theme.colors.text }]}>
-                                        {opt.charAt(0).toUpperCase() + opt.slice(1)}
-                                    </Text>
-                                </TouchableOpacity>
-                            );
-                        })}
+                                    onPress={() => setSubtitleColor(color.value)}
+                                />
+                            ))}
+                        </ScrollView>
                     </View>
-                </View>
 
-                {/* Outline Width Slider (Only if Outline style) */}
-                {settings.subtitleEdgeStyle === 'outline' && (
-                    <View style={[styles.sliderCard, { backgroundColor: theme.colors.card }]}>
-                        <View style={styles.sliderHeader}>
-                            <Text style={[styles.itemLabel, { color: theme.colors.text }]}>Outline Width</Text>
-                            <Text style={{ color: theme.colors.textSecondary }}>{settings.subtitleOutlineWidth.toFixed(1)}</Text>
-                        </View>
-                        <Slider
-                            style={styles.slider}
-                            minimumValue={0.5}
-                            maximumValue={6}
-                            value={settings.subtitleOutlineWidth}
-                            onValueChange={setSubtitleOutlineWidth}
-                            minimumTrackTintColor={theme.colors.primary}
-                            maximumTrackTintColor={theme.colors.border}
-                            thumbTintColor={theme.colors.primary}
-                        />
-                    </View>
-                )}
-
-                {/* Background Opacity (Only if Box) */}
-                {settings.subtitleBackgroundColor !== 'transparent' && (
-                    <View style={[styles.sliderCard, { backgroundColor: theme.colors.card }]}>
-                        <View style={styles.sliderHeader}>
-                            <Text style={[styles.itemLabel, { color: theme.colors.text }]}>Opacity</Text>
-                            <Text style={{ color: theme.colors.textSecondary }}>{Math.round(settings.subtitleBackgroundOpacity * 100)}%</Text>
-                        </View>
-                        <Slider
-                            style={styles.slider}
-                            minimumValue={0}
-                            maximumValue={1}
-                            value={settings.subtitleBackgroundOpacity}
-                            onValueChange={setSubtitleBackgroundOpacity}
-                            minimumTrackTintColor={theme.colors.primary}
-                            maximumTrackTintColor={theme.colors.border}
-                            thumbTintColor={theme.colors.primary}
-                        />
-                    </View>
-                )}
-            </View>
-
-            <View style={styles.section}>
-                <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
-                    Storage
-                </Text>
-                <TouchableOpacity
-                    style={[styles.button, { backgroundColor: theme.colors.error }]}
-                    onPress={handleClearCache}>
-                    <Text style={styles.buttonText}>Clear Subtitle Cache</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                    style={[styles.button, { backgroundColor: theme.colors.error, marginTop: 12 }]}
-                    onPress={handleClearHistory}>
-                    <Text style={styles.buttonText}>Clear Watch History</Text>
-                </TouchableOpacity>
-            </View>
-
-            {/* Language Selection Modal */}
-            <Modal
-                visible={languageModalVisible}
-                transparent={true}
-                animationType="slide"
-                navigationBarTranslucent
-                statusBarTranslucent
-                onRequestClose={() => setLanguageModalVisible(false)}
-            >
-                <TouchableOpacity
-                    style={styles.modalOverlay}
-                    activeOpacity={1}
-                    onPress={() => setLanguageModalVisible(false)}
-                >
-                    <View style={[styles.modalContent, { backgroundColor: theme.colors.card }]}>
-                        {/* Handle Bar */}
-                        <View style={{ alignItems: 'center', marginBottom: 16 }}>
-                            <View style={{ width: 40, height: 4, borderRadius: 2, backgroundColor: theme.colors.border }} />
-                        </View>
-
-                        <Text style={[styles.modalTitle, { color: theme.colors.text }]}>Select Audio Language</Text>
-
-                        {/* Search Bar - Sleek */}
-                        <View style={[styles.searchContainer, { backgroundColor: theme.colors.background, borderColor: theme.colors.border }]}>
-                            <Feather name="search" size={20} color={theme.colors.textSecondary} style={{ marginRight: 10 }} />
-                            <TextInput
-                                style={[styles.searchInput, { color: theme.colors.text }]}
-                                placeholder="Search language..."
-                                placeholderTextColor={theme.colors.textSecondary}
-                                value={searchQuery}
-                                onChangeText={setSearchQuery}
-                                autoFocus={false}
-                            />
-                            {searchQuery.length > 0 && (
-                                <TouchableOpacity onPress={() => setSearchQuery('')}>
-                                    <Feather name="x-circle" size={18} color={theme.colors.textSecondary} />
-                                </TouchableOpacity>
-                            )}
-                        </View>
-
-                        <FlatList
-                            data={filteredLanguages}
-                            keyExtractor={(item) => item.code}
-                            contentContainerStyle={{ paddingBottom: 20 }}
-                            renderItem={({ item }) => {
-                                const isSelected = item.code === 'auto'
-                                    ? settings.defaultAudioLanguage === null
-                                    : settings.defaultAudioLanguage === item.name;
+                    {/* Background Style */}
+                    <View style={[styles.controlRow, { borderColor: theme.colors.border }]}>
+                        <Text style={[styles.controlLabel, { color: theme.colors.text }]}>Style</Text>
+                        <View style={styles.optionsRow}>
+                            {['none', 'outline', 'box'].map(opt => {
+                                const isSelected = opt === 'box'
+                                    ? settings.subtitleBackgroundColor !== 'transparent' && settings.subtitleEdgeStyle === 'none'
+                                    : (opt === 'none' ? settings.subtitleEdgeStyle === 'none' && settings.subtitleBackgroundColor === 'transparent'
+                                        : settings.subtitleEdgeStyle === 'outline');
 
                                 return (
                                     <TouchableOpacity
+                                        key={opt}
                                         style={[
-                                            styles.languageOption,
-                                            { borderBottomColor: theme.colors.border }
+                                            styles.optionButton,
+                                            isSelected && { backgroundColor: theme.colors.primary }
                                         ]}
                                         onPress={() => {
-                                            setDefaultAudioLanguage(item.code === 'auto' ? null : item.name);
-                                            setLanguageModalVisible(false);
-                                            setSearchQuery(''); // Reset search
+                                            if (opt === 'none') {
+                                                setSubtitleBackgroundColor('transparent');
+                                                setSubtitleEdgeStyle('none');
+                                            } else if (opt === 'outline') {
+                                                setSubtitleBackgroundColor('transparent');
+                                                setSubtitleEdgeStyle('outline');
+                                            } else {
+                                                setSubtitleBackgroundColor('#000000'); // Default black box
+                                                setSubtitleEdgeStyle('none');
+                                            }
                                         }}
                                     >
-                                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                            <View style={[
-                                                styles.radioCircle,
-                                                { borderColor: isSelected ? theme.colors.primary : theme.colors.textSecondary },
-                                            ]}>
-                                                {isSelected && <View style={[styles.radioDot, { backgroundColor: theme.colors.primary }]} />}
-                                            </View>
-                                            <View style={{ marginLeft: 16 }}>
-                                                <Text style={[
-                                                    styles.languageText,
-                                                    { color: theme.colors.text },
-                                                    isSelected && { fontWeight: 'bold' }
-                                                ]}>
-                                                    {item.name}
-                                                </Text>
-                                                {item.nativeName && item.code !== 'auto' && (
-                                                    <Text style={{ fontSize: 13, color: theme.colors.textSecondary, marginTop: 2 }}>
-                                                        {item.nativeName}
-                                                    </Text>
-                                                )}
-                                            </View>
-                                        </View>
-                                        {item.code === 'auto' && (
-                                            <View style={{ paddingHorizontal: 8, paddingVertical: 4, backgroundColor: theme.colors.primary + '20', borderRadius: 4 }}>
-                                                <Text style={{ fontSize: 10, color: theme.colors.primary, fontWeight: 'bold' }}>DEFAULT</Text>
-                                            </View>
-                                        )}
+                                        <Text style={[styles.optionButtonText, { color: isSelected ? '#FFF' : theme.colors.text }]}>
+                                            {opt.charAt(0).toUpperCase() + opt.slice(1)}
+                                        </Text>
                                     </TouchableOpacity>
                                 );
-                            }}
-                        />
+                            })}
+                        </View>
                     </View>
-                </TouchableOpacity>
-            </Modal>
 
-        </ScrollView >
+                    {/* Outline Width Slider (Only if Outline style) */}
+                    {settings.subtitleEdgeStyle === 'outline' && (
+                        <View style={[styles.sliderCard, { backgroundColor: theme.colors.card }]}>
+                            <View style={styles.sliderHeader}>
+                                <Text style={[styles.itemLabel, { color: theme.colors.text }]}>Outline Width</Text>
+                                <Text style={{ color: theme.colors.textSecondary }}>{settings.subtitleOutlineWidth.toFixed(1)}</Text>
+                            </View>
+                            <Slider
+                                style={styles.slider}
+                                minimumValue={0.5}
+                                maximumValue={6}
+                                value={settings.subtitleOutlineWidth}
+                                onValueChange={setSubtitleOutlineWidth}
+                                minimumTrackTintColor={theme.colors.primary}
+                                maximumTrackTintColor={theme.colors.border}
+                                thumbTintColor={theme.colors.primary}
+                            />
+                        </View>
+                    )}
+
+                    {/* Background Opacity (Only if Box) */}
+                    {settings.subtitleBackgroundColor !== 'transparent' && (
+                        <View style={[styles.sliderCard, { backgroundColor: theme.colors.card }]}>
+                            <View style={styles.sliderHeader}>
+                                <Text style={[styles.itemLabel, { color: theme.colors.text }]}>Opacity</Text>
+                                <Text style={{ color: theme.colors.textSecondary }}>{Math.round(settings.subtitleBackgroundOpacity * 100)}%</Text>
+                            </View>
+                            <Slider
+                                style={styles.slider}
+                                minimumValue={0}
+                                maximumValue={1}
+                                value={settings.subtitleBackgroundOpacity}
+                                onValueChange={setSubtitleBackgroundOpacity}
+                                minimumTrackTintColor={theme.colors.primary}
+                                maximumTrackTintColor={theme.colors.border}
+                                thumbTintColor={theme.colors.primary}
+                            />
+                        </View>
+                    )}
+                </View>
+
+                <View style={styles.section}>
+                    <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
+                        Storage
+                    </Text>
+                    <TouchableOpacity
+                        style={[styles.button, { backgroundColor: theme.colors.error }]}
+                        onPress={handleClearCache}>
+                        <Text style={styles.buttonText}>Clear Subtitle Cache</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                        style={[styles.button, { backgroundColor: theme.colors.error, marginTop: 12 }]}
+                        onPress={handleClearHistory}>
+                        <Text style={styles.buttonText}>Clear Watch History</Text>
+                    </TouchableOpacity>
+                </View>
+
+                {/* Language Selection Modal */}
+                <Modal
+                    visible={languageModalVisible}
+                    transparent={true}
+                    animationType="slide"
+                    navigationBarTranslucent
+                    statusBarTranslucent
+                    onRequestClose={() => setLanguageModalVisible(false)}
+                >
+                    <TouchableOpacity
+                        style={styles.modalOverlay}
+                        activeOpacity={1}
+                        onPress={() => setLanguageModalVisible(false)}
+                    >
+                        <View style={[styles.modalContent, { backgroundColor: theme.colors.card }]}>
+                            {/* Handle Bar */}
+                            <View style={{ alignItems: 'center', marginBottom: 16 }}>
+                                <View style={{ width: 40, height: 4, borderRadius: 2, backgroundColor: theme.colors.border }} />
+                            </View>
+
+                            <Text style={[styles.modalTitle, { color: theme.colors.text }]}>Select Audio Language</Text>
+
+                            {/* Search Bar - Sleek */}
+                            <View style={[styles.searchContainer, { backgroundColor: theme.colors.background, borderColor: theme.colors.border }]}>
+                                <Feather name="search" size={20} color={theme.colors.textSecondary} style={{ marginRight: 10 }} />
+                                <TextInput
+                                    style={[styles.searchInput, { color: theme.colors.text }]}
+                                    placeholder="Search language..."
+                                    placeholderTextColor={theme.colors.textSecondary}
+                                    value={searchQuery}
+                                    onChangeText={setSearchQuery}
+                                    autoFocus={false}
+                                />
+                                {searchQuery.length > 0 && (
+                                    <TouchableOpacity onPress={() => setSearchQuery('')}>
+                                        <Feather name="x-circle" size={18} color={theme.colors.textSecondary} />
+                                    </TouchableOpacity>
+                                )}
+                            </View>
+
+                            <FlatList
+                                data={filteredLanguages}
+                                keyExtractor={(item) => item.code}
+                                contentContainerStyle={{ paddingBottom: 20 }}
+                                renderItem={({ item }) => {
+                                    const isSelected = item.code === 'auto'
+                                        ? settings.defaultAudioLanguage === null
+                                        : settings.defaultAudioLanguage === item.name;
+
+                                    return (
+                                        <TouchableOpacity
+                                            style={[
+                                                styles.languageOption,
+                                                { borderBottomColor: theme.colors.border }
+                                            ]}
+                                            onPress={() => {
+                                                setDefaultAudioLanguage(item.code === 'auto' ? null : item.name);
+                                                setLanguageModalVisible(false);
+                                                setSearchQuery(''); // Reset search
+                                            }}
+                                        >
+                                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                                <View style={[
+                                                    styles.radioCircle,
+                                                    { borderColor: isSelected ? theme.colors.primary : theme.colors.textSecondary },
+                                                ]}>
+                                                    {isSelected && <View style={[styles.radioDot, { backgroundColor: theme.colors.primary }]} />}
+                                                </View>
+                                                <View style={{ marginLeft: 16 }}>
+                                                    <Text style={[
+                                                        styles.languageText,
+                                                        { color: theme.colors.text },
+                                                        isSelected && { fontWeight: 'bold' }
+                                                    ]}>
+                                                        {item.name}
+                                                    </Text>
+                                                    {item.nativeName && item.code !== 'auto' && (
+                                                        <Text style={{ fontSize: 13, color: theme.colors.textSecondary, marginTop: 2 }}>
+                                                            {item.nativeName}
+                                                        </Text>
+                                                    )}
+                                                </View>
+                                            </View>
+                                            {item.code === 'auto' && (
+                                                <View style={{ paddingHorizontal: 8, paddingVertical: 4, backgroundColor: theme.colors.primary + '20', borderRadius: 4 }}>
+                                                    <Text style={{ fontSize: 10, color: theme.colors.primary, fontWeight: 'bold' }}>DEFAULT</Text>
+                                                </View>
+                                            )}
+                                        </TouchableOpacity>
+                                    );
+                                }}
+                            />
+                        </View>
+                    </TouchableOpacity>
+                </Modal>
+
+            </ScrollView >
+        </View>
     );
 }
 
@@ -804,6 +848,11 @@ const styles = StyleSheet.create({
         padding: 16,
         borderRadius: 8,
         marginBottom: 8,
+        elevation: 1,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.05,
+        shadowRadius: 2,
     },
     itemContent: {
         flex: 1,
@@ -1047,5 +1096,33 @@ const styles = StyleSheet.create({
         color: '#FFFFFF',
         fontSize: 16,
         fontWeight: '600',
+    },
+    // New Header Styles
+    header: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 20,
+        paddingBottom: 16,
+        gap: 16,
+    },
+    backButton: {
+        width: 42,
+        height: 42,
+        borderRadius: 14,
+        justifyContent: 'center',
+        alignItems: 'center',
+        elevation: 1,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.1,
+        shadowRadius: 2,
+    },
+    headerInfo: {
+        flex: 1,
+    },
+    title: {
+        fontSize: 24,
+        fontWeight: 'bold',
+        letterSpacing: -0.5,
     },
 });

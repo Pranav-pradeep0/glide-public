@@ -65,6 +65,7 @@ export interface AppSettings {
 
     hasCompletedOnboarding: boolean;
     brightnessMode: 'global' | 'video';
+    pipBrightnessMode: 'system' | 'player'; // New setting for PiP brightness behavior
     globalBrightness: number;
 
     // Playback settings

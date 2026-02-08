@@ -28,6 +28,7 @@ interface AppStore {
 
     // Brightness settings
     setBrightnessMode: (mode: 'global' | 'video') => void;
+    setPipBrightnessMode: (mode: 'system' | 'player') => void;
     setGlobalBrightness: (brightness: number) => void;
 
     // Playback settings
@@ -54,6 +55,7 @@ export const useAppStore = create<AppStore>((set) => ({
 
         hasCompletedOnboarding: false,
         brightnessMode: 'video', // Default to video-specific as per original request, or global? Let's stick to video as default for now or user preference. Detailed in plan: "video" default.
+        pipBrightnessMode: 'system', // Default to system brightness for PiP
         globalBrightness: 0.5,
 
         // Playback settings
@@ -161,6 +163,10 @@ export const useAppStore = create<AppStore>((set) => ({
     setBrightnessMode: (mode) =>
         set((state) => ({
             settings: { ...state.settings, brightnessMode: mode },
+        })),
+    setPipBrightnessMode: (mode) =>
+        set((state) => ({
+            settings: { ...state.settings, pipBrightnessMode: mode },
         })),
     setGlobalBrightness: (brightness) =>
         set((state) => ({

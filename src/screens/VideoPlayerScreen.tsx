@@ -333,9 +333,23 @@ export default function VideoPlayerScreen({ route }: Props) {
     useEffect(() => {
         if (isInPipMode) {
             ui.hideControls();
+
+            // Handle brightness for PiP
+            if (settings.pipBrightnessMode === 'system') {
+                // Determine if we need to switch to system brightness
+                // If brightness was modified, revert to system (-1)
+                AudioControlModule.resetBrightness?.();
+            }
+        } else {
+            // Exiting PiP - restore player brightness if needed
+            if (settings.pipBrightnessMode === 'system' && brightnessRef.current !== undefined) {
+                // Convert 0-1 brightness to 0-1 float for setBrightness
+                // brightnessRef.current is already 0-1
+                AudioControlModule.setBrightness?.(brightnessRef.current);
+            }
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isInPipMode]);
+    }, [isInPipMode, settings.pipBrightnessMode]);
 
     // Pause player immediately if it starts playing while resume modal is visible
     useEffect(() => {

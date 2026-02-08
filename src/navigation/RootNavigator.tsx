@@ -95,7 +95,7 @@ function MainTabs() {
                 component={SettingsScreen}
                 options={{
                     title: 'Settings',
-                    headerShown: true,
+                    headerShown: false,
                     tabBarIcon: ({ color, size }) => (
                         <Feather name="settings" size={24} color={color} style={{ marginBottom: 4 }} />
                     ),

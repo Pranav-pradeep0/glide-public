@@ -82,6 +82,13 @@ function getRelativeTime(timestamp: number): string {
 }
 
 
+function formatTime(seconds: number): string {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.round(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+
 function chunkArray<T>(array: T[], size: number): T[][] {
     const chunks: T[][] = [];
     for (let i = 0; i < array.length; i += size) {
@@ -168,10 +175,22 @@ const VideoGridCard = React.memo(
                         )}
                         {progress > 0 && (
                             <View style={styles.progressBarContainer}>
+                                <View style={[styles.progressBarTrack, { backgroundColor: 'rgba(255,255,255,0.3)' }]} />
                                 <View
                                     style={[
                                         styles.progressBar,
                                         { width: `${progress}%`, backgroundColor: theme.colors.primary },
+                                    ]}
+                                />
+                                <View
+                                    style={[
+                                        styles.sliderKnob,
+                                        {
+                                            left: `${progress}%`,
+                                            backgroundColor: theme.colors.text,
+                                            borderColor: 'rgba(0,0,0,0.5)', // Dark gap for grid
+                                            borderWidth: 2,
+                                        }
                                     ]}
                                 />
                             </View>
@@ -293,17 +312,47 @@ const VideoListItem = React.memo(
                     >
                         <Feather name="more-vertical" size={20} color={theme.colors.textSecondary} />
                     </TouchableOpacity>
-                    {progress > 0 && (
+                </TouchableOpacity>
+                {progress > 0 && (
+                    <View style={styles.progressBarContainerListWrapper}>
                         <View style={styles.progressBarContainerList}>
+                            <View style={[styles.progressBarTrack, { backgroundColor: theme.colors.border }]} />
                             <View
                                 style={[
                                     styles.progressBar,
                                     { width: `${progress}%`, backgroundColor: theme.colors.primary },
                                 ]}
                             />
+                            <View
+                                style={[
+                                    styles.sliderKnob,
+                                    {
+                                        left: `${progress}%`,
+                                        backgroundColor: theme.colors.text,
+                                        borderColor: theme.colors.background, // Match background to create gap
+                                        borderWidth: 2,
+                                    }
+                                ]}
+                            />
+                            {/* Time indicator floating above knob */}
+                            <View
+                                style={[
+                                    styles.timeFloatContainer,
+                                    {
+                                        left: `${progress}%`,
+                                        opacity: .6
+                                    }
+                                ]}
+                            >
+                                <View style={[styles.timeFloatBubble]}>
+                                    <Text style={[styles.timeFloatText, { color: theme.colors.text }]}>
+                                        {formatTime(item.lastPausedPosition)}
+                                    </Text>
+                                </View>
+                            </View>
                         </View>
-                    )}
-                </TouchableOpacity>
+                    </View>
+                )}
             </Animated.View>
         );
     }
@@ -676,7 +725,7 @@ export default function RecentsScreen() {
                                 position: 'absolute',
                                 top: 0,
                                 bottom: 0,
-                                backgroundColor: theme.colors.surface,
+                                backgroundColor: theme.colors.surfaceVariant,
                                 borderRadius: 20,
                                 left: 0,
                                 shadowColor: '#000',
@@ -721,7 +770,7 @@ export default function RecentsScreen() {
                                     },
                                 ]}
                             >
-                                {sort === 'recent' ? 'Recent' : sort === 'views' ? 'Most Viewed' : 'Name'}
+                                {sort === 'recent' ? 'Recent' : sort === 'views' ? 'Views' : 'Name'}
                             </Text>
                         </TouchableOpacity>
                     ))}
@@ -944,21 +993,75 @@ const styles = StyleSheet.create({
     bookmarkBadgeText: { fontSize: 10, fontWeight: 'bold' },
     progressBarContainer: {
         position: 'absolute',
-        bottom: 0,
-        left: 0,
-        right: 0,
-        height: 3,
-        backgroundColor: 'rgba(255,255,255,0.3)',
+        bottom: 12,
+        left: 12,
+        right: 12,
+        height: 4, // Track height
+        justifyContent: 'center',
+    },
+    progressBarContainerListWrapper: {
+        marginTop: 0,
+        marginHorizontal: 12,
+        marginBottom: 12,
+        zIndex: 10,
+        height: 24, // Reserve space for time float
+        justifyContent: 'flex-end', // Align slider to bottom
     },
     progressBarContainerList: {
+        height: 4,
+        justifyContent: 'center',
+        position: 'relative', // Context for absolute children
+        overflow: 'visible', // Allow time float to pop out
+    },
+    progressBarTrack: {
         position: 'absolute',
+        top: 0,
         bottom: 0,
         left: 0,
         right: 0,
-        height: 3,
-        backgroundColor: 'rgba(0,0,0,0.1)', // Subtle track
+        borderRadius: 2,
     },
-    progressBar: { height: '100%' },
+    progressBar: {
+        height: '100%',
+        borderRadius: 2,
+        position: 'absolute',
+        left: 0,
+    },
+    sliderKnob: {
+        position: 'absolute',
+        width: 8, // 4px visual + 2px border on each side = 8px total width
+        height: 16, // Taller than track
+        borderRadius: 4,
+        marginLeft: -4, // Center on end (8/2)
+        top: -6, // Center vertically (16 - 4) / 2 = 6 up
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.2,
+        shadowRadius: 1,
+    },
+    timeFloatContainer: {
+        position: 'absolute',
+        top: -22, // Float above track (knob is -6 top, 16 height -> top at -6, bottom at 10. Track is 0-4. )
+        alignItems: 'center',
+        width: 100, // Wide enough container
+        marginLeft: -50, // Center on the point
+    },
+    timeFloatBubble: {
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.1,
+        shadowRadius: 1,
+    },
+    timeFloatText: {
+        fontSize: 10,
+        fontWeight: 'bold',
+    },
+    timeText: {
+        fontSize: 10,
+        fontWeight: '500',
+    },
     videoGridInfo: { padding: 12 },
     videoGridName: { fontSize: 16, fontWeight: '600', marginBottom: 4 },
     metadataRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
@@ -968,7 +1071,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         padding: 12,
-        marginBottom: 12,
+        marginBottom: 4, // Reduce bottom margin since we adding slider below
         borderRadius: 16,
         elevation: 1,
         shadowColor: '#000',

@@ -263,7 +263,7 @@ export default function FoldersScreen() {
                             position: 'absolute',
                             top: 0,
                             bottom: 0,
-                            backgroundColor: theme.colors.surface,
+                            backgroundColor: theme.colors.surfaceVariant,
                             borderRadius: 20, // More rounded
                             left: 0, // Base position, transformed by translateX
                             shadowColor: '#000',

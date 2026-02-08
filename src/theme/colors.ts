@@ -21,16 +21,16 @@ export const darkColors = {
     primary: '#FFFFFF',
     secondary: '#CCCCCC',
     background: '#000000', // Pure black
-    surface: '#1A1A1A', // Dark gray
-    surfaceVariant: '#2A2A2A', // Slightly lighter than surface
+    surface: '#000000', // Pure black
+    surfaceVariant: '#0a0a0aff', // Extremely subtle difference
     text: '#FFFFFF',
     textSecondary: '#A0A0A0',
-    border: '#2A2A2A',
+    border: '#1f1f1fff', // Very subtle border for separation
     error: '#F87171',
     success: '#34D399',
     warning: '#FBBF24',
-    card: '#1A1A1A', // Dark gray
-    cardElevated: '#242424', // Elevated for bottom sheet
+    card: '#000000', // Pure black
+    cardElevated: '#0A0A0A', // Slightly elevated
     shadow: '#000000',
 };
 
