@@ -25,7 +25,8 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Feather from '@react-native-vector-icons/feather';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../hooks/useTheme';
-import { useAppStore } from '../store/appStore';
+import { useAppStore } from '@/store/appStore';
+import { SubtitleCueStore } from '@/services/SubtitleCueStore';
 import { ContentDetector } from '../services/ContentDetector';
 import { OMDBResult } from '../services/OMDBService';
 import { SubtitleExtractor, SubtitleTrack } from '../utils/SubtitleExtractor';
@@ -131,7 +132,7 @@ export default function PlayerDetailScreen() {
         try {
             // Step 1: Get embedded subtitle tracks
             console.log(`${LOG_PREFIX} Getting embedded tracks...`);
-            const tracks = await SubtitleExtractor.getSubtitleTracks(videoPath);
+            const tracks = await SubtitleCueStore.getTracks(videoPath);
             setEmbeddedTracks(tracks);
             console.log(`${LOG_PREFIX} Found ${tracks.length} embedded tracks`);
 
@@ -145,16 +146,7 @@ export default function PlayerDetailScreen() {
                 setProcessingStep('Checking embedded subtitles for SDH content...');
 
                 const extractAndParse = async (index: number): Promise<SubtitleCue[] | null> => {
-                    try {
-                        const extractedPath = await SubtitleExtractor.extractSubtitle(videoPath, index, 'srt');
-                        if (!extractedPath) return null;
-                        const content = await SubtitleExtractor.readSubtitleFile(extractedPath);
-                        if (!content) return null;
-                        return SubtitleParser.parse(content, 'srt');
-                    } catch (e) {
-                        console.error(`${LOG_PREFIX} Extract error:`, e);
-                        return null;
-                    }
+                    return SubtitleCueStore.getCues(videoPath, index);
                 };
 
                 const sdhResult = await SubtitleSelectionService.findBestSDHByContent(

@@ -52,7 +52,6 @@ import {
 import { useHapticFeedback } from '@/hooks/useHapticFeedback';
 import { useTheme } from '@/hooks/useTheme';
 import { useAlbumVideos } from '@/hooks/useMediaService';
-import { findMatchingSubtitleTrack } from '@/utils/languages';
 
 // Services and stores
 import { VideoOrientationService } from '@/services/VideoOrientationService';
@@ -60,6 +59,7 @@ import { HapticEngineService } from '@/services/HapticEngineService';
 import { NavigationService } from '@/services/NavigationService';
 import { useVideoHistoryStore } from '@/store/videoHistoryStore';
 import { useAppStore } from '@/store/appStore';
+import { SubtitleCueStore } from '@/services/SubtitleCueStore';
 
 // Types
 import { SubtitleCue, VideoFile } from '@/types';
@@ -800,84 +800,24 @@ export default function VideoPlayerScreen({ route }: Props) {
         setRecapVisible(true);
         setIsGeneratingRecap(true);
 
-        // Helper function to wait for cues with polling
-        const waitForCues = async (maxWaitMs: number, intervalMs: number = 500): Promise<boolean> => {
-            const startTime = Date.now();
-
-            while (Date.now() - startTime < maxWaitMs) {
-                if (!isMounted.current) return false;
-
-                // Check fresh values from refs
-                if (subtitleCuesRef.current.length > 0) {
-                    return true;
-                }
-
-                // Update loading message based on progress
-                const elapsed = Date.now() - startTime;
-                if (elapsed < 3000) {
-                    setRecapLoadingMessage('Extracting dialogue from subtitles...');
-                } else if (elapsed < 6000) {
-                    setRecapLoadingMessage('Still analyzing...');
-                } else {
-                    setRecapLoadingMessage('Almost there...');
-                }
-
-                await new Promise(resolve => setTimeout(resolve, intervalMs));
-            }
-
-            return subtitleCuesRef.current.length > 0;
+        // Helper function for user feedback
+        const setFeedback = (msg: string) => {
+            if (isMounted.current) setRecapLoadingMessage(msg);
         };
 
-        // If cues aren't loaded yet, wait with polling
-        if (!subtitleCuesRef.current.length) {
-            if (subtitleTracksRef.current.length > 0) {
-                // Tracks exist, wait for cue extraction (up to 10 seconds)
-                const cuesLoaded = await waitForCues(10000);
-
-                if (!cuesLoaded) {
-                    if (isMounted.current) {
-                        setRecapText(null);
-                        setRecapVisible(false);
-                        setIsGeneratingRecap(false);
-                        setRecapLoadingMessage(undefined);
-                        bookmarksHook.showToastWithMessage('Subtitle extraction taking too long - please try again', 'info');
-                    }
-                    return;
-                }
-            } else {
-                // No tracks yet - wait a bit for FFprobe to find them
-                if (isMounted.current) setRecapLoadingMessage('Scanning for subtitles...');
-                await new Promise(resolve => setTimeout(resolve, 3000));
-                if (!isMounted.current) return;
-
-                // Check if tracks appeared
-                if (subtitleTracksRef.current.length === 0) {
-                    if (isMounted.current) {
-                        setRecapText(null);
-                        setRecapVisible(false);
-                        setIsGeneratingRecap(false);
-                        setRecapLoadingMessage(undefined);
-                        bookmarksHook.showToastWithMessage('Recap unavailable: No subtitles found in video', 'info');
-                    }
-                    return;
-                }
-
-                // Tracks found, now wait for cues
-                const cuesLoaded = await waitForCues(8000);
-                if (!cuesLoaded) {
-                    setRecapText(null);
-                    setRecapVisible(false);
-                    setIsGeneratingRecap(false);
-                    setRecapLoadingMessage(undefined);
-                    bookmarksHook.showToastWithMessage('Could not extract dialogue - please try again', 'info');
-                    return;
-                }
-            }
-        }
-
+        // Get dialogue through the centralized service
         try {
-            setRecapLoadingMessage('Analyzing recent dialogue...');
-            const dialogue = RecapService.getRecentDialogue(subtitleCuesRef.current, resumePosition);
+            setFeedback('Analyzing subtitles...');
+            const dialogue = await RecapService.getDialogueForRecap(
+                videoPath,
+                tracksHook.subtitleTracks,
+                subtitleCuesRef.current,
+                resumePosition,
+                cleanTitle || videoName
+            );
+
+            if (!isMounted.current) return;
+
             if (!dialogue) {
                 setRecapText(null);
                 setRecapVisible(false);
@@ -887,8 +827,11 @@ export default function VideoPlayerScreen({ route }: Props) {
                 return;
             }
 
-            setRecapLoadingMessage('Generating your recap...');
+            setFeedback('Generating your recap...');
             const summary = await RecapService.generateRecap(dialogue, cleanTitle || videoName);
+
+            if (!isMounted.current) return;
+
             if (summary) {
                 setRecapText(summary);
                 setRecapLoadingMessage(undefined);
@@ -900,72 +843,18 @@ export default function VideoPlayerScreen({ route }: Props) {
             }
         } catch (error) {
             console.error('[VideoPlayerScreen] Recap error:', error);
-            setRecapText(null);
-            setRecapVisible(false);
-            setRecapLoadingMessage(undefined);
-            bookmarksHook.showToastWithMessage('Recap generation error', 'error');
+            if (isMounted.current) {
+                setRecapText(null);
+                setRecapVisible(false);
+                setRecapLoadingMessage(undefined);
+                bookmarksHook.showToastWithMessage('Recap generation error', 'error');
+            }
         } finally {
-            setIsGeneratingRecap(false);
-        }
-    }, [recapText, resumePosition, bookmarksHook, player, cleanTitle, videoName]);
-
-    // Auto-select subtitle track for recap preparation when resume modal is visible
-    // Prefers English subtitles for better recap quality, falls back to first available
-    // Also handles case where track is restored from history but cues need to be loaded
-    const cueLoadAttemptedRef = React.useRef(false);
-
-    useEffect(() => {
-        // Reset the flag when modal is hidden
-        if (!resumeModalVisible) {
-            cueLoadAttemptedRef.current = false;
-            return;
-        }
-
-        // Skip if no tracks available
-        if (tracksHook.subtitleTracks.length === 0) {
-            return;
-        }
-
-        // Cues already loaded - nothing to do
-        if (tracksHook.subtitleCues.length > 0) {
-            return;
-        }
-
-        // Don't re-attempt if we already tried once (prevents infinite loop)
-        if (cueLoadAttemptedRef.current) {
-            return;
-        }
-
-        cueLoadAttemptedRef.current = true;
-
-        // If no track selected yet, auto-select one (prefer English)
-        if (tracksHook.selectedSubtitleTrackIndex === null) {
-            const englishTrackIndex = findMatchingSubtitleTrack(tracksHook.subtitleTracks, 'English');
-
-            if (englishTrackIndex !== undefined) {
-                if (__DEV__) {
-                    console.log('[VideoPlayerScreen] Auto-selecting English subtitle track for recap:', englishTrackIndex);
-                }
-                tracksHook.selectSubtitleTrack(englishTrackIndex);
-            } else {
-                // Fallback to first available track
-                const firstTrack = tracksHook.subtitleTracks[0];
-                if (firstTrack) {
-                    if (__DEV__) {
-                        console.log('[VideoPlayerScreen] No English subtitle found, selecting first track for recap:', firstTrack.index);
-                    }
-                    tracksHook.selectSubtitleTrack(firstTrack.index);
-                }
+            if (isMounted.current) {
+                setIsGeneratingRecap(false);
             }
-        } else {
-            // Track is selected (likely from history) but cues not loaded yet
-            // Re-trigger the track selection to force cue loading
-            if (__DEV__) {
-                console.log('[VideoPlayerScreen] Re-selecting subtitle track to load cues:', tracksHook.selectedSubtitleTrackIndex);
-            }
-            tracksHook.selectSubtitleTrack(tracksHook.selectedSubtitleTrackIndex);
         }
-    }, [resumeModalVisible, tracksHook.selectedSubtitleTrackIndex, tracksHook.subtitleTracks, tracksHook.subtitleCues, tracksHook.selectSubtitleTrack]);
+    }, [recapText, resumePosition, bookmarksHook, player, cleanTitle, videoName, videoPath, tracksHook.subtitleTracks]);
 
     // Inactivity Prompt Logic
     useEffect(() => {
@@ -1007,9 +896,13 @@ export default function VideoPlayerScreen({ route }: Props) {
     // LIFECYCLE EFFECTS
     // ========================================================================
 
-    // Initialize history on mount
-    // NOTE: Hydration is now synchronous in the store, so data is ready immediately.
-    // No async effect needed here.
+    // Initial tracks loading
+    useEffect(() => {
+        // We no longer call evict() on unmount here.
+        // Memory is managed by SubtitleCueStore's LRU (Limit: 5 videos)
+        // and files are deleted instantly after parsing.
+        // This makes backtracking to Details screen instant without FFmpeg.
+    }, []);
 
     // Update insets ref when controls are visible
     useEffect(() => {

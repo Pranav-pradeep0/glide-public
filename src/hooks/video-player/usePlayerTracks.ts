@@ -15,6 +15,7 @@ import {
     UsePlayerTracksReturn,
 } from './types';
 import { findMatchingAudioTrack } from '@/utils/languages';
+import { SubtitleCueStore } from '@/services/SubtitleCueStore';
 
 // ============================================================================
 // TYPES
@@ -138,7 +139,7 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
 
         const loadSubtitleTracks = async () => {
             try {
-                const tracks = await SubtitleExtractor.getSubtitleTracks(videoPath);
+                const tracks = await SubtitleCueStore.getTracks(videoPath);
                 if (mounted && tracks.length > 0) {
                     setSubtitleTracks(tracks);
                     if (__DEV__) {
@@ -195,29 +196,21 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
             setVlcTextTrackId(-1);
 
             try {
-                const extractedPath = await SubtitleExtractor.extractSubtitle(
-                    videoPath,
-                    selectedSubtitleTrackIndex,
-                    'srt'
-                );
+                const cues = await SubtitleCueStore.getCues(videoPath, selectedSubtitleTrackIndex);
+                if (!mounted) return;
 
-                if (!extractedPath || !mounted) return;
-
-                extractedSubtitlePathRef.current = extractedPath;
-
-                const content = await SubtitleExtractor.readSubtitleFile(extractedPath);
-                if (!content || !mounted) return;
-
-                const cues = SubtitleParser.parse(content, 'srt');
-                if (mounted) {
+                if (cues && cues.length > 0) {
                     setSubtitleCues(cues);
                     if (__DEV__) {
                         console.log(`[usePlayerTracks] Subtitle loaded: ${cues.length} cues`);
                     }
+                } else if (mounted) {
+                    setSubtitleCues([]);
+                    setCurrentSubtitleCue(null);
                 }
             } catch (error) {
                 if (__DEV__) {
-                    console.error('[usePlayerTracks] Failed to extract/parse subtitle:', error);
+                    console.error('[usePlayerTracks] Failed to load cues from store:', error);
                 }
                 if (mounted) {
                     setSubtitleCues([]);
@@ -257,14 +250,12 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
         return () => clearInterval(interval);
     }, [subtitleCues, currentTimeRef, subtitleDelay]);
 
-    // Cleanup extracted subtitle files on unmount
+    // Cleanup on unmount
     useEffect(() => {
         return () => {
-            SubtitleExtractor.cleanupSubtitleFiles().catch((err: any) => {
-                if (__DEV__) console.warn('[usePlayerTracks] Failed to cleanup subtitles:', err);
-            });
+            SubtitleCueStore.evict(videoPath);
         };
-    }, []);
+    }, [videoPath]);
 
     const selectSubtitleTrack = useCallback((trackIndex: number | null) => {
         setSelectedSubtitleTrackIndex(trackIndex);

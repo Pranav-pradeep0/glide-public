@@ -1,8 +1,41 @@
 import axios from 'axios';
 import { SubtitleCue } from '../types';
 import { GROQ_API_KEY, GROQ_CHAT_API_URL } from '../utils/constants';
+import { SubtitleCueStore } from './SubtitleCueStore';
+import { SubtitleTrack } from '../utils/SubtitleExtractor';
 
 export class RecapService {
+    /**
+     * High-level entry point to get dialogue for recap.
+     * Checks existing cues first, then uses SubtitleCueStore to find/extract the best track.
+     */
+    static async getDialogueForRecap(
+        videoPath: string,
+        tracks: SubtitleTrack[],
+        existingCues: SubtitleCue[],
+        resumePosition: number,
+        videoTitle?: string
+    ): Promise<string | null> {
+        let cues = existingCues;
+
+        // If no cues currently enabled, find the best track and extract
+        if (!cues || cues.length === 0) {
+            if (__DEV__) console.log('[RecapService] No active cues, searching for best track...');
+            const result = await SubtitleCueStore.getBestTrackCues(videoPath, tracks);
+            if (result) {
+                if (__DEV__) console.log('[RecapService] Using track:', result.trackIndex);
+                cues = result.cues;
+            }
+        }
+
+        if (!cues || cues.length === 0) {
+            if (__DEV__) console.warn('[RecapService] No subtitles available for recap');
+            return null;
+        }
+
+        return this.getRecentDialogue(cues, resumePosition);
+    }
+
     /**
      * Extracts dialogue from the last few minutes (e.g., 5 mins) before the resume position.
      * Balanced for quality and token usage.
