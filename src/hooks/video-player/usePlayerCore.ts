@@ -702,13 +702,14 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
         lastSyncPosition.value = currentTimeRef.current;
 
         setState(prev => {
-            // Skip if already in desired state to prevent unnecessary re-renders
-            if (prev.isPlaying) {
+            // Skip if already in desired state (optimistic update might have already set this)
+            if (prev.isPlaying && !prev.paused) {
                 return prev;
             }
             return {
                 ...prev,
                 isPlaying: true,
+                paused: false, // Sync intent with reality
                 isBuffering: false,
                 playerStopped: false,
             };
@@ -731,13 +732,14 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
         isPlayingShared.value = false;
 
         setState(prev => {
-            // Skip if already in desired state to prevent unnecessary re-renders
-            if (!prev.isPlaying) {
+            // Skip if already in desired state (optimistic update might have already set this)
+            if (!prev.isPlaying && prev.paused) {
                 return prev;
             }
             return {
                 ...prev,
                 isPlaying: false,
+                paused: true, // Sync intent with reality
             };
         });
         onProgressSave?.();

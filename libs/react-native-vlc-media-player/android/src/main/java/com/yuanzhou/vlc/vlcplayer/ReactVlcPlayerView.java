@@ -1,7 +1,10 @@
 package com.yuanzhou.vlc.vlcplayer;
 
 import android.annotation.SuppressLint;
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.text.TextUtils;
 import android.Manifest;
 import android.content.res.Configuration;
@@ -114,6 +117,9 @@ class ReactVlcPlayerView extends TextureView implements
     private final AudioManager audioManager;
     private AudioFocusRequest mAudioFocusRequest; // For API 26+ audio focus management
     private boolean mHasAudioFocus = false;
+    private boolean mResumeOnFocusGain = false;
+    private int mVolumeBeforeDuck = -1;
+    private BroadcastReceiver mNoisyReceiver;
 
     // Bridge-level seek filtering state (Main thread)
     private float mLastBridgeSeekValue = Float.NaN;
@@ -198,10 +204,9 @@ class ReactVlcPlayerView extends TextureView implements
             if (wasPlayingBeforeHostPause) {
                 isPaused = false;
 
-                requestAudioFocusInternal();
-
-                mMediaPlayer.play();
-
+                if (requestAudioFocusInternal()) {
+                    mMediaPlayer.play();
+                }
             }
         }
 
@@ -346,53 +351,134 @@ class ReactVlcPlayerView extends TextureView implements
     // AudioManager.OnAudioFocusChangeListener implementation
     @Override
     public void onAudioFocusChange(int focusChange) {
-
         switch (focusChange) {
             case AudioManager.AUDIOFOCUS_GAIN:
-                // Regained focus - resume playback at normal volume
+                // Regained focus
                 mHasAudioFocus = true;
+                registerNoisyReceiver(); // Ensure noisy receiver is active (covers delayed focus path)
                 if (mMediaPlayer != null) {
                     // Restore volume if we were ducking
-                    setVolumeModifier(preVolume);
-                    // Resume if we were playing before losing focus
-                    if (!isPaused && !mMediaPlayer.isPlaying()) {
+                    if (mVolumeBeforeDuck >= 0) {
+                        mMediaPlayer.setVolume(mVolumeBeforeDuck);
+                        mVolumeBeforeDuck = -1;
+                    }
+                    // Resume ONLY if we were playing before the transient loss
+                    // (or if focus was delayed and we intended to play)
+                    if (mResumeOnFocusGain) {
+                        isPaused = false;
                         mMediaPlayer.play();
-                        Log.i(TAG, "Resumed playback after regaining audio focus");
+                        setKeepScreenOn(true);
+
+                        WritableMap map = createEventMap();
+                        if (map != null) {
+                            map.putString("type", "Playing");
+                            eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_ON_IS_PLAYING);
+                        }
                     }
                 }
+                mResumeOnFocusGain = false;
                 break;
 
             case AudioManager.AUDIOFOCUS_LOSS:
                 // Permanent loss - pause and release focus
                 mHasAudioFocus = false;
+                mResumeOnFocusGain = false; // Never auto-resume after permanent loss
                 if (mMediaPlayer != null && mMediaPlayer.isPlaying()) {
                     isPaused = true;
                     mMediaPlayer.pause();
                     setKeepScreenOn(false);
 
                     // Notify JS side
-                    WritableMap map = Arguments.createMap();
-                    map.putString("type", "Paused");
-                    eventEmitter.onVideoStateChange(map);
-                    Log.i(TAG, "Paused playback due to permanent audio focus loss");
+                    WritableMap map = createEventMap();
+                    if (map != null) {
+                        map.putString("type", "Paused");
+                        eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_ON_PAUSED);
+                        Log.i(TAG, "Paused playback due to permanent audio focus loss");
+                    }
                 }
                 break;
 
             case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT:
                 // Temporary loss (e.g., phone call) - pause but keep resources
-                if (mMediaPlayer != null && mMediaPlayer.isPlaying()) {
-                    mMediaPlayer.pause();
-                    Log.i(TAG, "Paused playback due to transient audio focus loss");
+                if (mMediaPlayer != null) {
+                    mResumeOnFocusGain = mMediaPlayer.isPlaying();
+                    if (mMediaPlayer.isPlaying()) {
+                        isPaused = true;
+                        mMediaPlayer.pause();
+                        setKeepScreenOn(false);
+
+                        WritableMap map = createEventMap();
+                        if (map != null) {
+                            map.putString("type", "Paused");
+                            eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_ON_PAUSED);
+                            Log.i(TAG, "Paused playback due to transient audio focus loss");
+                        }
+                    }
                 }
                 break;
 
             case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK:
                 // Can duck - lower volume temporarily
                 if (mMediaPlayer != null) {
+                    mVolumeBeforeDuck = preVolume;
                     mMediaPlayer.setVolume(30); // Duck to 30%
                     Log.i(TAG, "Ducking audio due to transient focus loss");
                 }
                 break;
+        }
+    }
+
+    /**
+     * Registers broadcast receiver for headphone disconnect detection.
+     */
+    private void registerNoisyReceiver() {
+        if (mNoisyReceiver != null) {
+            return;
+        }
+
+        try {
+            mNoisyReceiver = new BroadcastReceiver() {
+                @Override
+                public void onReceive(Context context, Intent intent) {
+                    if (AudioManager.ACTION_AUDIO_BECOMING_NOISY.equals(intent.getAction())) {
+                        // Headphones disconnected — pause immediately
+                        if (mMediaPlayer != null && mMediaPlayer.isPlaying()) {
+                            isPaused = true;
+                            mResumeOnFocusGain = false; // User unplugged - don't auto-resume
+                            mMediaPlayer.pause();
+                            setKeepScreenOn(false);
+
+                            WritableMap map = createEventMap();
+                            if (map != null) {
+                                map.putString("type", "Paused");
+                                eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_ON_PAUSED);
+                                Log.i(TAG, "Paused: headphones disconnected (ACTION_AUDIO_BECOMING_NOISY)");
+                            }
+                        }
+                    }
+                }
+            };
+
+            IntentFilter filter = new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY);
+            themedReactContext.registerReceiver(mNoisyReceiver, filter);
+            Log.d(TAG, "Noisy audio receiver registered");
+        } catch (Exception e) {
+            Log.e(TAG, "Error registering noisy audio receiver", e);
+        }
+    }
+
+    /**
+     * Unregisters noisy audio receiver.
+     */
+    private void unregisterNoisyReceiver() {
+        if (mNoisyReceiver != null) {
+            try {
+                themedReactContext.unregisterReceiver(mNoisyReceiver);
+                mNoisyReceiver = null;
+                Log.d(TAG, "Noisy audio receiver unregistered");
+            } catch (Exception e) {
+                Log.e(TAG, "Error unregistering noisy audio receiver", e);
+            }
         }
     }
 
@@ -424,17 +510,26 @@ class ReactVlcPlayerView extends TextureView implements
                         AudioManager.AUDIOFOCUS_GAIN);
             }
 
-            mHasAudioFocus = (result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED);
-
+            if (result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+                mHasAudioFocus = true;
+                mResumeOnFocusGain = false;
+                registerNoisyReceiver();
+            } else if (result == AudioManager.AUDIOFOCUS_REQUEST_DELAYED) {
+                mHasAudioFocus = false;
+                mResumeOnFocusGain = true; // Will auto-play when GAIN arrives
+                Log.i(TAG, "Audio focus request delayed, will resume when focus is granted");
+                return false; // Don't start playback yet
+            } else {
+                mHasAudioFocus = false;
+                mResumeOnFocusGain = false;
+            }
         }
 
         // Force re-apply volume when we have focus.
         // This ensures the AudioTrack is active and volume is correct.
         // CHECK mMuted: If muted, we should not unmute just because we got focus.
         if (mHasAudioFocus && mMediaPlayer != null && !mMuted) {
-
             mMediaPlayer.setVolume(preVolume);
-
         }
 
         return mHasAudioFocus;
@@ -445,6 +540,8 @@ class ReactVlcPlayerView extends TextureView implements
      * Uses modern API for Android 8.0+.
      */
     private void abandonAudioFocusInternal() {
+        unregisterNoisyReceiver();
+
         if (!mHasAudioFocus) {
             return;
         }
@@ -456,7 +553,6 @@ class ReactVlcPlayerView extends TextureView implements
         }
 
         mHasAudioFocus = false;
-
     }
 
     private void setProgressUpdateRunnable() {
@@ -1025,18 +1121,16 @@ class ReactVlcPlayerView extends TextureView implements
                 // Start playback first, then seek
                 if (isResume) {
                     if (autoplayResume) {
-
-                        requestAudioFocusInternal();
-
-                        mMediaPlayer.play();
+                        if (requestAudioFocusInternal()) {
+                            mMediaPlayer.play();
+                        }
                     }
                 } else {
                     if (autoplay) {
                         isPaused = false;
-
-                        requestAudioFocusInternal();
-
-                        mMediaPlayer.play();
+                        if (requestAudioFocusInternal()) {
+                            mMediaPlayer.play();
+                        }
                     }
                 }
 
@@ -1057,14 +1151,16 @@ class ReactVlcPlayerView extends TextureView implements
             } else {
                 if (isResume) {
                     if (autoplayResume) {
-                        requestAudioFocusInternal();
-                        mMediaPlayer.play();
+                        if (requestAudioFocusInternal()) {
+                            mMediaPlayer.play();
+                        }
                     }
                 } else {
                     if (autoplay) {
                         isPaused = false;
-                        requestAudioFocusInternal();
-                        mMediaPlayer.play();
+                        if (requestAudioFocusInternal()) {
+                            mMediaPlayer.play();
+                        }
                     }
                 }
             }
@@ -1194,12 +1290,9 @@ class ReactVlcPlayerView extends TextureView implements
                                 if (!mMediaPlayer.isPlaying() && !isPaused) {
 
                                     mMediaPlayer.setPosition(position);
-                                    // Need to post to main thread for audio focus?
-                                    // LibVLC calls are thread safe, but audio focus should be main thread typically
-                                    // But requestAudioFocusInternal is just Android AudioManager, which is thread
-                                    // safe.
-                                    requestAudioFocusInternal();
-                                    mMediaPlayer.play();
+                                    if (requestAudioFocusInternal()) {
+                                        mMediaPlayer.play();
+                                    }
 
                                     // Only update state if we actually changed play state
                                     // We can post this back to main thread or skip during rapid scrubbing
@@ -1391,11 +1484,13 @@ class ReactVlcPlayerView extends TextureView implements
                     if (mMediaPlayer.getPosition() >= 0.99f) {
                         mMediaPlayer.setPosition(0);
                     }
-                    requestAudioFocusInternal();
-                    mMediaPlayer.play();
+                    if (requestAudioFocusInternal()) {
+                        mMediaPlayer.play();
+                    }
                 } else {
-                    requestAudioFocusInternal();
-                    mMediaPlayer.play();
+                    if (requestAudioFocusInternal()) {
+                        mMediaPlayer.play();
+                    }
                 }
             }
         } else {
@@ -1521,6 +1616,7 @@ class ReactVlcPlayerView extends TextureView implements
     public void stopPlayer() {
         if (mMediaPlayer == null)
             return;
+        abandonAudioFocusInternal();
         mMediaPlayer.stop();
     }
 
@@ -1534,6 +1630,13 @@ class ReactVlcPlayerView extends TextureView implements
             isPaused = true;
             mMediaPlayer.pause();
             setKeepScreenOn(false);
+
+            // Notify JS side so UI stays in sync
+            WritableMap map = createEventMap();
+            if (map != null) {
+                map.putString("type", "Paused");
+                eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_ON_PAUSED);
+            }
             Log.i(TAG, "Paused via native pausePlayer method");
         }
     }
