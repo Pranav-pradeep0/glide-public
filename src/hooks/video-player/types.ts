@@ -17,7 +17,6 @@ export const PLAYER_CONSTANTS = {
     RIPPLE_DURATION_MS: 600,
     SPEED_HUD_HIDE_MS: 1500,
     CONTROLS_AUTO_HIDE_MS: 3000,
-    SEEK_DEBOUNCE_MS: 15, // Debounce intermediate seeks during drag
     BUFFERING_TIMEOUT_MS: 300,
     PROGRESS_SAVE_INTERVAL_MS: 2000,
     BOOKMARK_TOAST_DURATION_MS: 3000,
@@ -202,7 +201,6 @@ export interface PlayerState {
     isSeeking: boolean;
     playerStopped: boolean;
     errorText: string | null;
-    seekFraction: number | null;
 }
 
 export interface PlayerSettings {
@@ -257,9 +255,10 @@ export interface UsePlayerCoreReturn {
     pause: () => void;
     stop: () => void;
     togglePlayPause: () => void;
-    seek: (timeInSeconds: number) => void;
-    seekImmediate: (timeInSeconds: number) => void;
-    seekScrubbing: (timeInSeconds: number) => void;
+    previewSeek: (timeInSeconds: number) => void;
+    commitSeek: (timeInSeconds: number) => void;
+    setIsSeeking: (seeking: boolean) => void;
+    clearResumePosition: () => void;
 
     // VLC event handlers
     handleLoad: (data: VLCLoadData) => void;

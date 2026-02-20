@@ -5,7 +5,7 @@
  * This component is isolated to prevent unnecessary re-renders of the heavy VLCPlayer.
  */
 
-import React, { memo, forwardRef, useMemo, useRef, useCallback } from 'react';
+import React, { memo, forwardRef, useMemo, useCallback } from 'react';
 import { StyleSheet } from 'react-native';
 import Animated, { AnimatedStyle } from 'react-native-reanimated';
 import { VLCPlayer, PlayerResizeMode, VLCPlayerSource } from 'react-native-vlc-media-player';
@@ -115,15 +115,18 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
         // Calculate resume time when playerKey changes (component is remounting for decoder/enhancement change)
         // We'll use VLC's --start-time option for seamless resume without visible seek
         const resumeTimeSeconds = useMemo(() => {
-            // Only set resume time if:
-            // 1. This is a restart (playerKey > 0) - first mount has playerKey=0
-            // 2. We have valid currentTime and duration
-            // 3. We're not at the very beginning or end
-            if (playerKey > 0 && currentTime > 1 && duration > 1) {
-                const fraction = currentTime / duration;
-                if (fraction > 0.01 && fraction < 0.99) {
-                    console.log('[AnimatedVideoView] Setting start-time for seamless resume:', currentTime, 'seconds');
-                    return currentTime;
+            // Apply resume for remounts (decoder/enhancement toggles) even near start.
+            // Old threshold (>1s) caused unintended restart-to-zero in initial playback area.
+            const MIN_RESUME_SECONDS = 0.001;
+            const END_GUARD_SECONDS = 0.2;
+
+            if (playerKey > 0 && duration > 1) {
+                const maxSeek = Math.max(0, duration - END_GUARD_SECONDS);
+                const clampedResume = Math.max(0, Math.min(maxSeek, currentTime));
+
+                if (clampedResume >= MIN_RESUME_SECONDS && clampedResume < maxSeek) {
+                    console.log('[AnimatedVideoView] Setting start-time for seamless resume:', clampedResume, 'seconds');
+                    return clampedResume;
                 }
             }
             return 0; // No resume needed

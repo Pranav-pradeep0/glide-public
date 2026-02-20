@@ -1,11 +1,9 @@
-import React, { FC, useMemo, useState } from 'react';
-import { View, Text, Pressable, StyleSheet, TextInput, Dimensions, useWindowDimensions } from 'react-native';
+import React, { FC } from 'react';
+import { View, Text, Pressable, StyleSheet, TextInput } from 'react-native';
 import { Feather } from '@react-native-vector-icons/feather';
 import { EdgeInsets } from 'react-native-safe-area-context';
 import LinearGradient from 'react-native-linear-gradient';
-import Svg, { Rect, Path, Circle, G } from 'react-native-svg';
 import {
-    ContainIcon, CoverIcon, StretchIcon, FillIcon,
     PipIcon, AudioIcon, SubtitleIcon, BookmarkListIcon,
     OrientationLockIcon, BackgroundPlayIcon, NightModeIcon,
     HapticsIcon, VisualEnhancementIcon,
@@ -78,10 +76,7 @@ const Scrubber: React.FC<ScrubberProps> = ({
     onSeek,
     onSeekComplete
 }) => {
-    const { width: screenWidth } = useWindowDimensions();
     const trackWidth = useSharedValue(0);
-    // Time-based throttling for JS callbacks
-    const lastUpdateJS = useSharedValue(0);
     // scrubPosition is now passed as prop
 
     const progress = useDerivedValue(() => {
@@ -151,20 +146,13 @@ const Scrubber: React.FC<ScrubberProps> = ({
 
             const targetTime = newProgress * (duration.value || 0);
             scrubPosition.value = targetTime;
-
-            // Throttle JS updates by time (max ~33 updates per second) to keep UI thread silky
-            const now = Date.now();
-            if (now - lastUpdateJS.value > 30) { // Updates every ~30ms (33fps)
-                lastUpdateJS.value = now;
-                runOnJS(onSeek)(targetTime);
-            }
+            runOnJS(onSeek)(targetTime);
         })
         .onFinalize(() => {
             'worklet';
             const finalTime = scrubPosition.value;
             // Keep scrubbing flag true until seek completes to prevent snapback
             runOnJS(onSeekComplete)(finalTime);
-            lastUpdateJS.value = 0;
         });
 
     return (
@@ -244,7 +232,7 @@ export const PlayerControls: FC<PlayerControlsProps> = React.memo(({
     showControls, title, onBack, onToggleAudio, onToggleSubtitle,
     onAddBookmark, paused, onTogglePlayPause, currentTime, duration,
     onSeekStart, onSeek, onSeekComplete, errorText, isLandscape, insets,
-    audioTrackSelected, subtitleTrackSelected, isScrubbingShared,
+    audioTrackSelected: _audioTrackSelected, subtitleTrackSelected: _subtitleTrackSelected, isScrubbingShared,
     onToggleBookmarkPanel, onTogglePlaylist, onToggleQuickSettings,
     onNext, onPrev, onJumpBackward, onJumpForward,
     onToggleLock, isLocked, onToggleResizeMode, resizeMode,

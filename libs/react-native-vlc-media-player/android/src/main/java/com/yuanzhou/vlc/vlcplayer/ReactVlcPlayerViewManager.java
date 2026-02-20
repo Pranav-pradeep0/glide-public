@@ -72,16 +72,17 @@ public class ReactVlcPlayerViewManager extends SimpleViewManager<ReactVlcPlayerV
 
     @ReactProp(name = PROP_CLEAR)
     public void setClear(final ReactVlcPlayerView videoView, final boolean clear) {
-        videoView.cleanUpResources();
+        if (clear) {
+            videoView.cleanUpResources();
+        }
     }
 
     @ReactProp(name = PROP_SRC)
     public void setSrc(final ReactVlcPlayerView videoView, @Nullable ReadableMap src) {
-        Context context = videoView.getContext().getApplicationContext();
+        if (src == null) {
+            return;
+        }
         String uriString = src.hasKey(PROP_SRC_URI) ? src.getString(PROP_SRC_URI) : null;
-        String extension = src.hasKey(PROP_SRC_TYPE) ? src.getString(PROP_SRC_TYPE) : null;
-        boolean isNetStr = src.getBoolean(PROP_SRC_IS_NETWORK) ? src.getBoolean(PROP_SRC_IS_NETWORK) : false;
-        boolean autoplay = src.getBoolean("autoplay") ? src.getBoolean("autoplay") : true;
         if (TextUtils.isEmpty(uriString)) {
             return;
         }
@@ -224,7 +225,8 @@ public class ReactVlcPlayerViewManager extends SimpleViewManager<ReactVlcPlayerV
                 "startRecording", 1,
                 "stopRecording", 2,
                 "snapshot", 3,
-                "pausePlayer", 4);
+                "pausePlayer", 4,
+                "stopPlayer", 5);
     }
 
     @Override
@@ -250,6 +252,9 @@ public class ReactVlcPlayerViewManager extends SimpleViewManager<ReactVlcPlayerV
 
             case 4:
                 root.pausePlayer();
+                break;
+            case 5:
+                root.stopPlayer();
                 break;
 
             default:

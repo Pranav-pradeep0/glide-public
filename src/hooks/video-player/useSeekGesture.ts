@@ -118,11 +118,7 @@ export function useSeekGesture(options: UseSeekGestureOptions) {
                 // Update shared value for 60fps HUD
                 seekTimeShared.value = targetTime;
 
-                // Throttle JS updates to reduce bridge crossings
-                // Only update every 5 frames worth of movement to keep video somewhat in sync but avoid lag
-                if (Math.floor(Math.abs(event.translationX)) % 5 === 0) {
-                    runOnJS(onSeekUpdate)(targetTime);
-                }
+                runOnJS(onSeekUpdate)(targetTime);
             })
             .onEnd(() => {
                 'worklet';

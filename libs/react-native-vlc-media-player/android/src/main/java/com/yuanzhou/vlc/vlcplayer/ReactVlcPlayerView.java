@@ -18,7 +18,6 @@ import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
-import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.Surface;
 import android.view.TextureView;
@@ -45,7 +44,6 @@ import java.io.FileOutputStream;
 import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicBoolean;
 import android.os.ParcelFileDescriptor;
 
 import android.support.v4.media.session.MediaSessionCompat;
@@ -55,7 +53,6 @@ import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
 import androidx.media.session.MediaButtonReceiver;
 import android.app.PendingIntent;
-import android.content.Intent;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.graphics.BitmapFactory;
@@ -80,7 +77,6 @@ class ReactVlcPlayerView extends TextureView implements
     private int _textTrack = -1; // Store desired text track, default to -1 (disabled)
     private int _audioTrack = -1; // Store desired audio track, default to -1 (disabled)
     private int currentlyAppliedAudioTrack = -1; // Track which audio track is currently active in VLC
-    private boolean netStrTag;
     private ReadableMap srcMap;
     private int mVideoHeight = 0;
 
@@ -111,7 +107,7 @@ class ReactVlcPlayerView extends TextureView implements
     private Runnable mProgressUpdateRunnable = null;
 
     // Executor for background seeking to prevent UI thread blocking
-    private final ExecutorService seekExecutor = Executors.newSingleThreadExecutor();
+    private ExecutorService seekExecutor = Executors.newSingleThreadExecutor();
 
     private final ThemedReactContext themedReactContext;
     private final AudioManager audioManager;
@@ -124,7 +120,6 @@ class ReactVlcPlayerView extends TextureView implements
     // Bridge-level seek filtering state (Main thread)
     private float mLastBridgeSeekValue = Float.NaN;
 
-    private WritableMap mVideoInfo = null;
     private String mVideoInfoHash = null;
     private ParcelFileDescriptor currentPfd = null;
 
@@ -135,7 +130,6 @@ class ReactVlcPlayerView extends TextureView implements
     private String mVideoArtist = "Glide";
     private static final String NOTIFICATION_CHANNEL_ID = "vlc_media_player_channel";
     private static final int NOTIFICATION_ID = 1001;
-    private PlaybackStateCompat.Builder mStateBuilder;
 
     // Buffering debounce
     private static final int BUFFERING_DEBOUNCE_MS = 200;
@@ -146,6 +140,28 @@ class ReactVlcPlayerView extends TextureView implements
     private Handler resizeDebounceHandler = new Handler(Looper.getMainLooper());
     private Runnable pendingResize = null;
     private static final int RESIZE_DEBOUNCE_MS = 100;
+    private static final long PLAYBACK_EVENT_DEBOUNCE_MS = 120;
+    private String mLastPlaybackEventType = null;
+    private long mLastPlaybackEventTimestamp = 0L;
+    private static final long SEEK_FLUSH_EVENT_SUPPRESS_MS = 420L;
+    private static final long SEEK_FLUSH_EVENT_HARD_TIMEOUT_MS = 950L;
+    private static final int SEEK_FLUSH_SUPPRESSION_BUDGET = 3;
+    private long mSuppressPlaybackEventsUntilMs = 0L;
+    private int mTransientSeekSuppressionBudget = 0;
+    private long mTransientSeekSuppressionUntilMs = 0L;
+    private Runnable mPendingSeekFlushPlayRunnable = null;
+    private Runnable mPendingSeekVerifyRunnable = null;
+    private Runnable mPendingReviveFallbackRunnable = null;
+    private int mSeekToken = 0;
+    private long mLastSurfaceUpdateAtMs = 0L;
+    private float mLastRequestedSeekPosition = -1f;
+    private long mLastRequestedSeekAtMs = 0L;
+    private static final long SEEK_OVERRIDE_RECENT_MS = 900L;
+    private static final long SEEK_FRAME_STALL_MS = 420L;
+    private static final long SEEK_VERIFY_DELAY_EARLY_MS = 140L;
+    private static final long SEEK_VERIFY_DELAY_LATE_MS = 480L;
+    private static final float END_STATE_POSITION_THRESHOLD = 0.90f;
+    private boolean mNativeStopped = true;
 
     public ReactVlcPlayerView(ThemedReactContext context) {
         super(context);
@@ -184,6 +200,7 @@ class ReactVlcPlayerView extends TextureView implements
     @Override
     public void onHostResume() {
         long timestamp = System.currentTimeMillis();
+        tracePlayback("onHostResume:enter");
 
         // Resume playback if we were playing before pause, OR if surface needs
         // restoration
@@ -206,31 +223,21 @@ class ReactVlcPlayerView extends TextureView implements
 
                 if (requestAudioFocusInternal()) {
                     mMediaPlayer.play();
+                    tracePlayback("onHostResume:play-called");
                 }
             }
         }
 
         isHostPaused = false;
-
-        // FORCE SYNC: Tell JS the actual state of the player to ensure UI matches
-        // Native
-        if (mMediaPlayer != null) {
-            WritableMap map = Arguments.createMap();
-            if (mMediaPlayer.isPlaying()) {
-                map.putString("type", "Playing");
-                // CORRECT EVENT: Tell JS we are playing
-                eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_ON_IS_PLAYING);
-            } else {
-                map.putString("type", "Paused");
-                // CORRECT EVENT: Tell JS we are paused
-                eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_ON_PAUSED);
-            }
-        }
+        tracePlayback("onHostResume:exit");
+        // Keep playback event source-of-truth in VLC listener callbacks.
+        // Avoid forcing a paused event on resume before native play transition settles.
     }
 
     @Override
     public void onHostPause() {
         long timestamp = System.currentTimeMillis();
+        tracePlayback("onHostPause:enter");
         // 1. Capture playing state BEFORE we pause
         // If player is playing, OR if our internal flag says we are not paused (intent
         // to play)
@@ -262,14 +269,12 @@ class ReactVlcPlayerView extends TextureView implements
             if (mMediaPlayer != null && mMediaPlayer.isPlaying()) {
                 isPaused = true;
                 mMediaPlayer.pause();
-
-                WritableMap map = Arguments.createMap();
-                map.putString("type", "Paused");
-                // CORRECT EVENT: Tell JS we are paused
-                eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_ON_PAUSED);
+                emitPausedEvent(Arguments.createMap());
                 Log.i(TAG, "onHostPause: Paused playback (Background)");
+                tracePlayback("onHostPause:pause-called");
             }
         }
+        tracePlayback("onHostPause:exit");
     }
 
     @Override
@@ -301,11 +306,7 @@ class ReactVlcPlayerView extends TextureView implements
                     isPaused = true;
                     mMediaPlayer.pause();
                     setKeepScreenOn(false);
-
-                    WritableMap map = Arguments.createMap();
-                    map.putString("type", "Paused");
-                    // CORRECT EVENT: Tell JS we are paused
-                    eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_ON_PAUSED);
+                    emitPausedEvent(Arguments.createMap());
                 }
             }
         }
@@ -328,20 +329,18 @@ class ReactVlcPlayerView extends TextureView implements
         @Override
         public void onSurfacesDestroyed(IVLCVout ivlcVout) {
             isSurfaceViewDestory = true;
+            tracePlayback("onSurfacesDestroyed");
 
-            // CRITICAL FIX: Pausing player when surface is destroyed (Background/Minimize)
-            // This prevents "Run to End" bug where video finishes in background and resets
-            // to 0.
-            if (!playInBackground) {
+            // Only pause on surface destroy when host is actually paused/backgrounded.
+            // Surface recreation can happen transiently while foregrounded.
+            if (isHostPaused && !playInBackground) {
                 if (mMediaPlayer != null && mMediaPlayer.isPlaying()) {
                     isPaused = true;
 
                     mMediaPlayer.pause();
-
-                    WritableMap map = Arguments.createMap();
-                    map.putString("type", "Paused");
-                    eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_ON_PAUSED);
-                    Log.i(TAG, "onSurfacesDestroyed: Paused playback (!playInBackground)");
+                    emitPausedEvent(Arguments.createMap());
+                    Log.i(TAG, "onSurfacesDestroyed: Paused playback (host paused + !playInBackground)");
+                    tracePlayback("onSurfacesDestroyed:pause-called");
                 }
             }
         }
@@ -351,6 +350,7 @@ class ReactVlcPlayerView extends TextureView implements
     // AudioManager.OnAudioFocusChangeListener implementation
     @Override
     public void onAudioFocusChange(int focusChange) {
+        tracePlayback("onAudioFocusChange:" + focusChange);
         switch (focusChange) {
             case AudioManager.AUDIOFOCUS_GAIN:
                 // Regained focus
@@ -368,11 +368,11 @@ class ReactVlcPlayerView extends TextureView implements
                         isPaused = false;
                         mMediaPlayer.play();
                         setKeepScreenOn(true);
+                        tracePlayback("audioFocus:gain-play-called");
 
                         WritableMap map = createEventMap();
                         if (map != null) {
-                            map.putString("type", "Playing");
-                            eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_ON_IS_PLAYING);
+                            emitPlayingEvent(map);
                         }
                     }
                 }
@@ -387,12 +387,12 @@ class ReactVlcPlayerView extends TextureView implements
                     isPaused = true;
                     mMediaPlayer.pause();
                     setKeepScreenOn(false);
+                    tracePlayback("audioFocus:loss-pause-called");
 
                     // Notify JS side
                     WritableMap map = createEventMap();
                     if (map != null) {
-                        map.putString("type", "Paused");
-                        eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_ON_PAUSED);
+                        emitPausedEvent(map);
                         Log.i(TAG, "Paused playback due to permanent audio focus loss");
                     }
                 }
@@ -406,11 +406,11 @@ class ReactVlcPlayerView extends TextureView implements
                         isPaused = true;
                         mMediaPlayer.pause();
                         setKeepScreenOn(false);
+                        tracePlayback("audioFocus:transient-pause-called");
 
                         WritableMap map = createEventMap();
                         if (map != null) {
-                            map.putString("type", "Paused");
-                            eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_ON_PAUSED);
+                            emitPausedEvent(map);
                             Log.i(TAG, "Paused playback due to transient audio focus loss");
                         }
                     }
@@ -447,11 +447,11 @@ class ReactVlcPlayerView extends TextureView implements
                             mResumeOnFocusGain = false; // User unplugged - don't auto-resume
                             mMediaPlayer.pause();
                             setKeepScreenOn(false);
+                            tracePlayback("audioNoisy:pause-called");
 
                             WritableMap map = createEventMap();
                             if (map != null) {
-                                map.putString("type", "Paused");
-                                eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_ON_PAUSED);
+                                emitPausedEvent(map);
                                 Log.i(TAG, "Paused: headphones disconnected (ACTION_AUDIO_BECOMING_NOISY)");
                             }
                         }
@@ -682,6 +682,103 @@ class ReactVlcPlayerView extends TextureView implements
         return map;
     }
 
+    private boolean shouldSuppressPlaybackEvent(String type) {
+        long now = System.currentTimeMillis();
+        if (type.equals(mLastPlaybackEventType) && (now - mLastPlaybackEventTimestamp) < PLAYBACK_EVENT_DEBOUNCE_MS) {
+            return true;
+        }
+        mLastPlaybackEventType = type;
+        mLastPlaybackEventTimestamp = now;
+        return false;
+    }
+
+    private boolean isTransientSeekPlaybackSuppressed() {
+        if (isPaused) {
+            return false;
+        }
+        final long now = System.currentTimeMillis();
+        if (now < mSuppressPlaybackEventsUntilMs) {
+            return true;
+        }
+        return mTransientSeekSuppressionBudget > 0 && now < mTransientSeekSuppressionUntilMs;
+    }
+
+    private void beginTransientSeekSuppression() {
+        final long now = System.currentTimeMillis();
+        mSuppressPlaybackEventsUntilMs = now + SEEK_FLUSH_EVENT_SUPPRESS_MS;
+        mTransientSeekSuppressionBudget = SEEK_FLUSH_SUPPRESSION_BUDGET;
+        mTransientSeekSuppressionUntilMs = now + SEEK_FLUSH_EVENT_HARD_TIMEOUT_MS;
+    }
+
+    private void consumeTransientSeekSuppression() {
+        if (mTransientSeekSuppressionBudget > 0) {
+            mTransientSeekSuppressionBudget--;
+            if (mTransientSeekSuppressionBudget == 0) {
+                mTransientSeekSuppressionUntilMs = 0L;
+            }
+        }
+    }
+
+    private void clearTransientSeekSuppression() {
+        mSuppressPlaybackEventsUntilMs = 0L;
+        mTransientSeekSuppressionBudget = 0;
+        mTransientSeekSuppressionUntilMs = 0L;
+    }
+
+    private void emitPausedEvent(WritableMap map) {
+        WritableMap eventMap = map != null ? map : Arguments.createMap();
+        eventMap.putString("type", "Paused");
+        if (shouldSuppressPlaybackEvent("Paused")) {
+            tracePlayback("emitPausedEvent:suppressed");
+            return;
+        }
+        tracePlayback("emitPausedEvent:sent");
+        eventEmitter.sendEvent(eventMap, VideoEventEmitter.EVENT_ON_PAUSED);
+    }
+
+    private void emitPlayingEvent(WritableMap map) {
+        WritableMap eventMap = map != null ? map : Arguments.createMap();
+        eventMap.putString("type", "Playing");
+        // Hard guard: never emit playing while pause intent is active.
+        if (isPaused) {
+            tracePlayback("emitPlayingEvent:suppressed-paused-intent");
+            return;
+        }
+        if (shouldSuppressPlaybackEvent("Playing")) {
+            tracePlayback("emitPlayingEvent:suppressed");
+            return;
+        }
+        tracePlayback("emitPlayingEvent:sent");
+        eventEmitter.sendEvent(eventMap, VideoEventEmitter.EVENT_ON_IS_PLAYING);
+    }
+
+    private ExecutorService ensureSeekExecutor() {
+        if (seekExecutor == null || seekExecutor.isShutdown()) {
+            seekExecutor = Executors.newSingleThreadExecutor();
+        }
+        return seekExecutor;
+    }
+
+    private void tracePlayback(String where) {
+        boolean nativePlaying = false;
+        float nativePos = -1f;
+        try {
+            if (mMediaPlayer != null) {
+                nativePlaying = mMediaPlayer.isPlaying();
+                nativePos = mMediaPlayer.getPosition();
+            }
+        } catch (Exception ignored) {
+        }
+        Log.w(TAG, "[TRACE] " + where
+                + " | isPaused=" + isPaused
+                + " isHostPaused=" + isHostPaused
+                + " playInBackground=" + playInBackground
+                + " isInPipMode=" + isInPipMode
+                + " surfaceDestroyed=" + isSurfaceViewDestory
+                + " nativePlaying=" + nativePlaying
+                + " nativePos=" + nativePos);
+    }
+
     private MediaPlayer.EventListener mPlayerListener = new MediaPlayer.EventListener() {
         @Override
         public void onEvent(MediaPlayer.Event event) {
@@ -693,6 +790,7 @@ class ReactVlcPlayerView extends TextureView implements
             // events.
             switch (event.type) {
                 case MediaPlayer.Event.EndReached: {
+                    mNativeStopped = true;
                     // CRITICAL FIX: Emit final 100% progress event before Ending
                     // This ensures the seekbar always snaps to the very end
                     WritableMap progressMap = Arguments.createMap();
@@ -709,16 +807,32 @@ class ReactVlcPlayerView extends TextureView implements
                         return;
                     map.putString("type", "Ended");
                     setKeepScreenOn(false);
-                    // CRITICAL: When EndReached is triggered, the VLC player enters a final state.
-                    // We call stop() to transition it back to Stopped state, which is reactive to
-                    // play/seek.
-                    if (mMediaPlayer != null) {
-                        mMediaPlayer.stop();
-                    }
                     eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_END);
                     break;
                 }
                 case MediaPlayer.Event.Playing: {
+                    mNativeStopped = false;
+                    // Root race fix: VLC can transiently report Playing while user intent is paused
+                    // (seek revive, decoder wake-up, rapid toggle). Do not surface it.
+                    if (isPaused) {
+                        tracePlayback("event:Playing(suppressed-paused-intent)");
+                        try {
+                            if (mMediaPlayer.isPlaying()) {
+                                mMediaPlayer.pause();
+                            }
+                        } catch (Exception ignored) {
+                        }
+                        setKeepScreenOn(false);
+                        updatePlayPauseState(PlaybackStateCompat.STATE_PAUSED);
+                        break;
+                    }
+                    if (isTransientSeekPlaybackSuppressed()) {
+                        tracePlayback("event:Playing(suppressed-transient-seek)");
+                        consumeTransientSeekSuppression();
+                        // Skip transient playing event generated by internal seek flush.
+                        break;
+                    }
+                    tracePlayback("event:Playing");
                     WritableMap map = createEventMap();
                     if (map == null)
                         return;
@@ -773,9 +887,8 @@ class ReactVlcPlayerView extends TextureView implements
                         }
                     }
 
-                    map.putString("type", "Playing");
                     setKeepScreenOn(true); // Acquire wake lock
-                    eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_ON_IS_PLAYING);
+                    emitPlayingEvent(map);
 
                     // RE-APPLIED FIX: Move video info update here (only when playback starts)
                     // instead of in the progress polling loop to save CPU cycles.
@@ -794,12 +907,19 @@ class ReactVlcPlayerView extends TextureView implements
                     break;
                 }
                 case MediaPlayer.Event.Paused: {
+                    mNativeStopped = false;
+                    if (isTransientSeekPlaybackSuppressed()) {
+                        tracePlayback("event:Paused(suppressed-transient-seek)");
+                        consumeTransientSeekSuppression();
+                        // Skip transient paused event generated by internal seek flush.
+                        break;
+                    }
+                    tracePlayback("event:Paused");
                     WritableMap map = createEventMap();
                     if (map == null)
                         return;
-                    map.putString("type", "Paused");
                     setKeepScreenOn(false); // Release wake lock
-                    eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_ON_PAUSED);
+                    emitPausedEvent(map);
                     updatePlayPauseState(PlaybackStateCompat.STATE_PAUSED);
                     break;
                 }
@@ -825,9 +945,12 @@ class ReactVlcPlayerView extends TextureView implements
                     bufferingHandler.postDelayed(pendingBufferingEvent, BUFFERING_DEBOUNCE_MS);
                     break;
                 case MediaPlayer.Event.Stopped: {
+                    tracePlayback("event:Stopped");
                     WritableMap map = createEventMap();
                     if (map == null)
                         return;
+                    isPaused = true;
+                    mNativeStopped = true;
                     map.putString("type", "Stopped");
                     setKeepScreenOn(false); // Release wake lock
                     eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_ON_VIDEO_STOPPED);
@@ -835,6 +958,8 @@ class ReactVlcPlayerView extends TextureView implements
                     break;
                 }
                 case MediaPlayer.Event.EncounteredError: {
+                    mNativeStopped = true;
+                    tracePlayback("event:EncounteredError");
                     WritableMap map = createEventMap();
                     if (map == null)
                         return;
@@ -933,6 +1058,10 @@ class ReactVlcPlayerView extends TextureView implements
         if (this.getSurfaceTexture() == null) {
             return;
         }
+        if (srcMap == null) {
+            Log.w(TAG, "createPlayer: source map is null, skipping player creation.");
+            return;
+        }
         try {
             final ArrayList<String> cOptions = new ArrayList<>();
             String uriString = srcMap.hasKey("uri") ? srcMap.getString("uri") : null;
@@ -1028,7 +1157,6 @@ class ReactVlcPlayerView extends TextureView implements
                 }
             }
 
-            DisplayMetrics dm = getResources().getDisplayMetrics();
             Media m = null;
             if (isNetwork) {
                 Uri uri = Uri.parse(uriString);
@@ -1084,11 +1212,13 @@ class ReactVlcPlayerView extends TextureView implements
                 Log.i(TAG, "Added audio delay media option: " + mAudioDelay + "ms");
             }
 
-            mVideoInfo = null;
             mVideoInfoHash = null;
             isResizeModeApplied = false;
             currentlyAppliedAudioTrack = -1; // Reset to force audio track reapplication for new media
             mLastBridgeSeekValue = Float.NaN; // Reset seek filter for new media
+            mLastPlaybackEventType = null;
+            mLastPlaybackEventTimestamp = 0L;
+            mNativeStopped = false;
 
             mMediaPlayer.setMedia(m);
             m.release();
@@ -1184,6 +1314,18 @@ class ReactVlcPlayerView extends TextureView implements
         if (mProgressUpdateRunnable != null) {
             mProgressUpdateHandler.removeCallbacks(mProgressUpdateRunnable);
         }
+        if (mPendingSeekFlushPlayRunnable != null) {
+            mProgressUpdateHandler.removeCallbacks(mPendingSeekFlushPlayRunnable);
+            mPendingSeekFlushPlayRunnable = null;
+        }
+        if (mPendingSeekVerifyRunnable != null) {
+            mProgressUpdateHandler.removeCallbacks(mPendingSeekVerifyRunnable);
+            mPendingSeekVerifyRunnable = null;
+        }
+        if (mPendingReviveFallbackRunnable != null) {
+            mProgressUpdateHandler.removeCallbacks(mPendingReviveFallbackRunnable);
+            mPendingReviveFallbackRunnable = null;
+        }
 
         if (mMediaPlayer != null) {
             // SAVE POSITION before releasing
@@ -1225,19 +1367,99 @@ class ReactVlcPlayerView extends TextureView implements
             currentPfd = null;
         }
 
-        releaseMediaSession();
-
         isResizeModeApplied = false;
         currentlyAppliedAudioTrack = -1; // Reset tracking state
         mLastBridgeSeekValue = Float.NaN; // Reset seek filter
+        mLastRequestedSeekPosition = -1f;
+        mLastRequestedSeekAtMs = 0L;
+        clearTransientSeekSuppression();
     }
 
     // Track last seek to prevent identical repeated seeks
     private float lastSeekPosition = -1f;
+    private long mLastReviveFallbackTime = 0L;
+    private static final long REVIVE_FALLBACK_COOLDOWN_MS = 900L;
     // Minimal threshold: 0.01% - only blocks truly duplicate seeks
     // For 1hr video: 0.01% = 0.36 seconds
     // For 30min video: 0.01% = 0.18 seconds
     private static final float SEEK_THRESHOLD = 0.0001f;
+
+    private float resolveRestartTarget(float defaultTarget) {
+        final long now = System.currentTimeMillis();
+        if (mLastRequestedSeekAtMs > 0
+                && (now - mLastRequestedSeekAtMs) <= SEEK_OVERRIDE_RECENT_MS
+                && mLastRequestedSeekPosition >= 0f
+                && mLastRequestedSeekPosition <= 1f) {
+            return Math.max(0f, Math.min(0.98f, mLastRequestedSeekPosition));
+        }
+        return Math.max(0f, Math.min(0.98f, defaultTarget));
+    }
+
+    private void scheduleReviveFallback(final float targetPosition, final String reason) {
+        final long now = System.currentTimeMillis();
+        final boolean replacingPending = mPendingReviveFallbackRunnable != null;
+        if (!replacingPending && (now - mLastReviveFallbackTime) < REVIVE_FALLBACK_COOLDOWN_MS) {
+            return;
+        }
+        mLastReviveFallbackTime = now;
+
+        if (mPendingReviveFallbackRunnable != null) {
+            mProgressUpdateHandler.removeCallbacks(mPendingReviveFallbackRunnable);
+            mPendingReviveFallbackRunnable = null;
+        }
+
+        mPendingReviveFallbackRunnable = new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    if (mMediaPlayer == null) {
+                        mPendingReviveFallbackRunnable = null;
+                        return;
+                    }
+                    // Do not recreate player when user intent is paused.
+                    if (isPaused) {
+                        mPendingReviveFallbackRunnable = null;
+                        return;
+                    }
+                    if (mMediaPlayer.isPlaying()) {
+                        mPendingReviveFallbackRunnable = null;
+                        return;
+                    }
+                    if (srcMap == null) {
+                        mPendingReviveFallbackRunnable = null;
+                        return;
+                    }
+
+                    final boolean keepPausedIntent = isPaused;
+                    final float clamped = Math.max(0f, Math.min(0.98f, targetPosition));
+                    Log.w(TAG, "reviveFallback: reason=" + reason + ", target=" + clamped
+                            + " recreating player, keepPausedIntent=" + keepPausedIntent);
+                    mSavedPosition = clamped;
+                    // Temporarily allow autoplay during recreation so VLC can decode and seek.
+                    isPaused = false;
+                    createPlayer(true, true);
+
+                    // Restore paused intent after recreation if user was paused.
+                    if (keepPausedIntent) {
+                        mProgressUpdateHandler.postDelayed(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (mMediaPlayer != null) {
+                                    isPaused = true;
+                                    mMediaPlayer.pause();
+                                    setKeepScreenOn(false);
+                                }
+                            }
+                        }, 220);
+                    }
+                } catch (Exception ignored) {
+                } finally {
+                    mPendingReviveFallbackRunnable = null;
+                }
+            }
+        };
+        mProgressUpdateHandler.postDelayed(mPendingReviveFallbackRunnable, 240);
+    }
 
     /**
      * Determines if a seek call from the React bridge should be skipped.
@@ -1268,48 +1490,238 @@ class ReactVlcPlayerView extends TextureView implements
      * @param position
      */
     public void setPosition(final float position) {
+        if (mMediaPlayer == null) {
+            return;
+        }
+        if (position < 0 || position > 1) {
+            return;
+        }
 
-        if (mMediaPlayer != null) {
-            if (position >= 0 && position <= 1) {
-                // Submit seek to background thread to avoid blocking UI
-                seekExecutor.submit(new Runnable() {
-                    @Override
-                    public void run() {
-                        try {
-                            long seekStartTime = System.currentTimeMillis();
-                            // Skip only if seeking to nearly identical position
-                            if (Math.abs(position - lastSeekPosition) < SEEK_THRESHOLD) {
+        mLastRequestedSeekPosition = position;
+        mLastRequestedSeekAtMs = System.currentTimeMillis();
 
-                                return;
-                            }
+        // Skip only if seeking to nearly identical position
+        if (Math.abs(position - lastSeekPosition) < SEEK_THRESHOLD) {
+            return;
+        }
+        lastSeekPosition = position;
 
-                            lastSeekPosition = position;
+        // libVLC player mutations are safer on main thread (play/pause/seek sequencing).
+        mProgressUpdateHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    if (mMediaPlayer == null) {
+                        return;
+                    }
 
-                            // Handle 'revival' from Ended/Stopped states
-                            if (mMediaPlayer != null) {
-                                if (!mMediaPlayer.isPlaying() && !isPaused) {
+                    boolean nativePlaying = mMediaPlayer.isPlaying();
+                    float nativePos = mMediaPlayer.getPosition();
+                    long lengthMs = mMediaPlayer.getLength();
+                    long currentMs = mMediaPlayer.getTime();
+                    long targetMs = lengthMs > 0 ? (long) (position * lengthMs) : -1L;
+                    final int seekToken = ++mSeekToken;
+                    // If native core is stopped (or close to end), seek must revive playback path first.
+                    boolean likelyStoppedOrEnded = mNativeStopped || nativePos < 0f || nativePos >= END_STATE_POSITION_THRESHOLD;
+                    boolean shouldReviveForSeek = !isPaused && !nativePlaying && likelyStoppedOrEnded;
+                    boolean backwardSeek = targetMs >= 0 && currentMs >= 0 && (currentMs - targetMs) > 200;
+                    boolean nearEndWindow = nativePos >= 0.78f
+                            || (lengthMs > 0 && currentMs >= (long) (lengthMs * 0.75f));
+                    boolean largeBackwardSeek = nativePlaying
+                            && targetMs >= 0
+                            && currentMs >= 0
+                            && (currentMs - targetMs) > 1200;
+                    boolean backwardNearEndSeek = nativePlaying && backwardSeek && nearEndWindow;
+                    boolean needsFlush = largeBackwardSeek || backwardNearEndSeek;
+                    Log.d(TAG, "setPosition: target=" + position + ", nativePos=" + nativePos
+                            + ", nativePlaying=" + nativePlaying + ", isPaused=" + isPaused
+                            + ", targetMs=" + targetMs + ", currentMs=" + currentMs
+                            + ", revive=" + shouldReviveForSeek
+                            + ", backwardSeek=" + backwardSeek
+                            + ", nearEndWindow=" + nearEndWindow
+                            + ", needsFlush=" + needsFlush);
 
-                                    mMediaPlayer.setPosition(position);
-                                    if (requestAudioFocusInternal()) {
-                                        mMediaPlayer.play();
+                    if (shouldReviveForSeek) {
+                        if (mPendingReviveFallbackRunnable != null) {
+                            mProgressUpdateHandler.removeCallbacks(mPendingReviveFallbackRunnable);
+                            mPendingReviveFallbackRunnable = null;
+                        }
+                        final boolean keepPausedAfterSeek = isPaused;
+                        requestAudioFocusInternal();
+                        mMediaPlayer.play();
+                        if (targetMs >= 0) {
+                            mMediaPlayer.setTime(targetMs);
+                        } else {
+                            mMediaPlayer.setPosition(position);
+                        }
+
+                        // If user intent is paused, pause again after forcing frame refresh.
+                        if (keepPausedAfterSeek) {
+                            mProgressUpdateHandler.postDelayed(new Runnable() {
+                                @Override
+                                public void run() {
+                                    if (mMediaPlayer != null && isPaused) {
+                                        mMediaPlayer.pause();
+                                        setKeepScreenOn(false);
                                     }
-
-                                    // Only update state if we actually changed play state
-                                    // We can post this back to main thread or skip during rapid scrubbing
-                                    // updatePlayPauseState(...) - SKIPPED for performance during seek
-                                } else {
-
-                                    mMediaPlayer.setPosition(position);
-
                                 }
-                            }
-                        } catch (Exception e) {
+                            }, 100);
+                        }
+                        scheduleReviveFallback(Math.max(0f, Math.min(0.98f, position)), "seek-revive-from-stopped");
+                    } else if (!nativePlaying && !isPaused) {
+                        if (targetMs >= 0) {
+                            mMediaPlayer.setTime(targetMs);
+                        } else {
+                            mMediaPlayer.setPosition(position);
+                        }
+                        requestAudioFocusInternal();
+                        mMediaPlayer.play();
+                        if (mNativeStopped || nativePos >= END_STATE_POSITION_THRESHOLD) {
+                            scheduleReviveFallback(Math.max(0f, Math.min(0.98f, position)), "seek-from-stopped");
+                        }
+                    } else {
+                        if (needsFlush && targetMs >= 0) {
+                            Log.d(TAG, "setPosition: flush path, currentMs=" + currentMs
+                                    + ", targetMs=" + targetMs
+                                    + ", largeBackwardSeek=" + largeBackwardSeek
+                                    + ", backwardNearEndSeek=" + backwardNearEndSeek);
+                            beginTransientSeekSuppression();
+                            mMediaPlayer.pause();
+                            mMediaPlayer.setTime(targetMs);
 
+                            if (!isPaused) {
+                                if (mPendingSeekFlushPlayRunnable != null) {
+                                    mProgressUpdateHandler.removeCallbacks(mPendingSeekFlushPlayRunnable);
+                                }
+                                mPendingSeekFlushPlayRunnable = new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        if (mMediaPlayer != null && !isPaused) {
+                                            requestAudioFocusInternal();
+                                            mMediaPlayer.play();
+                                        }
+                                    }
+                                };
+                                mProgressUpdateHandler.postDelayed(mPendingSeekFlushPlayRunnable, 45);
+                            }
+                        } else {
+                            if (targetMs >= 0) {
+                                mMediaPlayer.setTime(targetMs);
+                            } else {
+                                mMediaPlayer.setPosition(position);
+                            }
                         }
                     }
-                });
+
+                    // Verify seek landed in two phases. A single early check misses delayed stalls.
+                    if (!isPaused && targetMs >= 0) {
+                        scheduleSeekVerify(targetMs, seekToken, 0);
+                    }
+
+                    WritableMap seekMap = createEventMap();
+                    if (seekMap != null) {
+                        seekMap.putString("type", "TimeChanged");
+                        eventEmitter.sendEvent(seekMap, VideoEventEmitter.EVENT_SEEK);
+                    }
+                } catch (Exception ignored) {
+                }
             }
+        });
+    }
+
+    private void performSeekRecoveryFlush(final long targetForVerify) {
+        if (mMediaPlayer == null || isPaused) {
+            return;
         }
+        beginTransientSeekSuppression();
+        mMediaPlayer.pause();
+        mMediaPlayer.setTime(targetForVerify);
+
+        if (mPendingSeekFlushPlayRunnable != null) {
+            mProgressUpdateHandler.removeCallbacks(mPendingSeekFlushPlayRunnable);
+        }
+        mPendingSeekFlushPlayRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (mMediaPlayer != null && !isPaused) {
+                    requestAudioFocusInternal();
+                    mMediaPlayer.play();
+                }
+            }
+        };
+        mProgressUpdateHandler.postDelayed(mPendingSeekFlushPlayRunnable, 45);
+    }
+
+    private void scheduleSeekVerify(final long targetForVerify, final int seekToken, final int pass) {
+        if (mMediaPlayer == null || isPaused) {
+            return;
+        }
+        if (mPendingSeekVerifyRunnable != null) {
+            mProgressUpdateHandler.removeCallbacks(mPendingSeekVerifyRunnable);
+        }
+
+        final long delay = pass == 0 ? SEEK_VERIFY_DELAY_EARLY_MS : SEEK_VERIFY_DELAY_LATE_MS;
+        mPendingSeekVerifyRunnable = new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    if (mMediaPlayer == null || isPaused) {
+                        return;
+                    }
+                    if (seekToken != mSeekToken) {
+                        return;
+                    }
+
+                    long nowMs = mMediaPlayer.getTime();
+                    long drift = Math.abs(nowMs - targetForVerify);
+                    long nowWall = System.currentTimeMillis();
+                    long sinceFrameMs = mLastSurfaceUpdateAtMs > 0
+                            ? (nowWall - mLastSurfaceUpdateAtMs)
+                            : 0L;
+                    boolean nativePlaying = mMediaPlayer.isPlaying();
+                    boolean unexpectedlyNotPlaying = !nativePlaying;
+                    boolean behindTargetTooFar = nowMs + 350 < targetForVerify;
+                    boolean advancedPastTarget = nowMs > (targetForVerify + (pass == 0 ? 2000 : 1800));
+                    // Frame stall alone causes false positives on some devices near scene cuts;
+                    // require a time-position anomaly in addition to stale frames.
+                    boolean frameLikelyStalled = nativePlaying
+                            && sinceFrameMs > (SEEK_FRAME_STALL_MS * 3)
+                            && (behindTargetTooFar || advancedPastTarget);
+                    if (unexpectedlyNotPlaying) {
+                        if (Math.abs(nowMs - targetForVerify) <= 250) {
+                            requestAudioFocusInternal();
+                            mMediaPlayer.play();
+                            if (mNativeStopped) {
+                                float pos = mMediaPlayer.getPosition();
+                                scheduleReviveFallback(Math.max(0f, Math.min(0.98f, pos)), "seek-verify-not-playing");
+                            }
+                            if (pass == 0) {
+                                scheduleSeekVerify(targetForVerify, seekToken, 1);
+                            }
+                            return;
+                        }
+                        // If not playing and not near target, use regular recovery path below.
+                    }
+
+                    if (behindTargetTooFar || advancedPastTarget || frameLikelyStalled) {
+                        Log.w(TAG, "seekVerify(pass=" + pass + "): drift=" + drift
+                                + ", nowMs=" + nowMs
+                                + ", targetMs=" + targetForVerify
+                                + ", nativePlaying=" + nativePlaying
+                                + ", sinceFrameMs=" + sinceFrameMs
+                                + " -> recovery flush");
+                        performSeekRecoveryFlush(targetForVerify);
+                        return;
+                    }
+
+                    if (pass == 0) {
+                        scheduleSeekVerify(targetForVerify, seekToken, 1);
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+        };
+        mProgressUpdateHandler.postDelayed(mPendingSeekVerifyRunnable, delay);
     }
 
     public void setSubtitleUri(String subtitleUri) {
@@ -1327,7 +1739,6 @@ class ReactVlcPlayerView extends TextureView implements
      */
     public void setSrc(String uri, boolean isNetStr, boolean autoplay) {
         this.src = uri;
-        this.netStrTag = isNetStr;
 
         // CRITICAL FIX: Ensure clean state for new source even in this overload
         releasePlayer();
@@ -1337,8 +1748,11 @@ class ReactVlcPlayerView extends TextureView implements
     }
 
     public void setSrc(ReadableMap src) {
+        if (src == null) {
+            return;
+        }
         String newUri = src.hasKey("uri") ? src.getString("uri") : null;
-        // Optimization: If URI is identical AND player exists, DO NOT recreate player.
+        // Optimization: If URI is identical and player exists, avoid recreation.
         if (newUri != null && this.src != null && newUri.equals(this.src) && mMediaPlayer != null) {
             Log.i(TAG, "setSrc: URI is identical (" + newUri + "), skipping player recreation.");
             this.srcMap = src;
@@ -1377,7 +1791,13 @@ class ReactVlcPlayerView extends TextureView implements
 
     public void setmProgressUpdateInterval(float interval) {
         mProgressUpdateInterval = interval;
-        createPlayer(true, false);
+        if (mProgressUpdateRunnable != null) {
+            mProgressUpdateHandler.removeCallbacks(mProgressUpdateRunnable);
+            mProgressUpdateRunnable = null;
+        }
+        if (mMediaPlayer != null && mProgressUpdateInterval > 0) {
+            setProgressUpdateRunnable();
+        }
     }
 
     /**
@@ -1462,6 +1882,9 @@ class ReactVlcPlayerView extends TextureView implements
      */
     public void setPausedModifier(boolean paused) {
         long now = System.currentTimeMillis();
+        tracePlayback("setPausedModifier:requested=" + paused);
+        // Explicit user intent should cancel any stale internal seek suppression.
+        clearTransientSeekSuppression();
 
         // Skip if same state requested within debounce window
         if (paused == lastPauseModifierState && (now - lastPauseModifierTime) < PAUSE_MODIFIER_DEBOUNCE_MS) {
@@ -1476,21 +1899,35 @@ class ReactVlcPlayerView extends TextureView implements
         if (mMediaPlayer != null) {
             if (paused) {
                 isPaused = true;
+                if (mPendingReviveFallbackRunnable != null) {
+                    mProgressUpdateHandler.removeCallbacks(mPendingReviveFallbackRunnable);
+                    mPendingReviveFallbackRunnable = null;
+                }
                 mMediaPlayer.pause();
+                tracePlayback("setPausedModifier:pause-called");
             } else {
                 isPaused = false;
-                // If we are at the very end and user clicks play, restart from beginning
-                if (mMediaPlayer.getPosition() >= 0.99f || !mMediaPlayer.isPlaying()) {
-                    if (mMediaPlayer.getPosition() >= 0.99f) {
-                        mMediaPlayer.setPosition(0);
+                // If we are at the very end and user clicks play, restart from beginning.
+                // Also recover from "stopped but not ended" states via fallback recreate.
+                float nativePos = mMediaPlayer.getPosition();
+                boolean nativePlaying = mMediaPlayer.isPlaying();
+                boolean nearEndOrInvalid = mNativeStopped || nativePos < 0f || nativePos >= END_STATE_POSITION_THRESHOLD;
+                float restartTarget = nearEndOrInvalid ? resolveRestartTarget(0f) : Math.max(0f, nativePos);
+                if (nearEndOrInvalid || !nativePlaying) {
+                    if (nearEndOrInvalid) {
+                        mMediaPlayer.setPosition(restartTarget);
                     }
-                    if (requestAudioFocusInternal()) {
-                        mMediaPlayer.play();
+                    requestAudioFocusInternal();
+                    mMediaPlayer.play();
+                    tracePlayback("setPausedModifier:play-called(revive-or-end)");
+                    // Root fix: only fallback-recreate for true stopped/invalid/end states.
+                    if (nearEndOrInvalid) {
+                        scheduleReviveFallback(restartTarget, "play-from-stopped");
                     }
                 } else {
-                    if (requestAudioFocusInternal()) {
-                        mMediaPlayer.play();
-                    }
+                    requestAudioFocusInternal();
+                    mMediaPlayer.play();
+                    tracePlayback("setPausedModifier:play-called");
                 }
             }
         } else {
@@ -1617,6 +2054,7 @@ class ReactVlcPlayerView extends TextureView implements
         if (mMediaPlayer == null)
             return;
         abandonAudioFocusInternal();
+        mNativeStopped = true;
         mMediaPlayer.stop();
     }
 
@@ -1634,8 +2072,7 @@ class ReactVlcPlayerView extends TextureView implements
             // Notify JS side so UI stays in sync
             WritableMap map = createEventMap();
             if (map != null) {
-                map.putString("type", "Paused");
-                eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_ON_PAUSED);
+                emitPausedEvent(map);
             }
             Log.i(TAG, "Paused via native pausePlayer method");
         }
@@ -1697,10 +2134,7 @@ class ReactVlcPlayerView extends TextureView implements
                     isPaused = true;
                     mMediaPlayer.pause();
                     setKeepScreenOn(false);
-
-                    WritableMap map = Arguments.createMap();
-                    map.putString("type", "Paused");
-                    eventEmitter.onVideoStateChange(map);
+                    emitPausedEvent(Arguments.createMap());
                 }
             }
         }
@@ -1951,6 +2385,7 @@ class ReactVlcPlayerView extends TextureView implements
         // Shutdown executor
         if (seekExecutor != null && !seekExecutor.isShutdown()) {
             seekExecutor.shutdownNow();
+            seekExecutor = null;
         }
 
         this.removeOnLayoutChangeListener(onLayoutChangeListener);
@@ -1960,6 +2395,7 @@ class ReactVlcPlayerView extends TextureView implements
             themedReactContext.removeLifecycleEventListener(this);
         }
         stopPlayback();
+        releaseMediaSession();
 
         // Release surface
         if (surfaceVideo != null) {
@@ -1972,6 +2408,7 @@ class ReactVlcPlayerView extends TextureView implements
     public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
         Log.d(TAG, String.format("Surface texture available: %dx%d", width, height));
         surfaceVideo = new Surface(surface);
+        mLastSurfaceUpdateAtMs = System.currentTimeMillis();
 
         if (mMediaPlayer != null && libvlc != null) {
             // Player exists (e.g. reusing after background play)
@@ -2007,7 +2444,7 @@ class ReactVlcPlayerView extends TextureView implements
 
     @Override
     public void onSurfaceTextureUpdated(SurfaceTexture surface) {
-        // Called frequently, avoid logging here
+        mLastSurfaceUpdateAtMs = System.currentTimeMillis();
     }
 
     private final Media.EventListener mMediaListener = new Media.EventListener() {
@@ -2113,7 +2550,6 @@ class ReactVlcPlayerView extends TextureView implements
             }
 
             eventEmitter.sendEvent(info, VideoEventEmitter.EVENT_ON_LOAD);
-            mVideoInfo = info;
             mVideoInfoHash = currentHash;
         }
     }
@@ -2323,4 +2759,5 @@ class ReactVlcPlayerView extends TextureView implements
             mMediaPlayer.setEqualizer(null);
         }
     }
+
 }

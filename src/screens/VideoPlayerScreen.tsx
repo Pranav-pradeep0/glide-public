@@ -59,7 +59,6 @@ import { HapticEngineService } from '@/services/HapticEngineService';
 import { NavigationService } from '@/services/NavigationService';
 import { useVideoHistoryStore } from '@/store/videoHistoryStore';
 import { useAppStore } from '@/store/appStore';
-import { SubtitleCueStore } from '@/services/SubtitleCueStore';
 
 // Types
 import { SubtitleCue, VideoFile } from '@/types';
@@ -139,6 +138,7 @@ export default function VideoPlayerScreen({ route }: Props) {
     const hasIncrementedView = useRef(false);
     const controlsInsetsRef = useRef(insets);
     const savePlaybackRef = useRef<() => void>(() => { });
+    const persistNowRef = useRef(persistNow);
     const isMounted = useRef(true);
 
     useEffect(() => {
@@ -351,16 +351,6 @@ export default function VideoPlayerScreen({ route }: Props) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isInPipMode, settings.pipBrightnessMode]);
 
-    // Pause player immediately if it starts playing while resume modal is visible
-    useEffect(() => {
-        if (resumeModalVisible && player.state.isPlaying) {
-            player.pause();
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [resumeModalVisible, player.state.isPlaying]);
-
-
-
     // Gestures hook
     const gestures = usePlayerGestures({
         player,
@@ -394,7 +384,7 @@ export default function VideoPlayerScreen({ route }: Props) {
         videoName,
         duration: player.state.duration,
         currentTimeRef: player.currentTimeRef,
-        onSeekToBookmark: player.seekImmediate,
+        onSeekToBookmark: player.commitSeek,
     });
 
     // ========================================================================
@@ -440,6 +430,7 @@ export default function VideoPlayerScreen({ route }: Props) {
         tracksHook.selectedSubtitleTrackIndex,
         settingsHook.settings.audioDelay,
         settingsHook.settings.subtitleDelay,
+        settings.brightnessMode,
         resumePosition
     ]);
 
@@ -447,6 +438,11 @@ export default function VideoPlayerScreen({ route }: Props) {
     useEffect(() => {
         savePlaybackRef.current = savePlaybackProgress;
     }, [savePlaybackProgress]);
+
+    // Keep persist action stable for unmount cleanup
+    useEffect(() => {
+        persistNowRef.current = persistNow;
+    }, [persistNow]);
 
     // Force synchronous save (atomic write)
     const forceSave = useCallback(() => {
@@ -602,6 +598,7 @@ export default function VideoPlayerScreen({ route }: Props) {
 
     const handleSlidingStart = useCallback(() => {
         ui.cancelAutoHide();
+        player.setIsSeeking(true);
         // Capture start time for difference display
         hud.setSeekStartTime(player.currentTimeRef.current);
     }, [ui, hud, player]);
@@ -609,19 +606,15 @@ export default function VideoPlayerScreen({ route }: Props) {
     const handleSliderChange = useCallback((val: number) => {
         // Update shared value for smooth HUD display
         gestures.sharedValues.seekTime.value = val;
-        // Use seekScrubbing to bypass React state updates during drag
-        player.seekScrubbing(val);
+        player.previewSeek(val);
         hud.showSeekHUD(val, null, null, true); // isGestureActive=true
     }, [player, hud, gestures]);
 
     const handleSliderChangeComplete = useCallback((val: number) => {
-        player.seekImmediate(val);
+        player.commitSeek(val);
         hud.showSeekHUD(val, null, null, false); // isGestureActive=false, will auto-hide
         ui.showControls();
         ui.scheduleAutoHide();
-        // Reset scrubbing flag AFTER seek is applied
-        player.isScrubbingShared.value = false;
-
     }, [player, hud, ui]);
 
     // Jump handlers
@@ -639,7 +632,7 @@ export default function VideoPlayerScreen({ route }: Props) {
         hud.setSeekStartTime(player.currentTimeRef.current, false);
 
         gestures.sharedValues.seekTime.value = newTime;
-        player.seekImmediate(newTime);
+        player.commitSeek(newTime);
         hud.showSeekHUD(newTime, 'backward', null, false);
         ui.showControls();
         ui.scheduleAutoHide();
@@ -659,7 +652,7 @@ export default function VideoPlayerScreen({ route }: Props) {
         hud.setSeekStartTime(player.currentTimeRef.current, false);
 
         gestures.sharedValues.seekTime.value = newTime;
-        player.seekImmediate(newTime);
+        player.commitSeek(newTime);
         hud.showSeekHUD(newTime, 'forward', null, false);
         ui.showControls();
         ui.scheduleAutoHide();
@@ -882,15 +875,50 @@ export default function VideoPlayerScreen({ route }: Props) {
             setResumeModalVisible(false);
             player.play();
         } else if (action === 'restart') {
+            const effectiveDuration =
+                player.state.duration > 0
+                    ? player.state.duration
+                    : (savedDuration ?? 0);
+
+            // Reset persisted resume point immediately so old history cannot reappear.
+            if (videoPath && videoName) {
+                updatePlaybackPosition(
+                    videoPath,
+                    videoName,
+                    0,
+                    effectiveDuration,
+                    tracksHook.selectedAudioTrackId,
+                    tracksHook.selectedSubtitleTrackIndex ?? undefined,
+                    settingsHook.settings.audioDelay,
+                    settingsHook.settings.subtitleDelay,
+                    settings.brightnessMode === 'video' ? brightnessRef.current : undefined
+                );
+                persistNow();
+            }
+
             setResumeModalVisible(false);
-            player.seekImmediate(0);
+            player.clearResumePosition();
+            player.commitSeek(0);
             player.play();
         } else if (action === 'recap') {
             // Don't close modal yet - handleRecapTrigger will show RecapModal or toast
             // Modal will be hidden when recap is successful or on close button
             handleRecapTrigger();
         }
-    }, [player, handleRecapTrigger]);
+    }, [
+        player,
+        handleRecapTrigger,
+        savedDuration,
+        videoPath,
+        videoName,
+        updatePlaybackPosition,
+        tracksHook.selectedAudioTrackId,
+        tracksHook.selectedSubtitleTrackIndex,
+        settingsHook.settings.audioDelay,
+        settingsHook.settings.subtitleDelay,
+        settings.brightnessMode,
+        persistNow
+    ]);
 
     // ========================================================================
     // LIFECYCLE EFFECTS
@@ -957,10 +985,13 @@ export default function VideoPlayerScreen({ route }: Props) {
             player.videoRef.current?.stopPlayer();
             const isNetwork = NavigationService.isNetworkStream(videoPath);
             if (!isNetwork) {
-                forceSave();
+                savePlaybackRef.current();
+                persistNowRef.current();
             }
         };
-    }, [videoPath, videoName, player, forceSave]);
+        // videoPath is route-static for this screen instance; refs hold latest save actions.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     // Focus effect for orientation
     useFocusEffect(
@@ -1015,7 +1046,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                         source={source}
                         playerKey={settingsHook.settings.playerKey}
                         decoder={settingsHook.settings.decoder}
-                        paused={player.state.paused}
+                        paused={player.state.paused || resumeModalVisible || recapVisible}
                         rate={hud.state.speed.rate}
                         muted={settingsHook.settings.muted || resumeModalVisible}
                         repeat={settingsHook.settings.repeat}
@@ -1112,7 +1143,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                     onToggleAudio={handleToggleAudio}
                     onToggleSubtitle={handleToggleSubtitle}
                     onAddBookmark={handleAddBookmark}
-                    paused={player.state.paused}
+                    paused={player.state.paused || resumeModalVisible || recapVisible}
                     onTogglePlayPause={handleTogglePlayPause}
                     currentTime={player.currentTimeShared}
                     duration={player.durationShared}

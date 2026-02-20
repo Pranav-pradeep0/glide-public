@@ -200,7 +200,7 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
             // Volume initialization is handled inside useAudioController now
         };
         init();
-    }, [currentBrightness, initialBrightness]);
+    }, [currentBrightness, initialBrightness, onBrightnessChange]);
 
     // ========================================================================
     // ZOOM HELPERS
@@ -220,6 +220,7 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
 
     // Seek
     const handleSeekStart = useCallback(() => {
+        player.setIsSeeking(true);
         // Capture initial time when seek begins (for difference display)
         hud.setSeekStartTime(player.currentTimeRef.current);
         // Sync shared value
@@ -229,14 +230,13 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
     }, [hud, player, seekTimeShared]);
 
     const handleSeekUpdate = useCallback((time: number) => {
-        // Update player position and show HUD with gesture active
-        player.seek(time);
+        player.previewSeek(time);
         hud.showSeekHUD(time, null, null, true);
         onSeekUpdate?.(time, true);
     }, [player, hud, onSeekUpdate]);
 
     const handleSeekComplete = useCallback((time: number) => {
-        player.seekImmediate(time);
+        player.commitSeek(time);
         // Show final time with auto-hide (isGestureActive=false)
         hud.showSeekHUD(time, null, null, false);
         ui.showControls();
@@ -308,7 +308,7 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
 
         // Update the shared value used by VideoHUD for instant feedback
         seekTimeShared.value = newTime;
-        player.seekImmediate(newTime);
+        player.commitSeek(newTime);
 
         // Show seek HUD with direction and side for opposite-side positioning
         const direction = side === 'left' ? 'backward' : 'forward';
