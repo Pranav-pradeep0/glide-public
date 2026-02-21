@@ -168,7 +168,7 @@ import Orientation from 'react-native-orientation';
 | `playInBackground`  | Set to `true` or `false` to allow playing in the background                                                                                          | false   |
 | `videoAspectRatio ` | Set the video aspect ratio eg `"16:9"`                                                                                                               |         |
 | `autoAspectRatio`   | Set to `true` or `false` to enable auto aspect ratio                                                                                                 | false   |
-| `resizeMode`        | Set the behavior for the video size (`fill, contain, cover, none, scale-down`)                                                                       | none    |
+| `resizeMode`        | Set the behavior for the video size (`best-fit, fill, contain, cover, stretch, none, scale-down`)                                                    | none    |
 | `style`             | React native stylesheet styles                                                                                                                       | `{}`    |
 | `autoplay`          | Set to `true` or `false` to enable autoplay                                                                                                          | `true`  |
 

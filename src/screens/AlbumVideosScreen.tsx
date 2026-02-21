@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useRef, useEffect } from 'react';
+import React, { useCallback, useState, useRef, useEffect, useMemo } from 'react';
 import {
     View,
     Text,
@@ -6,7 +6,6 @@ import {
     ActivityIndicator,
     TouchableOpacity,
     Dimensions,
-    InteractionManager,
     Alert,
 } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -17,13 +16,12 @@ import Feather from 'react-native-vector-icons/Feather';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { LinearTransition, FadeInDown, ZoomInRight } from 'react-native-reanimated';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import * as RNFS from '@dr.pogodin/react-native-fs';
 import Share from 'react-native-share';
 import { CameraRoll } from '@react-native-camera-roll/camera-roll';
 
 import { RootStackParamList, VideoFile } from '@/types';
 import { useTheme } from '@/hooks/useTheme';
-import { useAlbumVideos } from '@/hooks/useMediaService';
+import { markAlbumCoverDirty, useAlbumVideos } from '@/hooks/useMediaService';
 import { formatFileSize } from '@/utils/formatUtils';
 import { useThumbnail } from '@/hooks/useThumbnails';
 import { NavigationService } from '@/services/NavigationService';
@@ -188,6 +186,13 @@ export default function AlbumVideosScreen() {
     const clearHistoryForPath = useVideoHistoryStore(state => state.clearVideoHistory);
     // Use selector with shallow equality or just get the map reference.
     const history = useVideoHistoryStore(state => state.history);
+    const historyByVideoId = useMemo(() => {
+        const map = new Map<string, VideoHistoryEntry>();
+        for (const entry of history.values()) {
+            if (entry.videoId) map.set(entry.videoId, entry);
+        }
+        return map;
+    }, [history]);
     const isFocused = useIsFocused(); // Force re-render on focus
 
 
@@ -254,6 +259,7 @@ export default function AlbumVideosScreen() {
             await CameraRoll.deletePhotos([videoUri]);
             console.log('[AlbumVideosScreen] File deleted successfully via CameraRoll:', videoUri);
             clearHistoryForPath(videoPath);
+            markAlbumCoverDirty(albumTitle);
             refetch();
         } catch (error) {
             console.error('[AlbumVideosScreen] Delete failed:', {
@@ -300,15 +306,10 @@ export default function AlbumVideosScreen() {
         if (!entry) {
             // 4. Fallback to video ID lookup (name + size)
             const videoId = generateVideoId(file.name, file.size);
-            for (const e of history.values()) {
-                if (e.videoId === videoId) {
-                    entry = e;
-                    break;
-                }
-            }
+            entry = historyByVideoId.get(videoId);
         }
         return entry;
-    }, [history]);
+    }, [history, historyByVideoId]);
 
     const renderItem = useCallback(
         ({ item, index }: { item: VideoFile, index: number }) => {

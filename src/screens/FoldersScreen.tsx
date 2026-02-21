@@ -14,7 +14,7 @@ import {
     Dimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import FastImage from 'react-native-fast-image';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -27,7 +27,6 @@ import Animated, {
     FadeInDown,
     ZoomInRight,
     LinearTransition,
-    Layout
 } from 'react-native-reanimated';
 import { Loader } from '@/components/Loader';
 
@@ -37,7 +36,7 @@ const FlashList = Animated.createAnimatedComponent(FlashListOriginal) as any;
 import { RootStackParamList } from '@/types';
 import { useTheme } from '@/hooks/useTheme';
 import { useAppStore } from '@/store/appStore';
-import { useAlbums, useAlbumVideos, useAlbumCover } from '@/hooks/useMediaService';
+import { consumeDirtyAlbumCovers, useAlbums, useAlbumCover } from '@/hooks/useMediaService';
 import { useThumbnail } from '@/hooks/useThumbnails';
 import { Theme } from '@/theme/theme';
 
@@ -58,8 +57,8 @@ interface AlbumWithCount {
 type ViewMode = 'grid' | 'list';
 type SortByOption = 'name' | 'count' | 'recent';
 
-const AlbumThumbnail = React.memo(({ albumName }: { albumName: string }) => {
-    const coverVideo = useAlbumCover(albumName);
+const AlbumThumbnail = React.memo(({ albumName, refreshKey }: { albumName: string; refreshKey: number }) => {
+    const coverVideo = useAlbumCover(albumName, refreshKey);
     const firstVideoPath = coverVideo?.path;
     const { thumbnail } = useThumbnail(firstVideoPath);
 
@@ -78,7 +77,7 @@ const AlbumThumbnail = React.memo(({ albumName }: { albumName: string }) => {
     );
 });
 
-const AlbumGridCard = React.memo(({ item, onPress, theme, index }: any) => {
+const AlbumGridCard = React.memo(({ item, onPress, theme, index, coverRefreshKey }: any) => {
     return (
         <Animated.View
             // Use spring with high damping to eliminate bounce but keep movement
@@ -92,7 +91,7 @@ const AlbumGridCard = React.memo(({ item, onPress, theme, index }: any) => {
                 activeOpacity={0.7}
             >
                 <View style={[styles.thumbnail, { backgroundColor: theme.colors.surfaceVariant }]}>
-                    <AlbumThumbnail key={item.title} albumName={item.title} />
+                    <AlbumThumbnail key={item.title} albumName={item.title} refreshKey={coverRefreshKey} />
                     <View style={styles.gridCountBadge}>
                         <Feather name="video" size={10} color="#FFF" />
                         <Text style={styles.gridCountText}>{item.count}</Text>
@@ -108,7 +107,7 @@ const AlbumGridCard = React.memo(({ item, onPress, theme, index }: any) => {
     );
 });
 
-const AlbumListItem = React.memo(({ item, onPress, theme, index }: { item: any, onPress: any, theme: Theme, index: any }) => (
+const AlbumListItem = React.memo(({ item, onPress, theme, index, coverRefreshKey }: { item: any, onPress: any, theme: Theme, index: any, coverRefreshKey: number }) => (
     <Animated.View
         entering={FadeInDown.duration(400).springify().damping(20).mass(1).stiffness(150)}
         layout={LinearTransition.springify().damping(25).mass(1).stiffness(120)}
@@ -119,7 +118,7 @@ const AlbumListItem = React.memo(({ item, onPress, theme, index }: { item: any, 
             activeOpacity={0.7}
         >
             <View style={[styles.listThumbnail, { backgroundColor: theme.colors.surfaceVariant }]}>
-                <AlbumThumbnail key={item.title} albumName={item.title} />
+                <AlbumThumbnail key={item.title} albumName={item.title} refreshKey={coverRefreshKey} />
             </View>
             <View style={styles.listInfo}>
                 <Text style={[styles.folderListName, { color: theme.colors.text }]} numberOfLines={1}>
@@ -141,6 +140,18 @@ export default function FoldersScreen() {
     const { settings, updateSettings } = useAppStore();
 
     const { albums, loading, refetch } = useAlbums();
+    const [coverRefreshKey, setCoverRefreshKey] = useState(0);
+
+    useFocusEffect(
+        useCallback(() => {
+            const dirtyAlbums = consumeDirtyAlbumCovers();
+            if (dirtyAlbums.length > 0) {
+                refetch();
+                setCoverRefreshKey((k) => k + 1);
+            }
+            return undefined;
+        }, [refetch])
+    );
 
     const [viewMode, setViewMode] = useState<ViewMode>('list');
     const [sortBy, setSortBy] = useState<SortByOption>('name');
@@ -211,10 +222,10 @@ export default function FoldersScreen() {
 
     const renderAlbum = useCallback(({ item, index }: { item: AlbumWithCount, index: number }) => {
         if (viewMode === 'grid') {
-            return <AlbumGridCard key={item.title} item={item} onPress={() => handleAlbumPress(item)} theme={theme} index={index} />;
+            return <AlbumGridCard key={item.title} item={item} onPress={() => handleAlbumPress(item)} theme={theme} index={index} coverRefreshKey={coverRefreshKey} />;
         }
-        return <AlbumListItem key={item.title} item={item} onPress={() => handleAlbumPress(item)} theme={theme} index={index} />;
-    }, [viewMode, theme, handleAlbumPress]);
+        return <AlbumListItem key={item.title} item={item} onPress={() => handleAlbumPress(item)} theme={theme} index={index} coverRefreshKey={coverRefreshKey} />;
+    }, [viewMode, theme, handleAlbumPress, coverRefreshKey]);
 
     const renderHeaderMain = useCallback(() => (
         <View style={styles.header}>

@@ -15,6 +15,7 @@ import { useSafeAreaInsets, initialWindowMetrics } from 'react-native-safe-area-
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { SystemBars } from 'react-native-edge-to-edge';
+import { PlayerResizeMode } from 'react-native-vlc-media-player';
 
 // Native Modules
 const { AudioControlModule } = NativeModules;
@@ -559,14 +560,12 @@ export default function VideoPlayerScreen({ route }: Props) {
 
     const handleToggleResizeMode = useCallback(() => {
         // Calculate next mode directly here to sync with HUD
-        const modes = ['fill', 'contain', 'cover', 'none'];
+        const modes: PlayerResizeMode[] = ['best-fit', 'contain', 'cover', 'fill', 'scale-down', 'none'];
         const currentMode = settingsHook.settings.resizeMode;
-        // @ts-ignore
         const nextIndex = (modes.indexOf(currentMode) + 1) % modes.length;
         const nextMode = modes[nextIndex];
 
         // Update settings and show HUD
-        // @ts-ignore
         settingsHook.setResizeMode(nextMode);
         hud.showResizeHUD(nextMode);
         ui.showControls();

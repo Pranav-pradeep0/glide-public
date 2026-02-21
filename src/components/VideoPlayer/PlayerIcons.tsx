@@ -35,6 +35,29 @@ export const FillIcon = ({ size = 20, color = "#fff" }: { size?: number, color?:
     </Svg>
 );
 
+export const NoneIcon = ({ size = 20, color = "#fff" }: { size?: number, color?: string }) => (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+        <Rect x="2" y="3" width="20" height="18" rx="2" strokeOpacity={0.6} />
+        <Rect x="8" y="8" width="8" height="8" rx="1" fill={color} fillOpacity={0.85} stroke="none" />
+    </Svg>
+);
+
+export const ScaleDownIcon = ({ size = 20, color = "#fff" }: { size?: number, color?: string }) => (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+        <Rect x="2" y="3" width="20" height="18" rx="2" strokeOpacity={0.6} />
+        <Rect x="7" y="8" width="10" height="8" rx="1" fill={color} fillOpacity={0.7} stroke="none" />
+        <Path d="M5 6l3 0M5 6l0 3M19 18l-3 0M19 18l0-3" stroke={color} strokeOpacity={0.8} />
+    </Svg>
+);
+
+export const BestFitIcon = ({ size = 20, color = "#fff" }: { size?: number, color?: string }) => (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+        <Rect x="2" y="3" width="20" height="18" rx="2" strokeOpacity={0.6} />
+        <Rect x="5" y="6" width="14" height="12" rx="1" fill={color} fillOpacity={0.85} stroke="none" />
+        <Path d="M20 4l.3.8.8.3-.8.3-.3.8-.3-.8-.8-.3.8-.3.3-.8z" fill={color} stroke="none" />
+    </Svg>
+);
+
 // ============================================================================
 // OTHER ICONS
 // ============================================================================
@@ -110,6 +133,8 @@ export const NightModeIcon = ({ size = 20, color = "#fff", active = false }: { s
 // Helper to get icon by mode name
 export const getResizeModeIcon = (resizeMode: string) => {
     switch (resizeMode) {
+        case 'best-fit':
+            return BestFitIcon;
         case 'contain':
             return ContainIcon;
         case 'cover':
@@ -118,6 +143,11 @@ export const getResizeModeIcon = (resizeMode: string) => {
             return StretchIcon;
         case 'fill':
             return FillIcon;
+        case 'none':
+        case 'center':
+            return NoneIcon;
+        case 'scale-down':
+            return ScaleDownIcon;
         default:
             return ContainIcon;
     }

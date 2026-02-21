@@ -245,8 +245,27 @@ export const VideoHUD: React.FC<VideoHUDProps> = React.memo(({
     // Get the appropriate icon for current resize mode
     const ResizeModeIcon = getResizeModeIcon(resizeMode);
 
-    // Capitalize resize mode for display
-    const resizeModeText = resizeMode ? (resizeMode.charAt(0).toUpperCase() + resizeMode.slice(1)) : 'Cover';
+    // Human-readable labels for display modes
+    const resizeModeText = useMemo(() => {
+        switch (resizeMode) {
+            case 'best-fit':
+                return 'Best Fit';
+            case 'scale-down':
+                return 'Scale Down';
+            case 'fill':
+                return 'Fill';
+            case 'stretch':
+                return 'Stretch';
+            case 'cover':
+                return 'Cover';
+            case 'none':
+            case 'center':
+                return 'None';
+            case 'contain':
+            default:
+                return 'Contain';
+        }
+    }, [resizeMode]);
 
     return (
         <>

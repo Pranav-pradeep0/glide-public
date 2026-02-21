@@ -55,7 +55,8 @@ interface RCTVLCPlayerNativeProps {
 
 const RCTVLCPlayer = requireNativeComponent<RCTVLCPlayerNativeProps>("RCTVLCPlayer") as unknown as React.ComponentType<RCTVLCPlayerNativeProps>;
 
-export type VLCPlayerResizeMode = "contain" | "cover" | "stretch" | "center";
+export type VLCPlayerResizeMode =
+    "contain" | "cover" | "fill" | "stretch" | "none" | "scale-down" | "best-fit" | "center";
 export type VLCPlayerAudioTrack = { id: number; name: string };
 export type VLCPlayerTextTrack = { id: number; name: string };
 

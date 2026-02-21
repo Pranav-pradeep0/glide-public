@@ -2,6 +2,23 @@ import { useState, useEffect, useCallback } from 'react';
 import { MediaService } from '@/services/MediaService';
 import { VideoFile } from '@/types';
 
+const albumVideosCache = new Map<string, {
+    videos: VideoFile[];
+    pageInfo: { has_next_page: boolean; end_cursor?: string | null };
+}>();
+const dirtyAlbumCovers = new Set<string>();
+
+export function markAlbumCoverDirty(albumTitle: string | null | undefined) {
+    if (!albumTitle) return;
+    dirtyAlbumCovers.add(albumTitle);
+}
+
+export function consumeDirtyAlbumCovers(): string[] {
+    const albums = Array.from(dirtyAlbumCovers);
+    dirtyAlbumCovers.clear();
+    return albums;
+}
+
 export function useAlbums() {
     const [albums, setAlbums] = useState<Array<{ title: string; count: number }>>([]);
     const [loading, setLoading] = useState(true);
@@ -50,7 +67,7 @@ export function useAlbumVideos(albumTitle: string | null) {
         try {
             // Use current cursor if loading more, otherwise undefined for refresh/first load
             const afterCursor = refresh ? undefined : (pageInfo.end_cursor || undefined);
-            const result = await MediaService.getVideos(albumTitle, 50, afterCursor);
+            const result = await MediaService.getVideos(albumTitle, 50, afterCursor, refresh);
 
             // Map to VideoFile type
             const mappedVideos: VideoFile[] = result.edges.map(edge => ({
@@ -68,8 +85,13 @@ export function useAlbumVideos(albumTitle: string | null) {
 
             if (refresh) {
                 setVideos(mappedVideos);
+                albumVideosCache.set(albumTitle, { videos: mappedVideos, pageInfo: result.page_info });
             } else {
-                setVideos(prev => [...prev, ...mappedVideos]);
+                setVideos(prev => {
+                    const merged = [...prev, ...mappedVideos];
+                    albumVideosCache.set(albumTitle, { videos: merged, pageInfo: result.page_info });
+                    return merged;
+                });
             }
 
             setPageInfo(result.page_info);
@@ -85,6 +107,16 @@ export function useAlbumVideos(albumTitle: string | null) {
     }, [albumTitle, pageInfo.end_cursor, pageInfo.has_next_page, loading, loadingMore]);
 
     useEffect(() => {
+        if (!albumTitle) return;
+        const cached = albumVideosCache.get(albumTitle);
+        if (cached) {
+            setVideos(cached.videos);
+            setPageInfo(cached.pageInfo);
+            // Background refresh to keep cache fresh without blocking initial paint.
+            fetchVideos(true);
+            return;
+        }
+
         setVideos([]);
         setPageInfo({ has_next_page: true, end_cursor: null });
         fetchVideos(true);
@@ -97,12 +129,18 @@ export function useAlbumVideos(albumTitle: string | null) {
         loadingMore,
         hasMore: pageInfo.has_next_page,
         loadMore: () => fetchVideos(false),
-        refetch: () => fetchVideos(true)
+        refetch: () => {
+            if (albumTitle) {
+                albumVideosCache.delete(albumTitle);
+                MediaService.invalidateVideosCache(albumTitle);
+            }
+            return fetchVideos(true);
+        }
     };
 }
 // ... existing code
 
-export function useAlbumCover(albumTitle: string) {
+export function useAlbumCover(albumTitle: string, refreshKey: number = 0) {
     const [coverVideo, setCoverVideo] = useState<VideoFile | null>(null);
 
     useEffect(() => {
@@ -123,6 +161,9 @@ export function useAlbumCover(albumTitle: string) {
                         album: albumTitle,
                         isDirectory: false
                     });
+                } else if (isMounted) {
+                    // Album may be empty after deletes; clear stale cover.
+                    setCoverVideo(null);
                 }
             } catch (error) {
                 // ignore
@@ -132,7 +173,7 @@ export function useAlbumCover(albumTitle: string) {
         fetchCover();
 
         return () => { isMounted = false; };
-    }, [albumTitle]);
+    }, [albumTitle, refreshKey]);
 
     return coverVideo;
 }

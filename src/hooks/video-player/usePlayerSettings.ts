@@ -158,7 +158,7 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
 
     const toggleResizeMode = useCallback(() => {
         setSettings(prev => {
-            const modes = ['cover', 'contain', 'fill', 'none'] as PlayerResizeMode[];
+            const modes = ['best-fit', 'contain', 'cover', 'fill', 'scale-down', 'none'] as PlayerResizeMode[];
             const nextIndex = (modes.indexOf(prev.resizeMode) + 1) % modes.length;
             return { ...prev, resizeMode: modes[nextIndex] };
         });

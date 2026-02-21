@@ -9,7 +9,7 @@ export type PlayerAspectRatio = "16:9" | "1:1" | "4:3" | "3:2" | "21:9" | "9:16"
 /**
  * Video resize mode
  */
-export type PlayerResizeMode = "fill" | "contain" | "cover" | "none" | "scale-down";
+export type PlayerResizeMode = "fill" | "contain" | "cover" | "none" | "scale-down" | "stretch" | "best-fit";
 
 /**
  * VLC Player source configuration options
@@ -309,7 +309,7 @@ export type VLCPlayerProps = VLCPlayerCallbackProps & {
   autoAspectRatio?: boolean;
 
   /**
-   * Set the behavior for the video size (fill, contain, cover, none, scale-down)
+   * Set the behavior for the video size (fill, contain, cover, none, scale-down, best-fit)
    */
   resizeMode?: PlayerResizeMode;
 

@@ -16,6 +16,15 @@ import Animated, {
 import { useWindowDimensions } from 'react-native';
 
 const SPEED_OPTIONS = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0];
+const DISPLAY_MODE_OPTIONS: Array<{ mode: PlayerResizeMode; label: string }> = [
+    { mode: 'best-fit', label: 'BEST FIT' },
+    { mode: 'contain', label: 'CONTAIN' },
+    { mode: 'cover', label: 'COVER' },
+    { mode: 'fill', label: 'FILL' },
+    { mode: 'scale-down', label: 'SCALE DOWN' },
+    { mode: 'none', label: 'NONE' },
+    { mode: 'stretch', label: 'STRETCH' },
+];
 const SLEEP_TIMER_OPTIONS = [
     { label: 'Off', value: null },
     { label: '10m', value: 10 },
@@ -206,7 +215,7 @@ export const QuickSettingsPanel: React.FC<QuickSettingsPanelProps> = memo((props
                         <View style={styles.section}>
                             <Text style={styles.sectionTitle}>DISPLAY MODE</Text>
                             <View style={styles.gridContainer}>
-                                {(['fill', 'contain', 'cover', 'stretch', 'none'] as PlayerResizeMode[]).map(mode => (
+                                {DISPLAY_MODE_OPTIONS.map(({ mode, label }) => (
                                     <Pressable
                                         key={mode}
                                         style={[
@@ -217,7 +226,7 @@ export const QuickSettingsPanel: React.FC<QuickSettingsPanelProps> = memo((props
                                         <Text style={[
                                             styles.gridItemText,
                                             props.resizeMode === mode && styles.activeGridItemText
-                                        ]}>{mode.toUpperCase()}</Text>
+                                        ]}>{label}</Text>
                                     </Pressable>
                                 ))}
                             </View>

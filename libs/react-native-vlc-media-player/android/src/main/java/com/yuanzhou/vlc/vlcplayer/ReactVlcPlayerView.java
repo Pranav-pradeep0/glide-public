@@ -97,6 +97,7 @@ class ReactVlcPlayerView extends TextureView implements
     private boolean playInBackground = false;
     private boolean isInPipMode = false;
     private String resizeMode = "contain";
+    private Boolean mBestFitUsingCover = null;
     private boolean isResizeModeApplied = false;
     private long mAudioDelay = 0;
     private boolean wasPlayingBeforeHostPause = false;
@@ -140,6 +141,12 @@ class ReactVlcPlayerView extends TextureView implements
     private Handler resizeDebounceHandler = new Handler(Looper.getMainLooper());
     private Runnable pendingResize = null;
     private static final int RESIZE_DEBOUNCE_MS = 100;
+    private static final float BEST_FIT_MAX_CROP_RATIO = 0.08f;
+    private static final float BEST_FIT_ENTER_CROP_RATIO = 0.06f;
+    private static final float BEST_FIT_EXIT_CROP_RATIO = 0.10f;
+    private static final float BEST_FIT_MAX_BAR_RATIO = 0.06f;
+    private static final float BEST_FIT_ENTER_BAR_RATIO = 0.05f;
+    private static final float BEST_FIT_EXIT_BAR_RATIO = 0.08f;
     private static final long PLAYBACK_EVENT_DEBOUNCE_MS = 120;
     private String mLastPlaybackEventType = null;
     private long mLastPlaybackEventTimestamp = 0L;
@@ -158,8 +165,9 @@ class ReactVlcPlayerView extends TextureView implements
     private long mLastRequestedSeekAtMs = 0L;
     private static final long SEEK_OVERRIDE_RECENT_MS = 900L;
     private static final long SEEK_FRAME_STALL_MS = 420L;
-    private static final long SEEK_VERIFY_DELAY_EARLY_MS = 140L;
+    private static final long SEEK_VERIFY_DELAY_EARLY_MS = 90L;
     private static final long SEEK_VERIFY_DELAY_LATE_MS = 480L;
+    private static final long SEEK_VERIFY_PROGRESS_EPSILON_MS = 120L;
     private static final float END_STATE_POSITION_THRESHOLD = 0.90f;
     private boolean mNativeStopped = true;
 
@@ -592,9 +600,17 @@ class ReactVlcPlayerView extends TextureView implements
     }
 
     private boolean areDimensionsStable() {
-        return mVideoWidth > 0 && mVideoHeight > 0
-                && getWidth() > 0 && getHeight() > 0
-                && !isSurfaceViewDestory;
+        if (mMediaPlayer == null) {
+            return false;
+        }
+        if (getWidth() <= 0 || getHeight() <= 0 || isSurfaceViewDestory) {
+            return false;
+        }
+        // Auto-aspect mode only needs stable view dimensions.
+        if (autoAspectRatio) {
+            return true;
+        }
+        return mVideoWidth > 0 && mVideoHeight > 0;
     }
 
     private float getVideoDisplayAspectRatio() {
@@ -608,20 +624,25 @@ class ReactVlcPlayerView extends TextureView implements
         return pixelAspect;
     }
 
+    private void clearPendingResizeRequest() {
+        if (pendingResize != null) {
+            resizeDebounceHandler.removeCallbacks(pendingResize);
+            pendingResize = null;
+        }
+    }
+
     private void requestResizeMode() {
         if (!areDimensionsStable()) {
             return;
         }
 
-        if (pendingResize != null) {
-            resizeDebounceHandler.removeCallbacks(pendingResize);
-        }
+        clearPendingResizeRequest();
 
         pendingResize = new Runnable() {
             @Override
             public void run() {
                 if (areDimensionsStable()) {
-                    applyResizeModeInternal(getWidth(), getHeight());
+                    applyResizeMode();
                 }
             }
         };
@@ -1305,6 +1326,8 @@ class ReactVlcPlayerView extends TextureView implements
     }
 
     private void releasePlayer() {
+        clearPendingResizeRequest();
+
         // Clean up buffering handler
         if (pendingBufferingEvent != null) {
             bufferingHandler.removeCallbacks(pendingBufferingEvent);
@@ -1368,8 +1391,15 @@ class ReactVlcPlayerView extends TextureView implements
         }
 
         isResizeModeApplied = false;
+        mVideoWidth = 0;
+        mVideoHeight = 0;
+        mVideoVisibleWidth = 0;
+        mVideoVisibleHeight = 0;
+        mSarNum = 0;
+        mSarDen = 0;
         currentlyAppliedAudioTrack = -1; // Reset tracking state
         mLastBridgeSeekValue = Float.NaN; // Reset seek filter
+        mBestFitUsingCover = null;
         mLastRequestedSeekPosition = -1f;
         mLastRequestedSeekAtMs = 0L;
         clearTransientSeekSuppression();
@@ -1377,11 +1407,11 @@ class ReactVlcPlayerView extends TextureView implements
 
     // Track last seek to prevent identical repeated seeks
     private float lastSeekPosition = -1f;
+    private long mLastSeekTargetMs = -1L;
+    private static final long SEEK_TIME_EPSILON_MS = 60L;
     private long mLastReviveFallbackTime = 0L;
     private static final long REVIVE_FALLBACK_COOLDOWN_MS = 900L;
-    // Minimal threshold: 0.01% - only blocks truly duplicate seeks
-    // For 1hr video: 0.01% = 0.36 seconds
-    // For 30min video: 0.01% = 0.18 seconds
+    // Fraction fallback for unknown-duration streams when targetMs is unavailable.
     private static final float SEEK_THRESHOLD = 0.0001f;
 
     private float resolveRestartTarget(float defaultTarget) {
@@ -1500,12 +1530,6 @@ class ReactVlcPlayerView extends TextureView implements
         mLastRequestedSeekPosition = position;
         mLastRequestedSeekAtMs = System.currentTimeMillis();
 
-        // Skip only if seeking to nearly identical position
-        if (Math.abs(position - lastSeekPosition) < SEEK_THRESHOLD) {
-            return;
-        }
-        lastSeekPosition = position;
-
         // libVLC player mutations are safer on main thread (play/pause/seek sequencing).
         mProgressUpdateHandler.post(new Runnable() {
             @Override
@@ -1520,6 +1544,22 @@ class ReactVlcPlayerView extends TextureView implements
                     long lengthMs = mMediaPlayer.getLength();
                     long currentMs = mMediaPlayer.getTime();
                     long targetMs = lengthMs > 0 ? (long) (position * lengthMs) : -1L;
+
+                    // Skip only if target is effectively unchanged.
+                    // Prefer time-based epsilon for consistency across short/long videos.
+                    if (targetMs >= 0) {
+                        if (mLastSeekTargetMs >= 0 && Math.abs(targetMs - mLastSeekTargetMs) < SEEK_TIME_EPSILON_MS) {
+                            return;
+                        }
+                        mLastSeekTargetMs = targetMs;
+                    } else {
+                        // Fallback for unknown-duration media.
+                        if (Math.abs(position - lastSeekPosition) < SEEK_THRESHOLD) {
+                            return;
+                        }
+                        lastSeekPosition = position;
+                    }
+
                     final int seekToken = ++mSeekToken;
                     // If native core is stopped (or close to end), seek must revive playback path first.
                     boolean likelyStoppedOrEnded = mNativeStopped || nativePos < 0f || nativePos >= END_STATE_POSITION_THRESHOLD;
@@ -1530,9 +1570,11 @@ class ReactVlcPlayerView extends TextureView implements
                     boolean largeBackwardSeek = nativePlaying
                             && targetMs >= 0
                             && currentMs >= 0
-                            && (currentMs - targetMs) > 1200;
+                            && (currentMs - targetMs) > 2500;
                     boolean backwardNearEndSeek = nativePlaying && backwardSeek && nearEndWindow;
-                    boolean needsFlush = largeBackwardSeek || backwardNearEndSeek;
+                    // Prefer direct seek for responsiveness; keep flush only for fragile near-end backward jumps.
+                    // Verification pass below still recovers true stalls.
+                    boolean needsFlush = backwardNearEndSeek;
                     Log.d(TAG, "setPosition: target=" + position + ", nativePos=" + nativePos
                             + ", nativePlaying=" + nativePlaying + ", isPaused=" + isPaused
                             + ", targetMs=" + targetMs + ", currentMs=" + currentMs
@@ -1602,7 +1644,7 @@ class ReactVlcPlayerView extends TextureView implements
                                         }
                                     }
                                 };
-                                mProgressUpdateHandler.postDelayed(mPendingSeekFlushPlayRunnable, 45);
+                                mProgressUpdateHandler.post(mPendingSeekFlushPlayRunnable);
                             }
                         } else {
                             if (targetMs >= 0) {
@@ -1649,7 +1691,7 @@ class ReactVlcPlayerView extends TextureView implements
                 }
             }
         };
-        mProgressUpdateHandler.postDelayed(mPendingSeekFlushPlayRunnable, 45);
+        mProgressUpdateHandler.post(mPendingSeekFlushPlayRunnable);
     }
 
     private void scheduleSeekVerify(final long targetForVerify, final int seekToken, final int pass) {
@@ -1687,6 +1729,7 @@ class ReactVlcPlayerView extends TextureView implements
                     boolean frameLikelyStalled = nativePlaying
                             && sinceFrameMs > (SEEK_FRAME_STALL_MS * 3)
                             && (behindTargetTooFar || advancedPastTarget);
+
                     if (unexpectedlyNotPlaying) {
                         if (Math.abs(nowMs - targetForVerify) <= 250) {
                             requestAudioFocusInternal();
@@ -2017,7 +2060,11 @@ class ReactVlcPlayerView extends TextureView implements
     }
 
     public void setAutoAspectRatio(boolean auto) {
+        if (autoAspectRatio == auto) {
+            return;
+        }
         autoAspectRatio = auto;
+        requestResizeMode();
     }
 
     public void setAudioTrack(int track) {
@@ -2143,10 +2190,12 @@ class ReactVlcPlayerView extends TextureView implements
     /**
      * Set the resize mode for video display
      * 
-     * @param resizeMode The resize mode: "contain", "cover", "fill", "none", or
-     *                   "scale-down"
+     * @param resizeMode The resize mode: "contain", "cover", "fill", "none",
+     *                   "scale-down", "best-fit", or aliases "stretch" (fill)
+     *                   and "center" (none)
      */
     public void setResizeMode(String resizeMode) {
+        String previousResizeMode = this.resizeMode;
         if (resizeMode == null) {
             this.resizeMode = "contain";
         } else {
@@ -2158,13 +2207,25 @@ class ReactVlcPlayerView extends TextureView implements
                 case "stretch": // Alias for fill
                 case "none":
                 case "scale-down":
+                case "best-fit":
                     this.resizeMode = resizeMode;
+                    break;
+                case "bestfit":
+                case "best_fit":
+                    this.resizeMode = "best-fit";
+                    break;
+                case "center": // Compatibility alias for legacy wrapper types
+                    this.resizeMode = "none";
                     break;
                 default:
                     Log.w(TAG, "Invalid resizeMode: " + resizeMode + ", defaulting to 'contain'");
                     this.resizeMode = "contain";
                     break;
             }
+        }
+
+        if (!"best-fit".equals(this.resizeMode) || !"best-fit".equals(previousResizeMode)) {
+            mBestFitUsingCover = null;
         }
 
         Log.i(TAG,
@@ -2184,12 +2245,6 @@ class ReactVlcPlayerView extends TextureView implements
             return;
         }
 
-        // Wait until we have valid video dimensions
-        if (mVideoWidth <= 0 || mVideoHeight <= 0) {
-            Log.d(TAG, "Video dimensions not available yet, deferring resize mode application");
-            return;
-        }
-
         // Use view dimensions instead of screen dimensions
         int viewWidth = getWidth();
         int viewHeight = getHeight();
@@ -2199,9 +2254,24 @@ class ReactVlcPlayerView extends TextureView implements
             return;
         }
 
-        // Don't apply if auto aspect ratio is enabled
+        // Auto-aspect mode: force AR to current view and let VLC auto-fit.
         if (autoAspectRatio) {
-            Log.d(TAG, "Auto aspect ratio is enabled, skipping resize mode application");
+            try {
+                mMediaPlayer.setAspectRatio(viewWidth + ":" + viewHeight);
+                mMediaPlayer.setScale(0);
+                mLastViewWidth = viewWidth;
+                mLastViewHeight = viewHeight;
+                isResizeModeApplied = true;
+                Log.d(TAG, "Auto aspect ratio applied: " + viewWidth + ":" + viewHeight);
+            } catch (Exception e) {
+                Log.e(TAG, "Error applying auto aspect ratio: " + e.getMessage());
+            }
+            return;
+        }
+
+        // Wait until we have valid video dimensions for non-auto modes.
+        if (mVideoWidth <= 0 || mVideoHeight <= 0) {
+            Log.d(TAG, "Video dimensions not available yet, deferring resize mode application");
             return;
         }
 
@@ -2252,6 +2322,9 @@ class ReactVlcPlayerView extends TextureView implements
             case "scale-down":
                 applyScaleDownMode();
                 break;
+            case "best-fit":
+                applyBestFitMode();
+                break;
             case "contain":
             default:
                 applyContainMode();
@@ -2267,6 +2340,14 @@ class ReactVlcPlayerView extends TextureView implements
         android.graphics.Matrix matrix = new android.graphics.Matrix();
         // Identity matrix = no transformation
         setTransform(matrix);
+    }
+
+    private int getEffectiveVideoWidth() {
+        return mVideoVisibleWidth > 0 ? mVideoVisibleWidth : mVideoWidth;
+    }
+
+    private int getEffectiveVideoHeight() {
+        return mVideoVisibleHeight > 0 ? mVideoVisibleHeight : mVideoHeight;
     }
 
     /**
@@ -2288,11 +2369,13 @@ class ReactVlcPlayerView extends TextureView implements
 
         int viewWidth = getWidth();
         int viewHeight = getHeight();
+        int effectiveVideoWidth = getEffectiveVideoWidth();
+        int effectiveVideoHeight = getEffectiveVideoHeight();
 
         // Calculate SAR-corrected display dimensions
         float sarFactor = (mSarNum > 0 && mSarDen > 0) ? (float) mSarNum / mSarDen : 1.0f;
-        float videoDisplayWidth = mVideoWidth * sarFactor;
-        float videoDisplayHeight = mVideoHeight; // Height is not affected by SAR
+        float videoDisplayWidth = effectiveVideoWidth * sarFactor;
+        float videoDisplayHeight = effectiveVideoHeight; // Height is not affected by SAR
 
         // Calculate scale factors based on DISPLAY dimensions (not pixel dimensions)
         // This ensures SAR is properly accounted for in the zoom calculation
@@ -2304,8 +2387,84 @@ class ReactVlcPlayerView extends TextureView implements
         float coverScale = Math.max(scaleX, scaleY);
 
         mMediaPlayer.setScale(coverScale);
-        Log.i(TAG, String.format("Cover mode: scale=%.3f (SAR=%.2f, videoDisplay=%.0fx%.0f, view=%dx%d)",
-                coverScale, sarFactor, videoDisplayWidth, videoDisplayHeight, viewWidth, viewHeight));
+        Log.i(TAG,
+                String.format("Cover mode: scale=%.3f (SAR=%.2f, videoDisplay=%.0fx%.0f, source=%dx%d, view=%dx%d)",
+                        coverScale, sarFactor, videoDisplayWidth, videoDisplayHeight,
+                        effectiveVideoWidth, effectiveVideoHeight, viewWidth, viewHeight));
+    }
+
+    /**
+     * Apply "best-fit" mode similar to YouTube fit behavior:
+     * use cover only when expected crop is tiny, otherwise keep full frame (contain).
+     */
+    private void applyBestFitMode() {
+        mMediaPlayer.setAspectRatio(null);
+
+        int viewWidth = getWidth();
+        int viewHeight = getHeight();
+        int effectiveVideoWidth = getEffectiveVideoWidth();
+        int effectiveVideoHeight = getEffectiveVideoHeight();
+        if (viewWidth <= 0 || viewHeight <= 0 || effectiveVideoWidth <= 0 || effectiveVideoHeight <= 0) {
+            applyContainMode();
+            return;
+        }
+
+        float sarFactor = (mSarNum > 0 && mSarDen > 0) ? (float) mSarNum / mSarDen : 1.0f;
+        float videoDisplayWidth = effectiveVideoWidth * sarFactor;
+        float videoDisplayHeight = effectiveVideoHeight;
+        if (videoDisplayWidth <= 0f || videoDisplayHeight <= 0f) {
+            applyContainMode();
+            return;
+        }
+
+        float scaleX = (float) viewWidth / videoDisplayWidth;
+        float scaleY = (float) viewHeight / videoDisplayHeight;
+        float containScale = Math.min(scaleX, scaleY);
+        float coverScale = Math.max(scaleX, scaleY);
+
+        float containW = videoDisplayWidth * containScale;
+        float containH = videoDisplayHeight * containScale;
+        float coverW = videoDisplayWidth * coverScale;
+        float coverH = videoDisplayHeight * coverScale;
+        float viewArea = (float) viewWidth * (float) viewHeight;
+        float containAreaRatio = viewArea > 0f ? (containW * containH) / viewArea : 1f;
+        float cropRatio = (coverW > 0f && coverH > 0f)
+                ? (1f - (viewArea / (coverW * coverH)))
+                : 1f;
+        float horizontalBarRatio = viewWidth > 0 ? Math.max(0f, (viewWidth - containW) / (float) viewWidth) : 0f;
+        float verticalBarRatio = viewHeight > 0 ? Math.max(0f, (viewHeight - containH) / (float) viewHeight) : 0f;
+        float maxBarRatio = Math.max(horizontalBarRatio, verticalBarRatio);
+
+        boolean canUseCover = cropRatio >= 0f
+                && cropRatio <= BEST_FIT_MAX_CROP_RATIO
+                && maxBarRatio <= BEST_FIT_MAX_BAR_RATIO
+                && containAreaRatio < 0.999f;
+
+        // Hysteresis prevents mode flapping around threshold boundaries due to tiny
+        // layout/frame-dimension fluctuations.
+        boolean useCover;
+        if (Boolean.TRUE.equals(mBestFitUsingCover)) {
+            useCover = cropRatio <= BEST_FIT_EXIT_CROP_RATIO && maxBarRatio <= BEST_FIT_EXIT_BAR_RATIO;
+        } else {
+            useCover = canUseCover
+                    && cropRatio <= BEST_FIT_ENTER_CROP_RATIO
+                    && maxBarRatio <= BEST_FIT_ENTER_BAR_RATIO;
+        }
+        mBestFitUsingCover = useCover;
+
+        if (useCover) {
+            mMediaPlayer.setScale(coverScale);
+            Log.d(TAG, String.format(
+                    "Best-fit mode: using cover scale=%.3f crop=%.2f%% fill=%.2f%% bars(h=%.2f%%,v=%.2f%%)",
+                    coverScale, cropRatio * 100f, containAreaRatio * 100f,
+                    horizontalBarRatio * 100f, verticalBarRatio * 100f));
+        } else {
+            mMediaPlayer.setScale(0f);
+            Log.d(TAG, String.format(
+                    "Best-fit mode: using contain crop=%.2f%% fill=%.2f%% bars(h=%.2f%%,v=%.2f%%)",
+                    cropRatio * 100f, containAreaRatio * 100f,
+                    horizontalBarRatio * 100f, verticalBarRatio * 100f));
+        }
     }
 
     /**
@@ -2322,8 +2481,10 @@ class ReactVlcPlayerView extends TextureView implements
      * Apply "none" mode
      */
     private void applyNoneMode() {
+        int effectiveVideoWidth = getEffectiveVideoWidth();
+        int effectiveVideoHeight = getEffectiveVideoHeight();
         if (mSarNum > 0 && mSarDen > 0) {
-            String ar = (mVideoWidth * mSarNum) + ":" + (mVideoHeight * mSarDen);
+            String ar = (effectiveVideoWidth * mSarNum) + ":" + (effectiveVideoHeight * mSarDen);
             mMediaPlayer.setAspectRatio(ar);
         } else {
             mMediaPlayer.setAspectRatio(null);
@@ -2349,8 +2510,10 @@ class ReactVlcPlayerView extends TextureView implements
      */
     private void applyScaleDownMode() {
         float sarFactor = 1.0f;
+        int effectiveVideoWidth = getEffectiveVideoWidth();
+        int effectiveVideoHeight = getEffectiveVideoHeight();
         if (mSarNum > 0 && mSarDen > 0) {
-            String ar = (mVideoWidth * mSarNum) + ":" + (mVideoHeight * mSarDen);
+            String ar = (effectiveVideoWidth * mSarNum) + ":" + (effectiveVideoHeight * mSarDen);
             mMediaPlayer.setAspectRatio(ar);
             sarFactor = (float) mSarNum / mSarDen;
         } else {
@@ -2361,8 +2524,8 @@ class ReactVlcPlayerView extends TextureView implements
         int viewHeight = getHeight();
 
         // Calculate Display Dimensions
-        float displayWidth = mVideoWidth * sarFactor;
-        float displayHeight = mVideoHeight;
+        float displayWidth = effectiveVideoWidth * sarFactor;
+        float displayHeight = effectiveVideoHeight;
 
         // Check if video is larger than view in any dimension
         boolean videoLargerThanView = displayWidth > viewWidth || displayHeight > viewHeight;
@@ -2382,6 +2545,8 @@ class ReactVlcPlayerView extends TextureView implements
     }
 
     public void cleanUpResources() {
+        clearPendingResizeRequest();
+
         // Shutdown executor
         if (seekExecutor != null && !seekExecutor.isShutdown()) {
             seekExecutor.shutdownNow();
@@ -2431,7 +2596,7 @@ class ReactVlcPlayerView extends TextureView implements
     public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {
         Log.d(TAG, String.format("Surface texture size changed: %dx%d", width, height));
         // Apply resize mode when surface size changes
-        if (mMediaPlayer != null && mVideoWidth > 0 && mVideoHeight > 0) {
+        if (mMediaPlayer != null && (autoAspectRatio || (mVideoWidth > 0 && mVideoHeight > 0))) {
             applyResizeMode();
         }
     }
