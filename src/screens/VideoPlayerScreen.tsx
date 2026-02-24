@@ -1146,6 +1146,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                     onTogglePlayPause={handleTogglePlayPause}
                     currentTime={player.currentTimeShared}
                     duration={player.durationShared}
+                    seekPreviewTime={gestures.sharedValues.seekTime}
                     isScrubbingShared={player.isScrubbingShared}
                     onSeekStart={handleSlidingStart}
                     onSeek={handleSliderChange}

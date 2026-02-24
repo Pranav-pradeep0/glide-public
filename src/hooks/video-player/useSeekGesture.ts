@@ -144,7 +144,16 @@ export function useSeekGesture(options: UseSeekGestureOptions) {
             .onFinalize(() => {
                 'worklet';
 
-                // Ensure gesture state is reset even if gesture was cancelled
+                // If cancelled before onEnd, finalize still needs to complete seek/reset state.
+                if (gestureActive.value) {
+                    const finalTime = Math.max(
+                        0,
+                        Math.min(durationShared.value || 0, seekTimeShared.value)
+                    );
+                    runOnJS(onSeekComplete)(finalTime);
+                }
+
+                // Ensure gesture state is reset in all paths.
                 gestureActive.value = false;
             });
     }, [

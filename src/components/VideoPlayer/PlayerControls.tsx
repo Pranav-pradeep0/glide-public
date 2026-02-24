@@ -61,7 +61,7 @@ interface ScrubberProps {
     currentTime: SharedValue<number>;
     duration: SharedValue<number>;
     isScrubbing: SharedValue<boolean>;
-    scrubPosition: SharedValue<number>; // Passed down for sync with text
+    seekPreviewTime: SharedValue<number>;
     onSeekStart: () => void;
     onSeek: (val: number) => void;
     onSeekComplete: (val: number) => void;
@@ -71,20 +71,20 @@ const Scrubber: React.FC<ScrubberProps> = ({
     currentTime,
     duration,
     isScrubbing,
-    scrubPosition,
+    seekPreviewTime,
     onSeekStart,
     onSeek,
     onSeekComplete
 }) => {
     const trackWidth = useSharedValue(0);
-    // scrubPosition is now passed as prop
+    const scrubGestureStarted = useSharedValue(false);
 
     const progress = useDerivedValue(() => {
         const d = duration.value || 1;
         // Check for 0 duration to avoid NaN
         if (d <= 0) return 0;
-        // Use scrubPosition during scrub, currentTime otherwise
-        const time = isScrubbing.value ? scrubPosition.value : currentTime.value;
+        // Use shared preview time during any seek (gesture or slider), currentTime otherwise
+        const time = isScrubbing.value ? seekPreviewTime.value : currentTime.value;
         return Math.max(0, Math.min(1, time / d));
     });
 
@@ -126,31 +126,31 @@ const Scrubber: React.FC<ScrubberProps> = ({
     const panGesture = Gesture.Pan()
         .onBegin((e) => {
             'worklet';
-            isScrubbing.value = true;
+            if (trackWidth.value <= 0 || duration.value <= 0) return;
 
-            if (trackWidth.value > 0) {
-                const newProgress = Math.max(0, Math.min(1, e.x / trackWidth.value));
-                const targetTime = newProgress * (duration.value || 0);
-                scrubPosition.value = targetTime;
-                runOnJS(onSeekStart)();
-                // Ensure HUD and other listeners are updated immediately
-                runOnJS(onSeek)(targetTime);
-            }
+            isScrubbing.value = true;
+            scrubGestureStarted.value = true;
+            const newProgress = Math.max(0, Math.min(1, e.x / trackWidth.value));
+            const targetTime = newProgress * duration.value;
+            seekPreviewTime.value = targetTime;
+            runOnJS(onSeekStart)();
+            // Ensure HUD and other listeners are updated immediately
+            runOnJS(onSeek)(targetTime);
         })
         .onUpdate((e) => {
             'worklet';
-            if (trackWidth.value <= 0) return;
+            if (!scrubGestureStarted.value || trackWidth.value <= 0) return;
 
             const newProgress = Math.max(0, Math.min(1, e.x / trackWidth.value));
-
-
             const targetTime = newProgress * (duration.value || 0);
-            scrubPosition.value = targetTime;
+            seekPreviewTime.value = targetTime;
             runOnJS(onSeek)(targetTime);
         })
         .onFinalize(() => {
             'worklet';
-            const finalTime = scrubPosition.value;
+            if (!scrubGestureStarted.value) return;
+            scrubGestureStarted.value = false;
+            const finalTime = seekPreviewTime.value;
             // Keep scrubbing flag true until seek completes to prevent snapback
             runOnJS(onSeekComplete)(finalTime);
         });
@@ -190,6 +190,7 @@ interface PlayerControlsProps {
     onTogglePlayPause: () => void;
     currentTime: SharedValue<number>;
     duration: SharedValue<number>;
+    seekPreviewTime: SharedValue<number>;
     isScrubbingShared: SharedValue<boolean>;
     onSeekStart: () => void;
     onSeek: (val: number) => void;
@@ -231,6 +232,7 @@ interface PlayerControlsProps {
 export const PlayerControls: FC<PlayerControlsProps> = React.memo(({
     showControls, title, onBack, onToggleAudio, onToggleSubtitle,
     onAddBookmark, paused, onTogglePlayPause, currentTime, duration,
+    seekPreviewTime,
     onSeekStart, onSeek, onSeekComplete, errorText, isLandscape, insets,
     audioTrackSelected: _audioTrackSelected, subtitleTrackSelected: _subtitleTrackSelected, isScrubbingShared,
     onToggleBookmarkPanel, onTogglePlaylist, onToggleQuickSettings,
@@ -265,13 +267,10 @@ export const PlayerControls: FC<PlayerControlsProps> = React.memo(({
         return Math.max(0, duration.value - currentTime.value);
     });
 
-    // Create a local scrub position shared value to coordinate slider and text
-    const scrubPosition = useSharedValue(0);
-
     // Derived display time: shows scrub position while dragging, current time otherwise
     // This allows immediate visual feedback on the text without waiting for VLC
     const displayTime = useDerivedValue(() => {
-        return isScrubbingShared.value ? scrubPosition.value : currentTime.value;
+        return isScrubbingShared.value ? seekPreviewTime.value : currentTime.value;
     });
 
     // Sync scrubPosition with currentTime when not scrubbing (optional, but good for safety)
@@ -373,7 +372,7 @@ export const PlayerControls: FC<PlayerControlsProps> = React.memo(({
                         currentTime={currentTime}
                         duration={duration}
                         isScrubbing={isScrubbingShared}
-                        scrubPosition={scrubPosition}
+                        seekPreviewTime={seekPreviewTime}
                         onSeekStart={onSeekStart}
                         onSeek={onSeek}
                         onSeekComplete={onSeekComplete}
