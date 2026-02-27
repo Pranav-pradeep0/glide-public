@@ -15,7 +15,7 @@ import { useSafeAreaInsets, initialWindowMetrics } from 'react-native-safe-area-
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { SystemBars } from 'react-native-edge-to-edge';
-import { PlayerResizeMode } from 'react-native-vlc-media-player';
+import { PlayerResizeMode } from '@glide/vlc-player';
 
 // Native Modules
 const { AudioControlModule } = NativeModules;
@@ -1381,3 +1381,4 @@ const styles = StyleSheet.create({
         elevation: 10,
     },
 });
+

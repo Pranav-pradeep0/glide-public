@@ -19,3 +19,4 @@ const withVlcMediaPlayer = (config, options) => {
 };
 
 module.exports = withVlcMediaPlayer;
+

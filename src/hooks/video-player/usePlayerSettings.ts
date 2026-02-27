@@ -5,7 +5,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import { PlayerResizeMode } from 'react-native-vlc-media-player';
+import { PlayerResizeMode } from '@glide/vlc-player';
 import { PlayerSettings, UsePlayerSettingsReturn } from './types';
 import { EQUALIZER_PRESETS } from '@/config/equalizerPresets';
 
@@ -358,3 +358,4 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
 }
 
 export default usePlayerSettings;
+

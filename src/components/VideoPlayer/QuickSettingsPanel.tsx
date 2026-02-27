@@ -2,7 +2,7 @@ import React, { memo, useRef, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { Feather } from '@react-native-vector-icons/feather';
-import { PlayerResizeMode } from 'react-native-vlc-media-player';
+import { PlayerResizeMode } from '@glide/vlc-player';
 import { AudioIcon, SubtitleIcon, BookmarkListIcon } from './PlayerIcons';
 import { useAppStore } from '../../store/appStore';
 import HapticModule from '../../native/HapticModule';
@@ -635,3 +635,4 @@ const styles = StyleSheet.create({
         textAlignVertical: 'center',
     },
 });
+

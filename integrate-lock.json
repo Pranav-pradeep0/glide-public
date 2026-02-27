@@ -193,8 +193,8 @@
       "version": "^15.14.0",
       "integrated": false
     },
-    "react-native-vlc-media-player": {
-      "version": "file:./libs/react-native-vlc-media-player",
+    "@glide/vlc-player": {
+      "version": "file:./libs/glide-vlc-player",
       "integrated": false
     },
     "react-native-zip-archive": {

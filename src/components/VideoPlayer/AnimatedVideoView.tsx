@@ -8,7 +8,7 @@
 import React, { memo, forwardRef, useMemo, useCallback } from 'react';
 import { StyleSheet } from 'react-native';
 import Animated, { AnimatedStyle } from 'react-native-reanimated';
-import { VLCPlayer, PlayerResizeMode, VLCPlayerSource } from 'react-native-vlc-media-player';
+import { VLCPlayer, PlayerResizeMode, VLCPlayerSource } from '@glide/vlc-player';
 import {
     VLCLoadData,
     VLCProgressData,
@@ -259,3 +259,4 @@ const styles = StyleSheet.create({
         height: '100%',
     },
 });
+

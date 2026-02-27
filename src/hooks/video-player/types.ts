@@ -3,7 +3,7 @@
  * Shared types for all video player hooks
  */
 
-import { VLCPlayer, PlayerResizeMode } from 'react-native-vlc-media-player';
+import { VLCPlayer, PlayerResizeMode } from '@glide/vlc-player';
 import { SharedValue } from 'react-native-reanimated';
 import { SubtitleCue, VideoBookmark } from '@/types';
 
@@ -545,3 +545,4 @@ export const getOptimizedInitOptions = (
         ];
     }
 };
+

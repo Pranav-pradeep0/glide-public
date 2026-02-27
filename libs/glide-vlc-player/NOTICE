@@ -1,0 +1,9 @@
+@glide/vlc-player includes code derived from react-native-vlc-media-player.
+
+Upstream project:
+- https://github.com/razorRun/react-native-vlc-media-player
+
+License:
+- MIT (see LICENSE file in this directory)
+
+Glide maintains local modifications for app-specific playback behavior and integrations.

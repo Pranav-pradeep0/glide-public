@@ -1,3 +1,5 @@
+// @native/HapticModule
+
 import { NativeModules } from 'react-native';
 
 interface HapticModuleInterface {

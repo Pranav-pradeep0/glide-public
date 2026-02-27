@@ -1,0 +1,33 @@
+{
+  "name": "@glide/vlc-player",
+  "version": "1.0.96",
+  "description": "Glide-maintained React Native VLC player module for local and network video playback.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "vlc",
+    "player",
+    "android",
+    "ios",
+    "react-native",
+    "mp4",
+    "rtsp",
+    "media",
+    "video"
+  ],
+  "author": "Glide Team",
+  "dependencies": {
+    "react-native-slider": "^0.11.0",
+    "react-native-vector-icons": "^9.2.0"
+  },
+  "license": "MIT",
+  "homepage": "https://glide.local",
+  "devDependencies": {
+    "@expo/config-plugins": "^7.2.2",
+    "@types/react": "~18.2.14"
+  },
+  "typings": "index.d.ts"
+}
+

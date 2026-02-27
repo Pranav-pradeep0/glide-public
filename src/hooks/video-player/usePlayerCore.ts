@@ -4,7 +4,7 @@
 
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { VLCPlayer } from 'react-native-vlc-media-player';
+import { VLCPlayer } from '@glide/vlc-player';
 import { useSharedValue, useFrameCallback } from 'react-native-reanimated';
 import {
     PlayerState,

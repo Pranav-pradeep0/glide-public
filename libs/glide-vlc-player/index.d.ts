@@ -428,3 +428,4 @@ declare class VLCPlayer extends PlaybackMethods<VLCPlayerProps> { }
  * features like fullscreen, controls, etc.
  */
 declare class VlCPlayerView extends PlaybackMethods<any> { }
+
