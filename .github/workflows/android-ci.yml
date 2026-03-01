@@ -77,16 +77,21 @@ jobs:
       - name: Decode Keystore
         run: |
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/app/glide-release.keystore
+          # Verify file size to ensure it's not empty
+          if [ ! -s android/app/glide-release.keystore ]; then
+            echo "Error: Decoded keystore is empty"
+            exit 1
+          fi
 
       - name: Build APKs
         working-directory: android
         run: |
           chmod +x gradlew
           ./gradlew clean assembleRelease \
-            -PMYAPP_UPLOAD_STORE_FILE=glide-release.keystore \
-            -PMYAPP_UPLOAD_KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }} \
-            -PMYAPP_UPLOAD_STORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }} \
-            -PMYAPP_UPLOAD_KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}
+            -PMYAPP_UPLOAD_STORE_FILE="glide-release.keystore" \
+            -PMYAPP_UPLOAD_KEY_ALIAS="${{ secrets.ANDROID_KEY_ALIAS }}" \
+            -PMYAPP_UPLOAD_STORE_PASSWORD="${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
+            -PMYAPP_UPLOAD_KEY_PASSWORD="${{ secrets.ANDROID_KEY_PASSWORD }}"
 
       - name: Rename APKs
         id: rename_apks
