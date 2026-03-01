@@ -1,3 +1,4 @@
+/* eslint-disable no-shadow */
 const mp3CodecExp = /\b(?<mp3>(LAME(?:\d)+-?(?:\d)+)|(mp3))\b/i;
 const mp2CodecExp = /\b(?<mp2>(mp2))\b/i;
 const dolbyCodecExp = /\b(?<dolby>(Dolby)|(Dolby-?Digital)|(DD)|(AC3D?))\b/i;
@@ -30,19 +31,19 @@ const audioCodecExp = new RegExp([
 ].join('|'), 'i');
 export var AudioCodec;
 (function (AudioCodec) {
-    AudioCodec["MP3"] = "MP3";
-    AudioCodec["MP2"] = "MP2";
-    AudioCodec["DOLBY"] = "Dolby Digital";
-    AudioCodec["EAC3"] = "Dolby Digital Plus";
-    AudioCodec["AAC"] = "AAC";
-    AudioCodec["FLAC"] = "FLAC";
-    AudioCodec["DTS"] = "DTS";
-    AudioCodec["DTSHD"] = "DTS-HD";
-    AudioCodec["TRUEHD"] = "Dolby TrueHD";
-    AudioCodec["OPUS"] = "Opus";
-    AudioCodec["VORBIS"] = "Vorbis";
-    AudioCodec["PCM"] = "PCM";
-    AudioCodec["LPCM"] = "LPCM";
+    AudioCodec.MP3 = 'MP3';
+    AudioCodec.MP2 = 'MP2';
+    AudioCodec.DOLBY = 'Dolby Digital';
+    AudioCodec.EAC3 = 'Dolby Digital Plus';
+    AudioCodec.AAC = 'AAC';
+    AudioCodec.FLAC = 'FLAC';
+    AudioCodec.DTS = 'DTS';
+    AudioCodec.DTSHD = 'DTS-HD';
+    AudioCodec.TRUEHD = 'Dolby TrueHD';
+    AudioCodec.OPUS = 'Opus';
+    AudioCodec.VORBIS = 'Vorbis';
+    AudioCodec.PCM = 'PCM';
+    AudioCodec.LPCM = 'LPCM';
 })(AudioCodec || (AudioCodec = {}));
 export function parseAudioCodec(title) {
     const audioResult = audioCodecExp.exec(title);

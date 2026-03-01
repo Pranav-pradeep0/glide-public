@@ -10,7 +10,7 @@ import Animated, {
     withTiming,
     Easing,
 } from 'react-native-reanimated';
-import { Feather, FeatherIconName } from "@react-native-vector-icons/feather"
+import { Feather, FeatherIconName } from '@react-native-vector-icons/feather';
 import { useTheme } from '../../hooks/useTheme';
 import { spacing } from '../../theme/spacing';
 import { typography } from '../../theme/typography';
@@ -98,13 +98,13 @@ export default function HapticIndicator({
     const animatedStyle = useAnimatedStyle(() => ({
         transform: [
             { scale: scale.value },
-            { rotate: `${rotation.value}deg` }
+            { rotate: `${rotation.value}deg` },
         ],
         opacity: opacity.value,
     }));
 
     const getCategoryColor = () => {
-        if (!pattern) return colors.primary;
+        if (!pattern) {return colors.primary;}
         switch (pattern.category) {
             case 'oscillating': return '#4FC3F7'; // Light Blue
             case 'textured': return '#FFB74D'; // Orange
@@ -115,7 +115,7 @@ export default function HapticIndicator({
     };
 
     const getCategoryIcon = () => {
-        if (!pattern) return 'zap';
+        if (!pattern) {return 'zap';}
         switch (pattern.category) {
             case 'oscillating': return 'wind';
             case 'textured': return 'radio';
@@ -125,7 +125,7 @@ export default function HapticIndicator({
         }
     };
 
-    if (!pattern) return null;
+    if (!pattern) {return null;}
 
     return (
         <Animated.View style={[styles.container, animatedStyle]}>

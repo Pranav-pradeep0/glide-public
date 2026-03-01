@@ -1,6 +1,6 @@
 /**
  * usePlayerBookmarks Hook
- * 
+ *
  * Manages video bookmarks using the videoHistoryStore.
  * Handles adding, deleting, and jumping to bookmarks,
  * as well as toast notifications.
@@ -29,7 +29,7 @@ interface UsePlayerBookmarksOptions {
 
 /**
  * Hook for managing video bookmarks.
- * 
+ *
  * Uses videoHistoryStore for persistence.
  * Provides toast notifications for user feedback.
  */
@@ -87,7 +87,7 @@ export function usePlayerBookmarks(options: UsePlayerBookmarksOptions): UsePlaye
     const addBookmark = useCallback(() => {
         if (!videoPath || !videoName || duration === 0) {
             if (__DEV__) {
-                console.log('[usePlayerBookmarks] Cannot add bookmark - missing data');
+                if (__DEV__) {console.log('[usePlayerBookmarks] Cannot add bookmark - missing data');}
             }
             return;
         }
@@ -101,7 +101,7 @@ export function usePlayerBookmarks(options: UsePlayerBookmarksOptions): UsePlaye
         showToastWithMessage(`Bookmark added at ${timeStr}`);
 
         if (__DEV__) {
-            console.log('[usePlayerBookmarks] Bookmark added at', bookmarkTime);
+            if (__DEV__) {console.log('[usePlayerBookmarks] Bookmark added at', bookmarkTime);}
         }
     }, [videoPath, videoName, duration, currentTimeRef, storeAddBookmark, showToastWithMessage]);
 
@@ -113,7 +113,7 @@ export function usePlayerBookmarks(options: UsePlayerBookmarksOptions): UsePlaye
         showToastWithMessage('Bookmark deleted');
 
         if (__DEV__) {
-            console.log('[usePlayerBookmarks] Bookmark deleted:', bookmarkId);
+            if (__DEV__) {console.log('[usePlayerBookmarks] Bookmark deleted:', bookmarkId);}
         }
     }, [videoPath, storeRemoveBookmark, showToastWithMessage]);
 
@@ -124,7 +124,7 @@ export function usePlayerBookmarks(options: UsePlayerBookmarksOptions): UsePlaye
         onSeekToBookmark(timestamp);
 
         if (__DEV__) {
-            console.log('[usePlayerBookmarks] Jumped to bookmark at', timestamp);
+            if (__DEV__) {console.log('[usePlayerBookmarks] Jumped to bookmark at', timestamp);}
         }
     }, [onSeekToBookmark]);
 
@@ -148,8 +148,10 @@ export function usePlayerBookmarks(options: UsePlayerBookmarksOptions): UsePlaye
         bookmarks,
         showToast, toastMessage, toastIcon, toastKey,
         addBookmark, deleteBookmark, jumpToBookmark,
-        hideToast, showToastWithMessage
+        hideToast, showToastWithMessage,
     ]);
 }
 
 export default usePlayerBookmarks;
+
+

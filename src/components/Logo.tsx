@@ -1,5 +1,5 @@
-import * as React from "react";
-import Svg, { Path, SvgProps, Defs, LinearGradient, Stop } from "react-native-svg";
+import * as React from 'react';
+import Svg, { Path, SvgProps, Defs, LinearGradient, Stop } from 'react-native-svg';
 
 interface LogoProps extends SvgProps {
     mode?: 'light' | 'dark';

@@ -91,11 +91,11 @@ export async function searchAllSubtitles(
 ): Promise<{
     subtitles: SubtitleResult[];
 }> {
-    console.log(`${LOG_PREFIX} === Search Started ===`);
-    console.log(`${LOG_PREFIX} videoName: "${videoName}", language: "${language}", imdbId: ${imdbId || 'none'}, prioritizeSDH: ${prioritizeSDH}, manualSeason: ${manualSeason || 'none'}, manualEpisode: ${manualEpisode || 'none'}, manualYear: ${manualYear || 'none'}`);
+    if (__DEV__) {console.log(`${LOG_PREFIX} === Search Started ===`);}
+    if (__DEV__) {console.log(`${LOG_PREFIX} videoName: "${videoName}", language: "${language}", imdbId: ${imdbId || 'none'}, prioritizeSDH: ${prioritizeSDH}, manualSeason: ${manualSeason || 'none'}, manualEpisode: ${manualEpisode || 'none'}, manualYear: ${manualYear || 'none'}`);}
     try {
         const parsed = FilenameParser.parse(videoName);
-        console.log(`${LOG_PREFIX} Parsed: "${parsed.title}", year=${parsed.year || 'unknown'}, isTVShow=${parsed.isTVShow}`);
+        if (__DEV__) {console.log(`${LOG_PREFIX} Parsed: "${parsed.title}", year=${parsed.year || 'unknown'}, isTVShow=${parsed.isTVShow}`);}
 
         // Safeguard: If parsing resulted in empty title, use original
         if (!parsed.title || parsed.title.trim().length === 0) {
@@ -113,7 +113,7 @@ export async function searchAllSubtitles(
             releases: '1',
             comment: '1', // Get author comments for better SDH scoring
             film_name: parsed.title || videoName, // Always use parsed title or fallback
-            type: (parsed.isTVShow || manualSeason !== undefined || manualEpisode !== undefined) ? 'tv' : 'movie'
+            type: (parsed.isTVShow || manualSeason !== undefined || manualEpisode !== undefined) ? 'tv' : 'movie',
         });
 
         // Add year if available
@@ -124,20 +124,20 @@ export async function searchAllSubtitles(
         // Only request HI subtitles when prioritizing SDH (for haptic play)
         if (prioritizeSDH) {
             params.append('hi', '1');
-            console.log(`${LOG_PREFIX} Including hi=1 param (SDH prioritized)`);
+            if (__DEV__) {console.log(`${LOG_PREFIX} Including hi=1 param (SDH prioritized)`);}
         } else {
-            console.log(`${LOG_PREFIX} NOT including hi param (general search)`);
+            if (__DEV__) {console.log(`${LOG_PREFIX} NOT including hi param (general search)`);}
         }
 
         // Always include file_name for better matching accuracy
         params.append('file_name', videoName);
 
-        console.log(`${LOG_PREFIX} Using film_name: "${parsed.title}"`);
+        if (__DEV__) {console.log(`${LOG_PREFIX} Using film_name: "${parsed.title}"`);}
 
         // Also add IMDB ID if available (improves accuracy)
         if (imdbId) {
             params.append('imdb_id', imdbId);
-            console.log(`${LOG_PREFIX} Also using IMDB ID: ${imdbId}`);
+            if (__DEV__) {console.log(`${LOG_PREFIX} Also using IMDB ID: ${imdbId}`);}
         }
 
         // Add type and season/episode info
@@ -155,7 +155,7 @@ export async function searchAllSubtitles(
             }
         }
 
-        console.log(`${LOG_PREFIX} Search params: ${params.toString()}`);
+        if (__DEV__) {console.log(`${LOG_PREFIX} Search params: ${params.toString()}`);}
 
         const response = await fetch(`${SUBDL_API_URL}?${params}`, {
             method: 'GET',
@@ -170,11 +170,11 @@ export async function searchAllSubtitles(
         const data = await response.json();
 
         if (!data.subtitles || data.subtitles.length === 0) {
-            console.log(`${LOG_PREFIX} No subtitles found`);
+            if (__DEV__) {console.log(`${LOG_PREFIX} No subtitles found`);}
 
             // If year was specified, try without year
             if (parsed.year && !imdbId) {
-                console.log(`${LOG_PREFIX} Retrying without year...`);
+                if (__DEV__) {console.log(`${LOG_PREFIX} Retrying without year...`);}
                 const fallbackParams = new URLSearchParams({
                     api_key: SUBDL_API_KEY,
                     languages: language,
@@ -214,7 +214,7 @@ export async function searchAllSubtitles(
                 if (fallbackResponse.ok) {
                     const fallbackData = await fallbackResponse.json();
                     if (fallbackData.subtitles && fallbackData.subtitles.length > 0) {
-                        console.log(`${LOG_PREFIX} Fallback found ${fallbackData.subtitles.length} subtitles`);
+                        if (__DEV__) {console.log(`${LOG_PREFIX} Fallback found ${fallbackData.subtitles.length} subtitles`);}
                         return processSubtitleResults(fallbackData.subtitles, parsed.title, language, prioritizeSDH);
                     }
                 }
@@ -223,8 +223,8 @@ export async function searchAllSubtitles(
             return { subtitles: [] };
         }
 
-        console.log(`${LOG_PREFIX} Found ${data.subtitles.length} subtitles`);
-        console.log(`${LOG_PREFIX} Passing prioritizeSDH=${prioritizeSDH} to processSubtitleResults`);
+        if (__DEV__) {console.log(`${LOG_PREFIX} Found ${data.subtitles.length} subtitles`);}
+        if (__DEV__) {console.log(`${LOG_PREFIX} Passing prioritizeSDH=${prioritizeSDH} to processSubtitleResults`);}
         return processSubtitleResults(data.subtitles, parsed.title, language, prioritizeSDH);
 
     } catch (error) {
@@ -272,12 +272,12 @@ function processSubtitleResults(
     }));
 
     // Sort subtitles based on priority preference
-    console.log(`${LOG_PREFIX} Sorting ${allSubtitles.length} subtitles with prioritizeSDH=${prioritizeSDH}`);
+    if (__DEV__) {console.log(`${LOG_PREFIX} Sorting ${allSubtitles.length} subtitles with prioritizeSDH=${prioritizeSDH}`);}
 
     // Count SDH vs non-SDH before sorting
     const sdhCount = allSubtitles.filter(s => (s.sdhScore || 0) > 5 || s.hearingImpaired).length;
     const nonSdhCount = allSubtitles.length - sdhCount;
-    console.log(`${LOG_PREFIX} SDH subtitles: ${sdhCount}, Non-SDH subtitles: ${nonSdhCount}`);
+    if (__DEV__) {console.log(`${LOG_PREFIX} SDH subtitles: ${sdhCount}, Non-SDH subtitles: ${nonSdhCount}`);}
 
     allSubtitles.sort((a: any, b: any) => {
         if (prioritizeSDH) {
@@ -290,10 +290,10 @@ function processSubtitleResults(
     });
 
     // Log first 3 results after sorting
-    console.log(`${LOG_PREFIX} Top 3 results after sorting (prioritizeSDH=${prioritizeSDH}):`);
+    if (__DEV__) {console.log(`${LOG_PREFIX} Top 3 results after sorting (prioritizeSDH=${prioritizeSDH}):`);}
     allSubtitles.slice(0, 3).forEach((sub, i) => {
         const isSDH = (sub.sdhScore || 0) > 5 || sub.hearingImpaired;
-        console.log(`${LOG_PREFIX}   ${i + 1}. "${sub.release?.substring(0, 40)}..." - SDH: ${isSDH}, sdhScore: ${sub.sdhScore || 0}, rating: ${sub.rating || 0}`);
+        if (__DEV__) {console.log(`${LOG_PREFIX}   ${i + 1}. "${sub.release?.substring(0, 40)}..." - SDH: ${isSDH}, sdhScore: ${sub.sdhScore || 0}, rating: ${sub.rating || 0}`);}
     });
 
     return { subtitles: allSubtitles };
@@ -316,7 +316,7 @@ export async function downloadSubtitle(
             ? downloadUrl
             : `${SUBDL_DOWNLOAD_URL}${downloadUrl}`;
 
-        console.log(`${LOG_PREFIX} Downloading from:`, fullUrl);
+        if (__DEV__) {console.log(`${LOG_PREFIX} Downloading from:`, fullUrl);}
 
         // Download the ZIP file
         const downloadResult = await RNFS.downloadFile({
@@ -331,7 +331,7 @@ export async function downloadSubtitle(
             throw new Error(`Download failed with status: ${downloadResult.statusCode}`);
         }
 
-        console.log(`${LOG_PREFIX} Downloaded ZIP (${downloadResult.bytesWritten} bytes)`);
+        if (__DEV__) {console.log(`${LOG_PREFIX} Downloaded ZIP (${downloadResult.bytesWritten} bytes)`);}
 
         // Check if file exists and has content
         const fileExists = await RNFS.exists(zipPath);
@@ -343,12 +343,12 @@ export async function downloadSubtitle(
         await RNFS.mkdir(extractDir);
 
         // Extract the ZIP file
-        console.log(`${LOG_PREFIX} Extracting ZIP to:`, extractDir);
+        if (__DEV__) {console.log(`${LOG_PREFIX} Extracting ZIP to:`, extractDir);}
         await unzip(zipPath, extractDir);
 
         // Find subtitle file in extracted contents
         const files = await RNFS.readDir(extractDir);
-        console.log(`${LOG_PREFIX} Extracted ${files.length} files`);
+        if (__DEV__) {console.log(`${LOG_PREFIX} Extracted ${files.length} files`);}
 
         // Look for .srt, .vtt, or .ass files (prefer .srt)
         const subtitleExtensions = ['.srt', '.vtt', '.ass', '.ssa'];
@@ -356,7 +356,7 @@ export async function downloadSubtitle(
 
         for (const ext of subtitleExtensions) {
             subtitleFile = files.find(f => f.name.toLowerCase().endsWith(ext));
-            if (subtitleFile) break;
+            if (subtitleFile) {break;}
         }
 
         if (!subtitleFile) {
@@ -366,9 +366,9 @@ export async function downloadSubtitle(
                     const subFiles = await RNFS.readDir(file.path);
                     for (const ext of subtitleExtensions) {
                         subtitleFile = subFiles.find(f => f.name.toLowerCase().endsWith(ext));
-                        if (subtitleFile) break;
+                        if (subtitleFile) {break;}
                     }
-                    if (subtitleFile) break;
+                    if (subtitleFile) {break;}
                 }
             }
         }
@@ -378,7 +378,7 @@ export async function downloadSubtitle(
             return null;
         }
 
-        console.log(`${LOG_PREFIX} Found subtitle:`, subtitleFile.name);
+        if (__DEV__) {console.log(`${LOG_PREFIX} Found subtitle:`, subtitleFile.name);}
 
         // Read the subtitle content
         const subtitleContent = await RNFS.readFile(subtitleFile.path, 'utf8');
@@ -389,7 +389,7 @@ export async function downloadSubtitle(
             return null;
         }
 
-        console.log(`${LOG_PREFIX} Loaded ${subtitleContent.length} chars from ${subtitleFile.name}`);
+        if (__DEV__) {console.log(`${LOG_PREFIX} Loaded ${subtitleContent.length} chars from ${subtitleFile.name}`);}
         return subtitleContent;
 
     } catch (error) {
@@ -420,3 +420,5 @@ export async function searchByIMDBId(
     const result = await searchAllSubtitles('', language, imdbId);
     return result.subtitles;
 }
+
+

@@ -88,17 +88,17 @@ export class DeepLinkService {
      * Returns the original URI if resolution fails
      */
     static async resolveToFilePath(uri: string): Promise<string> {
-        console.log(LOG_PREFIX, 'Resolving URI:', uri);
+        if (__DEV__) {console.log(LOG_PREFIX, 'Resolving URI:', uri);}
 
         // HTTP/HTTPS URLs - pass through directly for streaming
         if (uri.startsWith('http://') || uri.startsWith('https://')) {
-            console.log(LOG_PREFIX, 'HTTP(S) stream URL, passing through');
+            if (__DEV__) {console.log(LOG_PREFIX, 'HTTP(S) stream URL, passing through');}
             return uri;
         }
 
         // Already a file:// path or regular path
         if (uri.startsWith('file://') || !uri.includes('://')) {
-            console.log(LOG_PREFIX, 'Already a file path, returning as-is');
+            if (__DEV__) {console.log(LOG_PREFIX, 'Already a file path, returning as-is');}
             return uri;
         }
 
@@ -110,7 +110,7 @@ export class DeepLinkService {
                 if (realPath && realPath !== uri && !realPath.startsWith('content://')) {
                     // Add file:// prefix if it's a clean path
                     const filePath = realPath.startsWith('/') ? `file://${realPath}` : realPath;
-                    console.log(LOG_PREFIX, 'Resolved to file path:', filePath);
+                    if (__DEV__) {console.log(LOG_PREFIX, 'Resolved to file path:', filePath);}
                     return filePath;
                 }
             } catch (error) {
@@ -119,7 +119,7 @@ export class DeepLinkService {
         }
 
         // Fallback: return original URI
-        console.log(LOG_PREFIX, 'Could not resolve, returning original URI');
+        if (__DEV__) {console.log(LOG_PREFIX, 'Could not resolve, returning original URI');}
         return uri;
     }
 
@@ -129,7 +129,7 @@ export class DeepLinkService {
     static async getInitialUrl(): Promise<string | null> {
         try {
             const url = await Linking.getInitialURL();
-            console.log(LOG_PREFIX, 'Initial URL:', url);
+            if (__DEV__) {console.log(LOG_PREFIX, 'Initial URL:', url);}
             return url;
         } catch (error) {
             console.error(LOG_PREFIX, 'Error getting initial URL:', error);
@@ -142,10 +142,12 @@ export class DeepLinkService {
      */
     static addUrlListener(callback: (url: string) => void): () => void {
         const subscription = Linking.addEventListener('url', (event) => {
-            console.log(LOG_PREFIX, 'URL event received:', event.url);
+            if (__DEV__) {console.log(LOG_PREFIX, 'URL event received:', event.url);}
             callback(event.url);
         });
 
         return () => subscription.remove();
     }
 }
+
+

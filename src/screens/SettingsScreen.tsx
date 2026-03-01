@@ -100,7 +100,7 @@ const SubtitlePreviewSection = React.memo(({ fontSizeSV, settings, theme }: any)
                                 fontFamily: fontFamily,
                                 textShadowColor: settings.subtitleEdgeStyle !== 'none' ? '#000' : undefined,
                                 textShadowRadius: settings.subtitleEdgeStyle !== 'none' ? settings.subtitleOutlineWidth : 0,
-                                textAlign: 'center'
+                                textAlign: 'center',
                             }, animatedStyle]}>
                                 This is a subtitle preview
                             </AnimatedText>
@@ -186,7 +186,7 @@ export default function SettingsScreen() {
             code: 'auto',
             name: 'Auto',
             nativeName: 'Automatic',
-            aliases: []
+            aliases: [],
         };
 
         if (!query) {
@@ -225,10 +225,10 @@ export default function SettingsScreen() {
     }, [setHapticIntensity]);
 
     const getIntensityLabel = (value: number): string => {
-        if (value < 50) return 'Very Light';
-        if (value < 100) return 'Light';
-        if (value < 150) return 'Medium';
-        if (value < 200) return 'Strong';
+        if (value < 50) {return 'Very Light';}
+        if (value < 100) {return 'Light';}
+        if (value < 150) {return 'Medium';}
+        if (value < 200) {return 'Strong';}
         return 'Very Strong';
     };
 
@@ -348,7 +348,7 @@ export default function SettingsScreen() {
                                 backgroundColor: theme.colors.background,
                                 flexDirection: 'row',
                                 justifyContent: 'space-between',
-                                alignItems: 'center'
+                                alignItems: 'center',
                             }]}
                             onPress={() => setLanguageModalVisible(true)}
                         >
@@ -475,7 +475,7 @@ export default function SettingsScreen() {
                                                 ? theme.colors.cardElevated
                                                 : theme.colors.card,
                                             borderColor: theme.colors.border,
-                                            elevation: 4
+                                            elevation: 4,
                                         },
                                     ]}
                                     onPress={() => handlePresetSelect(preset.value)}
@@ -489,13 +489,13 @@ export default function SettingsScreen() {
                                     />
                                     <Text style={[
                                         styles.presetLabel,
-                                        { color: theme.colors.text }
+                                        { color: theme.colors.text },
                                     ]}>
                                         {preset.label}
                                     </Text>
                                     <Text style={[
                                         styles.presetDescription,
-                                        { color: theme.colors.textSecondary }
+                                        { color: theme.colors.textSecondary },
                                     ]}>
                                         {preset.description}
                                     </Text>
@@ -623,7 +623,7 @@ export default function SettingsScreen() {
                                     style={[
                                         styles.colorSwatch,
                                         { backgroundColor: color.value },
-                                        settings.subtitleColor === color.value && { borderWidth: 2, borderColor: theme.colors.primary }
+                                        settings.subtitleColor === color.value && { borderWidth: 2, borderColor: theme.colors.primary },
                                     ]}
                                     onPress={() => setSubtitleColor(color.value)}
                                 />
@@ -646,7 +646,7 @@ export default function SettingsScreen() {
                                         key={opt}
                                         style={[
                                             styles.optionButton,
-                                            isSelected && { backgroundColor: theme.colors.primary }
+                                            isSelected && { backgroundColor: theme.colors.primary },
                                         ]}
                                         onPress={() => {
                                             if (opt === 'none') {
@@ -781,7 +781,7 @@ export default function SettingsScreen() {
                                         <TouchableOpacity
                                             style={[
                                                 styles.languageOption,
-                                                { borderBottomColor: theme.colors.border }
+                                                { borderBottomColor: theme.colors.border },
                                             ]}
                                             onPress={() => {
                                                 setDefaultAudioLanguage(item.code === 'auto' ? null : item.name);
@@ -800,7 +800,7 @@ export default function SettingsScreen() {
                                                     <Text style={[
                                                         styles.languageText,
                                                         { color: theme.colors.text },
-                                                        isSelected && { fontWeight: 'bold' }
+                                                        isSelected && { fontWeight: 'bold' },
                                                     ]}>
                                                         {item.name}
                                                     </Text>

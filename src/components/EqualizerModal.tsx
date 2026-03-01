@@ -1,6 +1,6 @@
 /**
  * EqualizerModal Component
- * 
+ *
  * A comprehensive 10-band equalizer modal.
  * Features:
  * - Preset selector
@@ -97,12 +97,12 @@ export const EqualizerModal: React.FC<EqualizerModalProps> = ({
                                         style={({ pressed }) => [
                                             styles.resetButton,
                                             pressed && styles.pressed,
-                                            !enabled && styles.disabled
+                                            !enabled && styles.disabled,
                                         ]}
                                         onPress={enabled ? onReset : undefined}
                                         disabled={!enabled}
                                     >
-                                        <Feather name="refresh-cw" size={16} color={enabled ? "#CCCCCC" : "#666"} />
+                                        <Feather name="refresh-cw" size={16} color={enabled ? '#CCCCCC' : '#666'} />
                                     </Pressable>
                                     <Switch
                                         value={enabled}
@@ -149,7 +149,7 @@ export const EqualizerModal: React.FC<EqualizerModalProps> = ({
                                                     style={({ pressed }) => [
                                                         styles.presetChip,
                                                         { backgroundColor: chipBg, borderColor: chipBorder },
-                                                        pressed && styles.presetChipPressed
+                                                        pressed && styles.presetChipPressed,
                                                     ]}
                                                     onPress={() => onSelectPreset(preset.id)}
                                                     disabled={!enabled}

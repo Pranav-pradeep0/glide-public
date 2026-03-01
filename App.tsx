@@ -1,10 +1,11 @@
 import { useSettings } from '@/hooks/useSettings';
 import RootNavigator from '@/navigation/RootNavigator';
 import { FileService } from '@/services/FileService';
+import { useAppStore } from '@/store/appStore';
 import { useTheme } from '@/hooks/useTheme';
 import { useVideoIndexStore } from '@/store/videoIndexStore';
 import { ErrorBoundary } from 'ErrorBoundary';
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { SystemBars } from 'react-native-edge-to-edge';
@@ -15,18 +16,35 @@ function App() {
   const [appReady, setAppReady] = useState(false);
   const [navReady, setNavReady] = useState(false);
   const theme = useTheme();
+  const { settings } = useAppStore();
 
   const { initialize } = useVideoIndexStore();
+  const hasStartedMediaInitRef = useRef(false);
 
   useSettings();
 
   useEffect(() => {
-    SystemBars.setStyle(theme.dark ? 'light' : 'dark')
-  }, [theme])
+    SystemBars.setStyle(theme.dark ? 'light' : 'dark');
+  }, [theme]);
 
   useEffect(() => {
     initializeApp();
   }, []);
+
+  useEffect(() => {
+    if (!appReady || !navReady || !settings.hasCompletedOnboarding) {
+      return;
+    }
+
+    if (hasStartedMediaInitRef.current) {
+      return;
+    }
+    hasStartedMediaInitRef.current = true;
+
+    initialize().catch((error) => {
+      console.error('Media index initialization error:', error);
+    });
+  }, [appReady, navReady, settings.hasCompletedOnboarding, initialize]);
 
   const startTime = useRef(Date.now());
 
@@ -47,8 +65,6 @@ function App() {
     try {
       const subtitleCacheDir = FileService.getSubtitleCacheDir();
       await FileService.ensureDir(subtitleCacheDir);
-
-      initialize();
 
       setAppReady(true);
       console.log('App initialized successfully');

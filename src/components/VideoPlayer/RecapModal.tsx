@@ -59,7 +59,7 @@ const SkeletonLine: React.FC<{ widthPercent: number; delay?: number }> = ({ widt
             style={[
                 styles.skeletonLine,
                 { width: `${widthPercent}%` as any },
-                animatedStyle
+                animatedStyle,
             ]}
         />
     );
@@ -106,7 +106,7 @@ export const RecapModal: React.FC<RecapModalProps> = ({
             setDimensions({
                 width: window.width,
                 height: window.height,
-                isLandscape: window.width > window.height
+                isLandscape: window.width > window.height,
             });
         });
 
@@ -132,7 +132,7 @@ export const RecapModal: React.FC<RecapModalProps> = ({
     const { width, height, isLandscape } = dimensions;
     const showLoading = isLoading || recapText === null;
 
-    if (!visible) return null;
+    if (!visible) {return null;}
 
     // Calculate responsive dimensions
     const contentWidth = isLandscape ? Math.min(width * 0.7, 600) : Math.min(width * 0.85, 500);
@@ -163,8 +163,8 @@ export const RecapModal: React.FC<RecapModalProps> = ({
                             styles.content,
                             {
                                 width: contentWidth,
-                                maxHeight: contentMaxHeight
-                            }
+                                maxHeight: contentMaxHeight,
+                            },
                         ]}
                     >
                         <View style={styles.header}>
@@ -182,7 +182,7 @@ export const RecapModal: React.FC<RecapModalProps> = ({
                         <ScrollView
                             style={[
                                 styles.scrollContainer,
-                                { maxHeight: scrollMaxHeight }
+                                { maxHeight: scrollMaxHeight },
                             ]}
                             contentContainerStyle={styles.scrollContent}
                             showsVerticalScrollIndicator={false}
@@ -206,12 +206,12 @@ export const RecapModal: React.FC<RecapModalProps> = ({
                             style={[
                                 styles.resumeButton,
                                 isLandscape && { marginTop: 16, height: 48 },
-                                showLoading && styles.resumeButtonDisabled
+                                showLoading && styles.resumeButtonDisabled,
                             ]}
                         >
                             <Text style={[
                                 styles.resumeButtonText,
-                                showLoading && styles.resumeButtonTextDisabled
+                                showLoading && styles.resumeButtonTextDisabled,
                             ]}>
                                 {showLoading ? 'Generating Recap...' : 'Resume Playback'}
                             </Text>

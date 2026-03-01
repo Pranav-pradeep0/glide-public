@@ -35,7 +35,7 @@ const PlaylistItem = memo<{
     }, [item, onPlay]);
 
     const formatDuration = (ms: number): string => {
-        if (!ms) return '';
+        if (!ms) {return '';}
         const seconds = Math.floor(ms / 1000);
         const h = Math.floor(seconds / 3600);
         const m = Math.floor((seconds % 3600) / 60);
@@ -207,10 +207,10 @@ export const PlaylistPanel: React.FC<PlaylistPanelProps> = memo(({
         </>
     );
 }, (prevProps, nextProps) => {
-    if (prevProps.visible !== nextProps.visible) return false;
-    if (prevProps.currentVideoPath !== nextProps.currentVideoPath) return false;
-    if (prevProps.onPlayVideo !== nextProps.onPlayVideo) return false;
-    if (prevProps.albumName !== nextProps.albumName) return false;
+    if (prevProps.visible !== nextProps.visible) {return false;}
+    if (prevProps.currentVideoPath !== nextProps.currentVideoPath) {return false;}
+    if (prevProps.onPlayVideo !== nextProps.onPlayVideo) {return false;}
+    if (prevProps.albumName !== nextProps.albumName) {return false;}
     return true;
 });
 

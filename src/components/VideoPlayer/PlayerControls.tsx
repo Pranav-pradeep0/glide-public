@@ -7,7 +7,7 @@ import {
     PipIcon, AudioIcon, SubtitleIcon, BookmarkListIcon,
     OrientationLockIcon, BackgroundPlayIcon, NightModeIcon,
     HapticsIcon, VisualEnhancementIcon,
-    getResizeModeIcon
+    getResizeModeIcon,
 } from './PlayerIcons';
 import Animated, {
     useAnimatedProps,
@@ -16,7 +16,7 @@ import Animated, {
     SharedValue,
     runOnJS,
     useDerivedValue,
-    withTiming
+    withTiming,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 
@@ -74,7 +74,7 @@ const Scrubber: React.FC<ScrubberProps> = ({
     seekPreviewTime,
     onSeekStart,
     onSeek,
-    onSeekComplete
+    onSeekComplete,
 }) => {
     const trackWidth = useSharedValue(0);
     const scrubGestureStarted = useSharedValue(false);
@@ -82,7 +82,7 @@ const Scrubber: React.FC<ScrubberProps> = ({
     const progress = useDerivedValue(() => {
         const d = duration.value || 1;
         // Check for 0 duration to avoid NaN
-        if (d <= 0) return 0;
+        if (d <= 0) {return 0;}
         // Use shared preview time during any seek (gesture or slider), currentTime otherwise
         const time = isScrubbing.value ? seekPreviewTime.value : currentTime.value;
         return Math.max(0, Math.min(1, time / d));
@@ -105,7 +105,7 @@ const Scrubber: React.FC<ScrubberProps> = ({
             // Optimize: Use translateX (GPU) instead of width (Layout) for butter smooth animation
             // Slide in from left (-100% to 0%)
             transform: [
-                { translateX: (progress.value - 1) * trackWidth.value }
+                { translateX: (progress.value - 1) * trackWidth.value },
             ],
             // Full width to match container
             width: trackWidth.value,
@@ -126,7 +126,7 @@ const Scrubber: React.FC<ScrubberProps> = ({
     const panGesture = Gesture.Pan()
         .onBegin((e) => {
             'worklet';
-            if (trackWidth.value <= 0 || duration.value <= 0) return;
+            if (trackWidth.value <= 0 || duration.value <= 0) {return;}
 
             isScrubbing.value = true;
             scrubGestureStarted.value = true;
@@ -139,7 +139,7 @@ const Scrubber: React.FC<ScrubberProps> = ({
         })
         .onUpdate((e) => {
             'worklet';
-            if (!scrubGestureStarted.value || trackWidth.value <= 0) return;
+            if (!scrubGestureStarted.value || trackWidth.value <= 0) {return;}
 
             const newProgress = Math.max(0, Math.min(1, e.x / trackWidth.value));
             const targetTime = newProgress * (duration.value || 0);
@@ -148,7 +148,7 @@ const Scrubber: React.FC<ScrubberProps> = ({
         })
         .onFinalize(() => {
             'worklet';
-            if (!scrubGestureStarted.value) return;
+            if (!scrubGestureStarted.value) {return;}
             scrubGestureStarted.value = false;
             const finalTime = seekPreviewTime.value;
             // Keep scrubbing flag true until seek completes to prevent snapback
@@ -241,7 +241,7 @@ export const PlayerControls: FC<PlayerControlsProps> = React.memo(({
     onToggleNightMode, nightModeActive, playMode, playbackRate, onToggleSpeed, onToggleHaptics, hapticsEnabled,
     onToggleBackgroundPlay, backgroundPlayEnabled, onEnterPip,
     videoEnhancement, onToggleVideoEnhancement,
-    showSeekButtons = false, seekDuration = 30
+    showSeekButtons = false, seekDuration = 30,
 }) => {
     // Worklet-safe time formatter
     const timeFormatter = (val: number) => {
@@ -279,7 +279,7 @@ export const PlayerControls: FC<PlayerControlsProps> = React.memo(({
     // Get the appropriate icon for current resize mode
     const ResizeModeIcon = getResizeModeIcon(resizeMode);
 
-    if (!showControls) return null;
+    if (!showControls) {return null;}
 
     return (
         <View style={styles.controlsOverlay} pointerEvents="box-none">
@@ -289,7 +289,7 @@ export const PlayerControls: FC<PlayerControlsProps> = React.memo(({
                 style={[
                     styles.header,
                     isLandscape && styles.headerLandscape,
-                    { paddingTop: Math.max(insets.top, 16) }
+                    { paddingTop: Math.max(insets.top, 16) },
                 ]}
             >
                 <Pressable onPress={onBack} style={styles.backButton} hitSlop={10}>
@@ -353,7 +353,7 @@ export const PlayerControls: FC<PlayerControlsProps> = React.memo(({
                 colors={['transparent', 'rgba(0,0,0,0.6)', 'rgba(0,0,0,0.9)']}
                 style={[
                     styles.bottomGradient,
-                    { paddingBottom: Math.max(insets.bottom, 16) }
+                    { paddingBottom: Math.max(insets.bottom, 16) },
                 ]}
                 pointerEvents="none"
             />
@@ -362,7 +362,7 @@ export const PlayerControls: FC<PlayerControlsProps> = React.memo(({
             <View
                 style={[
                     styles.bottomControlsContainer,
-                    { paddingBottom: Math.max(insets.bottom, 16) }
+                    { paddingBottom: Math.max(insets.bottom, 16) },
                 ]}
                 pointerEvents="box-none"
             >
@@ -391,7 +391,7 @@ export const PlayerControls: FC<PlayerControlsProps> = React.memo(({
                             value={remainingTimeValue}
                             formatter={timeFormatter}
                             prefix="-"
-                            style={[styles.timeText, { color: '#ccc', }]}
+                            style={[styles.timeText, { color: '#ccc' }]}
                         />
                         <Text style={[styles.timeText, { color: '#ccc' }]}> / </Text>
                         <ReanimatedText
@@ -407,7 +407,7 @@ export const PlayerControls: FC<PlayerControlsProps> = React.memo(({
 
                     {/* Orientation Lock Button */}
                     <Pressable onPress={onToggleLock} style={styles.controlBtnSmall}>
-                        <OrientationLockIcon size={20} color={isLocked ? "#FBBF24" : "#fff"} locked={isLocked} />
+                        <OrientationLockIcon size={20} color={isLocked ? '#FBBF24' : '#fff'} locked={isLocked} />
                     </Pressable>
 
                     {isLandscape && onToggleBackgroundPlay && (
@@ -483,7 +483,7 @@ export const PlayerControls: FC<PlayerControlsProps> = React.memo(({
 
                     {/* Night Mode */}
                     <Pressable onPress={onToggleNightMode} style={styles.controlBtnSmall}>
-                        <NightModeIcon size={20} color={nightModeActive ? "#FBBF24" : "#fff"} active={nightModeActive} />
+                        <NightModeIcon size={20} color={nightModeActive ? '#FBBF24' : '#fff'} active={nightModeActive} />
                     </Pressable>
                 </View>
             </View>
@@ -607,7 +607,7 @@ const styles = StyleSheet.create({
         shadowColor: '#000',
         shadowOpacity: 0.3,
         shadowRadius: 4,
-        shadowOffset: { width: 0, height: 2 }
+        shadowOffset: { width: 0, height: 2 },
     },
     jumpText: {
         position: 'absolute',

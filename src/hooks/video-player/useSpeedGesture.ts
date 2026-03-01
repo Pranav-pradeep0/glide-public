@@ -1,6 +1,6 @@
 /**
  * useSpeedGesture Hook - FIXED
- * 
+ *
  * Fixed: Speed gesture now properly maintains rate until user releases
  * by passing isGestureActive flag to prevent HUD auto-hide
  */
@@ -71,12 +71,12 @@ export function useSpeedGesture(options: UseSpeedGestureOptions) {
                 runOnJS(onSpeedChange)(2.0, true);
 
                 // Hide controls
-                if (onGestureStart) runOnJS(onGestureStart)();
+                if (onGestureStart) {runOnJS(onGestureStart)();}
             })
             .onUpdate((event) => {
                 'worklet';
 
-                if (!speedGestureActive.value || isLockedShared.value) return;
+                if (!speedGestureActive.value || isLockedShared.value) {return;}
 
                 const speedDelta = event.translationX * PLAYER_CONSTANTS.SPEED_SENSITIVITY;
                 let rawSpeed = speedBase.value + speedDelta;
@@ -92,7 +92,7 @@ export function useSpeedGesture(options: UseSpeedGestureOptions) {
             .onEnd(() => {
                 'worklet';
 
-                if (!speedGestureActive.value) return;
+                if (!speedGestureActive.value) {return;}
 
                 speedGestureActive.value = false;
                 // ✅ FIX: Now properly resets when gesture ends
@@ -101,7 +101,7 @@ export function useSpeedGesture(options: UseSpeedGestureOptions) {
             .onFinalize(() => {
                 'worklet';
 
-                if (!speedGestureActive.value) return;
+                if (!speedGestureActive.value) {return;}
 
                 speedGestureActive.value = false;
                 runOnJS(onSpeedReset)();
@@ -143,12 +143,12 @@ export function useSpeedGesture(options: UseSpeedGestureOptions) {
                 runOnJS(onSpeedChange)(0.5, true);
 
                 // Hide controls
-                if (onGestureStart) runOnJS(onGestureStart)();
+                if (onGestureStart) {runOnJS(onGestureStart)();}
             })
             .onUpdate((event) => {
                 'worklet';
 
-                if (!speedGestureActive.value || isLockedShared.value) return;
+                if (!speedGestureActive.value || isLockedShared.value) {return;}
 
                 const speedDelta = event.translationX * PLAYER_CONSTANTS.SPEED_SENSITIVITY;
                 let rawSpeed = speedBase.value + speedDelta;
@@ -164,7 +164,7 @@ export function useSpeedGesture(options: UseSpeedGestureOptions) {
             .onEnd(() => {
                 'worklet';
 
-                if (!speedGestureActive.value) return;
+                if (!speedGestureActive.value) {return;}
 
                 speedGestureActive.value = false;
                 runOnJS(onSpeedReset)();
@@ -172,7 +172,7 @@ export function useSpeedGesture(options: UseSpeedGestureOptions) {
             .onFinalize(() => {
                 'worklet';
 
-                if (!speedGestureActive.value) return;
+                if (!speedGestureActive.value) {return;}
 
                 speedGestureActive.value = false;
                 runOnJS(onSpeedReset)();

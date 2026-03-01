@@ -75,9 +75,9 @@ function getRelativeTime(timestamp: number): string {
     const days = Math.floor(hours / 24);
 
 
-    if (days > 0) return days === 1 ? '1 day ago' : `${days} days ago`;
-    if (hours > 0) return hours === 1 ? '1 hour ago' : `${hours} hours ago`;
-    if (minutes > 0) return minutes === 1 ? '1 minute ago' : `${minutes} minutes ago`;
+    if (days > 0) {return days === 1 ? '1 day ago' : `${days} days ago`;}
+    if (hours > 0) {return hours === 1 ? '1 hour ago' : `${hours} hours ago`;}
+    if (minutes > 0) {return minutes === 1 ? '1 minute ago' : `${minutes} minutes ago`;}
     return 'Just now';
 }
 
@@ -190,7 +190,7 @@ const VideoGridCard = React.memo(
                                             backgroundColor: theme.colors.text,
                                             borderColor: 'rgba(0,0,0,0.5)', // Dark gap for grid
                                             borderWidth: 2,
-                                        }
+                                        },
                                     ]}
                                 />
                             </View>
@@ -331,7 +331,7 @@ const VideoListItem = React.memo(
                                         backgroundColor: theme.colors.text,
                                         borderColor: theme.colors.background, // Match background to create gap
                                         borderWidth: 2,
-                                    }
+                                    },
                                 ]}
                             />
                             {/* Time indicator floating above knob */}
@@ -340,8 +340,8 @@ const VideoListItem = React.memo(
                                     styles.timeFloatContainer,
                                     {
                                         left: `${progress}%`,
-                                        opacity: .6
-                                    }
+                                        opacity: 0.6,
+                                    },
                                 ]}
                             >
                                 <View style={[styles.timeFloatBubble]}>
@@ -459,13 +459,13 @@ export default function RecentsScreen() {
 
     const loadThumbnailsForHistory = useCallback(async (items: HistoryItemData[]) => {
         for (let i = 0; i < items.length; i += BATCH_SIZE) {
-            if (!isMountedRef.current) break;
+            if (!isMountedRef.current) {break;}
 
             const batch = items.slice(i, i + BATCH_SIZE);
 
             await Promise.all(
                 batch.map(async (video) => {
-                    if (video.thumbnailPath) return;
+                    if (video.thumbnailPath) {return;}
 
                     setHistory(prev =>
                         prev.map(v =>
@@ -496,7 +496,7 @@ export default function RecentsScreen() {
     }, [generateThumbnailForVideo]);
 
     async function loadHistory() {
-        if (!isMountedRef.current) return;
+        if (!isMountedRef.current) {return;}
         setLoading(true);
 
         try {
@@ -521,7 +521,7 @@ export default function RecentsScreen() {
     }
 
     async function handleRefresh() {
-        if (!isMountedRef.current) return;
+        if (!isMountedRef.current) {return;}
         setRefreshing(true);
 
         try {
@@ -569,20 +569,20 @@ export default function RecentsScreen() {
     // ============= EVENT HANDLERS =============
 
     function handleVideoPress(video: HistoryItemData) {
-        if (!video.videoPath) return;
+        if (!video.videoPath) {return;}
         NavigationService.handleVideoNavigation(navigation, video.videoPath, {
             videoName: video.videoName,
         });
     }
 
     const handleOpenOptions = useCallback((video: HistoryItemData) => {
-        console.log('[RecentsScreen] handleOpenOptions called:', {
+        if (__DEV__) {console.log('[RecentsScreen] handleOpenOptions called:', {
             videoName: video.videoName,
             videoPath: video.videoPath,
-        });
+        });}
         setSelectedVideo(video);
         setOptionsVisible(true);
-        console.log('[RecentsScreen] optionsVisible set to true');
+        if (__DEV__) {console.log('[RecentsScreen] optionsVisible set to true');}
     }, []);
 
     const toggleViewMode = useCallback(() => setViewMode((prev) => (prev === 'grid' ? 'list' : 'grid')), []);
@@ -607,11 +607,11 @@ export default function RecentsScreen() {
         const videoPath = video.videoPath;
         const contentUri = video.contentUri; // Original content:// URI stored in history
 
-        console.log('[RecentsScreen] handleDelete started:', {
+        if (__DEV__) {console.log('[RecentsScreen] handleDelete started:', {
             videoPath,
             contentUri,
             videoName: video.videoName,
-        });
+        });}
 
         if (!contentUri) {
             console.error('[RecentsScreen] handleDelete: No contentUri available for deletion');
@@ -624,9 +624,9 @@ export default function RecentsScreen() {
 
         try {
             // Use CameraRoll.deletePhotos with the stored content:// URI
-            console.log('[RecentsScreen] Attempting CameraRoll.deletePhotos with URI:', contentUri);
+            if (__DEV__) {console.log('[RecentsScreen] Attempting CameraRoll.deletePhotos with URI:', contentUri);}
             await CameraRoll.deletePhotos([contentUri]);
-            console.log('[RecentsScreen] File deleted successfully via CameraRoll:', contentUri);
+            if (__DEV__) {console.log('[RecentsScreen] File deleted successfully via CameraRoll:', contentUri);}
             clearVideoHistory(videoPath);
             loadHistory();
         } catch (error) {
@@ -643,14 +643,14 @@ export default function RecentsScreen() {
 
     const handleClearHistoryItem = () => {
         const video = selectedVideoRef.current;
-        if (!video) return;
+        if (!video) {return;}
         clearVideoHistory(video.videoPath);
         loadHistory();
     };
 
     const handleShare = async () => {
         const video = selectedVideoRef.current;
-        if (!video) return;
+        if (!video) {return;}
         try {
             await Share.open({
                 url: `file://${video.videoPath}`,
@@ -658,7 +658,7 @@ export default function RecentsScreen() {
                 failOnCancel: false,
             });
         } catch (error) {
-            console.log('Share dismissed', error);
+            if (__DEV__) {console.log('Share dismissed', error);}
         }
     };
 
@@ -795,7 +795,7 @@ export default function RecentsScreen() {
 
     const renderItem = useCallback(
         ({ item }: { item: SectionItem }) => {
-            if (!item.data && (!item.videos || !item.videos.length)) return null;
+            if (!item.data && (!item.videos || !item.videos.length)) {return null;}
 
             if (viewMode === 'list') {
                 return (
@@ -1132,3 +1132,5 @@ const styles = StyleSheet.create({
     emptyText: { fontSize: 18, fontWeight: 'bold', marginTop: 16, marginBottom: 8 },
     emptySubtext: { fontSize: 14, textAlign: 'center' },
 });
+
+

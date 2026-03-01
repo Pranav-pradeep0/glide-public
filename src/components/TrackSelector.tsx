@@ -164,15 +164,15 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
 
     // Calculate default tab once and memoize
     const defaultTab = useMemo((): SubtitleTab => {
-        if (type !== 'subtitle') return 'embedded';
+        if (type !== 'subtitle') {return 'embedded';}
 
         const embeddedTracks = tracks.filter((t) => t.type === 'subtitle');
 
-        if (currentExternalName) return 'external';
-        if (selectedTrackIndex !== null && embeddedTracks.length > 0) return 'embedded';
-        if (embeddedTracks.length === 0 && externalSubtitles.length > 0) return 'external';
+        if (currentExternalName) {return 'external';}
+        if (selectedTrackIndex !== null && embeddedTracks.length > 0) {return 'embedded';}
+        if (embeddedTracks.length === 0 && externalSubtitles.length > 0) {return 'external';}
         if (embeddedTracks.length === 0 && initialApiSubtitles && initialApiSubtitles.length > 0)
-            return 'online';
+            {return 'online';}
 
         return 'embedded';
     }, [type, currentExternalName, selectedTrackIndex, tracks, externalSubtitles, initialApiSubtitles]);
@@ -247,10 +247,10 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
                     abortControllerRef.current?.abort();
                     abortControllerRef.current = new AbortController();
 
-                    if (__DEV__) console.log('[TrackSelector] autoSearch - videoName:', videoName, 'imdbId:', imdbId, 'language:', selectedLanguage, 'prioritizeSDH: false');
+                    if (__DEV__) {console.log('[TrackSelector] autoSearch - videoName:', videoName, 'imdbId:', imdbId, 'language:', selectedLanguage, 'prioritizeSDH: false');}
                     const result = await searchAllSubtitles(videoName, selectedLanguage, imdbId, false, abortControllerRef.current.signal);
                     const subs = result.subtitles || [];
-                    if (__DEV__) console.log('[TrackSelector] autoSearch - received', subs.length, 'subtitles');
+                    if (__DEV__) {console.log('[TrackSelector] autoSearch - received', subs.length, 'subtitles');}
                     setSearchResults(subs);
 
                     setSearchResults(subs);
@@ -278,8 +278,8 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
             const parsed = FilenameParser.parse(videoName);
             if (parsed.isTVShow) {
                 setShowSeasonEpisodeInputs(true);
-                if (parsed.season) setManualSeason(parsed.season.toString().padStart(2, '0'));
-                if (parsed.episode) setManualEpisode(parsed.episode.toString().padStart(2, '0'));
+                if (parsed.season) {setManualSeason(parsed.season.toString().padStart(2, '0'));}
+                if (parsed.episode) {setManualEpisode(parsed.episode.toString().padStart(2, '0'));}
             } else {
                 setShowSeasonEpisodeInputs(false);
                 setManualSeason('');
@@ -305,7 +305,7 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
     }, [onSelectTrack, onClose]);
 
     const handlePickFile = useCallback(async () => {
-        if (!onLoadExternalCues) return;
+        if (!onLoadExternalCues) {return;}
 
         try {
             setLoading(true);
@@ -330,7 +330,7 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
 
     const handleSearch = useCallback(async () => {
         const query = searchQuery.trim();
-        if (!query) return;
+        if (!query) {return;}
 
         const token = Date.now();
         searchTokenRef.current = token;
@@ -341,7 +341,7 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
             const e = manualEpisode ? parseInt(manualEpisode) : undefined;
             const y = manualYear ? parseInt(manualYear) : undefined;
 
-            if (__DEV__) console.log('[TrackSelector] handleSearch - query:', query, 'language:', selectedLanguage, 'prioritizeSDH:', preferHI, 'S:', s, 'E:', e, 'Y:', y);
+            if (__DEV__) {console.log('[TrackSelector] handleSearch - query:', query, 'language:', selectedLanguage, 'prioritizeSDH:', preferHI, 'S:', s, 'E:', e, 'Y:', y);}
 
             // Cancel previous
             abortControllerRef.current?.abort();
@@ -358,13 +358,13 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
                 y
             );
 
-            if (searchTokenRef.current !== token) return;
+            if (searchTokenRef.current !== token) {return;}
 
-            if (__DEV__) console.log('[TrackSelector] handleSearch - received', result.subtitles?.length || 0, 'subtitles');
+            if (__DEV__) {console.log('[TrackSelector] handleSearch - received', result.subtitles?.length || 0, 'subtitles');}
             setSearchResults(result.subtitles || []);
         } catch (error) {
             console.error('[TrackSelector] Search error:', error);
-            if (searchTokenRef.current !== token) return;
+            if (searchTokenRef.current !== token) {return;}
             setSearchResults([]);
         } finally {
             if (searchTokenRef.current === token) {
@@ -375,17 +375,17 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
 
     const handleDownloadSubtitle = useCallback(
         async (subtitle: SubtitleResult) => {
-            if (!onLoadExternalCues) return;
+            if (!onLoadExternalCues) {return;}
 
             const currentId = subtitle.id;
             try {
                 setDownloadingId(currentId);
                 const content = await downloadSubtitle(subtitle.downloadUrl);
 
-                if (!content) return;
+                if (!content) {return;}
 
                 const cues = SubtitleParser.parse(content, 'srt');
-                if (cues.length === 0) return;
+                if (cues.length === 0) {return;}
 
                 const validation = SubtitleSelectionService.validateSDHContent(cues);
                 const name = subtitle.release || subtitle.name || 'Downloaded Subtitle';
@@ -480,7 +480,7 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
                         pressed && styles.trackItemPressed,
                     ]}
                     onPress={() => {
-                        if (!onLoadExternalCues) return;
+                        if (!onLoadExternalCues) {return;}
 
                         onLoadExternalCues(item.cues, item.name, item.isSDH);
                         if (item.isSDH && onLoadSDHForHaptics) {
@@ -591,7 +591,7 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
 
     // ---- Memoized Components ----
     const OffOption = useMemo(() => {
-        if (type !== 'subtitle') return null;
+        if (type !== 'subtitle') {return null;}
 
         const isOffSelected = selectedTrackIndex === null && !currentExternalName;
 
@@ -884,7 +884,7 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
                         <Pressable
                             style={[
                                 styles.actionIconButton,
-                                (!searchQuery.trim() || isSearching) && { opacity: 0.3 }
+                                (!searchQuery.trim() || isSearching) && { opacity: 0.3 },
                             ]}
                             onPress={handleSearch}
                             disabled={isSearching || !searchQuery.trim()}
@@ -893,7 +893,7 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
                             {isSearching ? (
                                 <ActivityIndicator size="small" color="#FFFFFF" />
                             ) : (
-                                <Feather name="search" size={20} color={searchQuery.trim() ? "#FFFFFF" : "#666666"} />
+                                <Feather name="search" size={20} color={searchQuery.trim() ? '#FFFFFF' : '#666666'} />
                             )}
                         </Pressable>
                     </View>
@@ -950,7 +950,7 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
             );
         }
 
-        if (type !== 'subtitle') return null;
+        if (type !== 'subtitle') {return null;}
 
         return (
             <View style={styles.tabBar}>

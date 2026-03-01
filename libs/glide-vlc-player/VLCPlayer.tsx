@@ -1,4 +1,4 @@
-import React, { forwardRef, useImperativeHandle, useRef } from "react";
+import React, { forwardRef, useImperativeHandle, useRef } from 'react';
 import {
     StyleSheet,
     requireNativeComponent,
@@ -8,9 +8,9 @@ import {
     NativeSyntheticEvent,
     ViewStyle,
     StyleProp,
-} from "react-native";
+} from 'react-native';
 // @ts-ignore - resolveAssetSource doesn't have proper types
-import resolveAssetSource from "react-native/Libraries/Image/resolveAssetSource";
+import resolveAssetSource from 'react-native/Libraries/Image/resolveAssetSource';
 
 // Native component type declaration
 interface RCTVLCPlayerNativeProps {
@@ -53,10 +53,10 @@ interface RCTVLCPlayerNativeProps {
     [key: string]: any;
 }
 
-const RCTVLCPlayer = requireNativeComponent<RCTVLCPlayerNativeProps>("RCTVLCPlayer") as unknown as React.ComponentType<RCTVLCPlayerNativeProps>;
+const RCTVLCPlayer = requireNativeComponent<RCTVLCPlayerNativeProps>('RCTVLCPlayer') as unknown as React.ComponentType<RCTVLCPlayerNativeProps>;
 
 export type VLCPlayerResizeMode =
-    "contain" | "cover" | "fill" | "stretch" | "none" | "scale-down" | "best-fit" | "center";
+    'contain' | 'cover' | 'fill' | 'stretch' | 'none' | 'scale-down' | 'best-fit' | 'center';
 export type VLCPlayerAudioTrack = { id: number; name: string };
 export type VLCPlayerTextTrack = { id: number; name: string };
 
@@ -156,19 +156,19 @@ const VLCPlayer = forwardRef<VLCPlayerRef, VLCPlayerProps>((props, ref) => {
             setNativeProps({ resume: isResume });
         },
         snapshot: (path: string) => {
-            dispatchCommand("snapshot", [path]);
+            dispatchCommand('snapshot', [path]);
         },
         startRecording: (path: string) => {
-            dispatchCommand("startRecording", [path]);
+            dispatchCommand('startRecording', [path]);
         },
         stopRecording: () => {
-            dispatchCommand("stopRecording", []);
+            dispatchCommand('stopRecording', []);
         },
         stopPlayer: () => {
-            dispatchCommand("stopPlayer", []);
+            dispatchCommand('stopPlayer', []);
         },
         pausePlayer: () => {
-            dispatchCommand("pausePlayer", []);
+            dispatchCommand('pausePlayer', []);
         },
         setNativeProps: (nativeProps: any) => {
             setNativeProps(nativeProps);
@@ -194,7 +194,7 @@ const VLCPlayer = forwardRef<VLCPlayerRef, VLCPlayerProps>((props, ref) => {
         if (nativeComponentRef.current) {
             UIManager.dispatchViewManagerCommand(
                 findNodeHandle(nativeComponentRef.current),
-                UIManager.getViewManagerConfig("RCTVLCPlayer").Commands[command],
+                UIManager.getViewManagerConfig('RCTVLCPlayer').Commands[command],
                 args
             );
         }
@@ -263,7 +263,7 @@ const VLCPlayer = forwardRef<VLCPlayerRef, VLCPlayerProps>((props, ref) => {
 
     // Render logic
     const source = resolveAssetSource(props.source) || {};
-    let uri = source.uri || "";
+    let uri = source.uri || '';
     if (uri && uri.match(/^\//)) {
         uri = `file://${uri}`;
     }
@@ -281,7 +281,7 @@ const VLCPlayer = forwardRef<VLCPlayerRef, VLCPlayerProps>((props, ref) => {
         uri,
         isNetwork,
         isAsset,
-        type: source.type || "",
+        type: source.type || '',
         mainVer: source.mainVer || 0,
         patchVer: source.patchVer || 0,
     };
@@ -323,7 +323,7 @@ const VLCPlayer = forwardRef<VLCPlayerRef, VLCPlayerProps>((props, ref) => {
 
 const styles = StyleSheet.create({
     base: {
-        overflow: "hidden",
+        overflow: 'hidden',
     },
 });
 

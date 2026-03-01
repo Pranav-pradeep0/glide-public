@@ -1,16 +1,16 @@
 export declare const webdlExp: RegExp;
 export declare enum Source {
-    BLURAY = "BLURAY",
-    WEBDL = "WEBDL",
-    WEBRIP = "WEBRIP",
-    DVD = "DVD",
-    CAM = "CAM",
-    SCREENER = "SCREENER",
-    PPV = "PPV",
-    TELESYNC = "TELESYNC",
-    TELECINE = "TELECINE",
-    WORKPRINT = "WORKPRINT",
-    TV = "TV"
+    BLURAY = 'BLURAY',
+    WEBDL = 'WEBDL',
+    WEBRIP = 'WEBRIP',
+    DVD = 'DVD',
+    CAM = 'CAM',
+    SCREENER = 'SCREENER',
+    PPV = 'PPV',
+    TELESYNC = 'TELESYNC',
+    TELECINE = 'TELECINE',
+    WORKPRINT = 'WORKPRINT',
+    TV = 'TV'
 }
 interface SourceGroups {
     bluray: boolean;

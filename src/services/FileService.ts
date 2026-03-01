@@ -8,7 +8,7 @@ class FileServiceClass {
      * Handles the messy file:// prefix logic consistently.
      */
     normalizePath(path: string): string {
-        if (!path) return '';
+        if (!path) {return '';}
 
         // Remove double prefixes if any (common issue)
         let cleanPath = path.replace(/file:\/\/file:\/\//g, 'file://');
@@ -28,7 +28,7 @@ class FileServiceClass {
      * Resolve content:// or ph:// URIs to real file paths
      */
     async resolveToRealPath(uri: string): Promise<string> {
-        if (!uri) return uri;
+        if (!uri) {return uri;}
 
         // Normalize multiple file:// prefixes
         let normalizedUri = uri;
@@ -42,7 +42,7 @@ class FileServiceClass {
         }
 
         // No scheme - assume it's already a real path
-        if (!normalizedUri.includes('://')) return normalizedUri;
+        if (!normalizedUri.includes('://')) {return normalizedUri;}
 
         // Try to resolve content:// or ph:// URIs to real paths
         if (normalizedUri.startsWith('content://') || normalizedUri.startsWith('ph://')) {
@@ -67,7 +67,7 @@ class FileServiceClass {
      * Get a clean filesystem path (without file:// prefix) for use with RNFS
      */
     getCleanPath(path: string): string {
-        if (!path) return '';
+        if (!path) {return '';}
         return path.replace('file://', '');
     }
 

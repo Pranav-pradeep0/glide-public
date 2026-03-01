@@ -1,9 +1,9 @@
 /**
  * useSeekGesture Hook
- * 
+ *
  * CRITICAL: This hook is prone to breaking during refactoring.
  * Handle with extreme care. The seek gesture is essential for user experience.
- * 
+ *
  * Implements horizontal pan gesture for seeking through video.
  * Uses worklet-based updates for 60fps performance.
  */
@@ -44,12 +44,12 @@ interface UseSeekGestureOptions {
 
 /**
  * Creates a horizontal pan gesture for seeking.
- * 
+ *
  * Gesture flow:
  * 1. onStart: Capture current time, set seeking state
  * 2. onUpdate: Calculate new time based on translation, update HUD
  * 3. onEnd: Apply final seek position
- * 
+ *
  * IMPORTANT: Uses worklet for calculations, runOnJS for state updates.
  * This ensures smooth 60fps during the gesture while keeping React state in sync.
  */
@@ -100,7 +100,7 @@ export function useSeekGesture(options: UseSeekGestureOptions) {
                 'worklet';
 
                 // Skip if gesture isn't properly started (e.g. if locked)
-                if (!gestureActive.value) return;
+                if (!gestureActive.value) {return;}
 
                 // Calculate offset based on horizontal translation
                 // Sensitivity controls how much screen movement = time change
@@ -124,7 +124,7 @@ export function useSeekGesture(options: UseSeekGestureOptions) {
                 'worklet';
 
                 // Skip if gesture wasn't properly started
-                if (!gestureActive.value) return;
+                if (!gestureActive.value) {return;}
 
                 // Calculate final time
                 const finalTime = Math.max(

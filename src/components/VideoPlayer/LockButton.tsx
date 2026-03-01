@@ -27,7 +27,7 @@ export const LockButton: FC<LockButtonProps> = ({ isLocked, showLockIcon, onTogg
         }
     }, [showLockIcon, fadeAnim]);
 
-    if (!showLockIcon) return null;
+    if (!showLockIcon) {return null;}
 
     return (
         <Animated.View style={[styles.container, { opacity: fadeAnim }]}>

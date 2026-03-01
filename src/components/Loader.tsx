@@ -1,13 +1,6 @@
 // components/Loader.tsx
 import React from 'react';
 import { View, ActivityIndicator, StyleSheet, Text } from 'react-native';
-import Animated, {
-    useAnimatedStyle,
-    withRepeat,
-    withTiming,
-    withSequence,
-    Easing,
-} from 'react-native-reanimated';
 import { useTheme } from '@/hooks/useTheme';
 
 interface LoaderProps {

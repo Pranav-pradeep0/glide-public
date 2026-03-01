@@ -20,7 +20,7 @@ export class AudioExtractor {
                 const realPath = await FileService.resolveToRealPath(videoPath);
                 if (realPath && realPath !== videoPath && !realPath.startsWith('content://')) {
                     const cleanPath = realPath.replace(/^file:\/\//, '');
-                    if (await RNFS.exists(cleanPath)) return cleanPath;
+                    if (await RNFS.exists(cleanPath)) { return cleanPath; }
                 }
             } catch (error) {
                 console.warn(`${LOG_PREFIX} Real path resolution failed:`, error);
@@ -49,7 +49,7 @@ export class AudioExtractor {
         startTime: number,
         duration: number = 10
     ): Promise<string | null> {
-        console.log(`${LOG_PREFIX} Extracting chunk at ${startTime}s for ${duration}s`);
+        if (__DEV__) { console.log(`${LOG_PREFIX} Extracting chunk at ${startTime}s for ${duration}s`); }
 
         try {
             const resolvedPath = await this.resolveVideoPath(videoPath);
@@ -64,14 +64,14 @@ export class AudioExtractor {
             // -f wav: Force WAV muxer
             const command = `-ss ${startTime} -i "${resolvedPath}" -t ${duration} -vn -ac 1 -ar 16000 -c:a pcm_s16le -f wav -y "${outputPath}"`;
 
-            console.log(`${LOG_PREFIX} Executing FFmpeg command: ${command}`);
+            if (__DEV__) { console.log(`${LOG_PREFIX} Executing FFmpeg command: ${command}`); }
             const session = await FFmpegKit.execute(command);
             const returnCode = await session.getReturnCode();
 
             if (ReturnCode.isSuccess(returnCode)) {
                 if (await RNFS.exists(outputPath)) {
                     const stats = await RNFS.stat(outputPath);
-                    console.log(`${LOG_PREFIX} Extraction success: ${outputPath} (${stats.size} bytes)`);
+                    if (__DEV__) { console.log(`${LOG_PREFIX} Extraction success: ${outputPath} (${stats.size} bytes)`); }
                     return outputPath;
                 }
             }
@@ -96,23 +96,23 @@ export class AudioExtractor {
      * @returns Mean volume in dB (e.g., -20.5), or -91.0 if silent/error
      */
     static async checkAudioVolume(audioPath: string): Promise<number> {
-        console.log(`${LOG_PREFIX} Checking volume for: ${audioPath}`);
+        if (__DEV__) { console.log(`${LOG_PREFIX} Checking volume for: ${audioPath}`); }
 
         try {
             // Read file as base64 (RNFS reads binary as base64)
             const base64Data = await RNFS.readFile(audioPath, 'base64');
 
             // Decode base64 to binary string (polyfill or manual)
-            // React Native doesn't have Buffer globally available without polyfills often, 
+            // React Native doesn't have Buffer globally available without polyfills often,
             // so we do a simple manual decode or use fetch blob if available but RNFS is standard here.
             // Actually, we can just walk the base64 string or use a library, but simplest standard way:
             // Since we don't have Buffer in this context guaranteed, and importing it adds weight:
             // Let's use a helper if we have one or just simple base64 decoder.
-            // Wait, we can assume Buffer is available or use `atob`. 
+            // Wait, we can assume Buffer is available or use `atob`.
             // Most RN environments have `atob`.
 
-            // To be safe and minimal: 
-            // We can rely on `Buffer` if node libs are polyfilled (common in RN). 
+            // To be safe and minimal:
+            // We can rely on `Buffer` if node libs are polyfilled (common in RN).
             // If not, we iterate.
             // For robustness, I'll use Buffer.from if available, or a simple implementation.
 
@@ -148,7 +148,9 @@ export class AudioExtractor {
                 const high = pcmData[i + 1];
 
                 // Convert to signed 16-bit
+                // eslint-disable-next-line no-bitwise
                 let sample = (high << 8) | low;
+                // eslint-disable-next-line no-bitwise
                 if (sample & 0x8000) {
                     sample = sample - 0x10000;
                 }
@@ -157,7 +159,7 @@ export class AudioExtractor {
                 sampleCount++;
             }
 
-            if (sampleCount === 0) return -91.0;
+            if (sampleCount === 0) { return -91.0; }
 
             const meanSquare = sumSquares / sampleCount;
             const rms = Math.sqrt(meanSquare);
@@ -167,14 +169,14 @@ export class AudioExtractor {
             let db = 20 * Math.log10(rms / 32768);
 
             // Access floor at -91dB
-            if (!isFinite(db) || db < -91) db = -91;
+            if (!isFinite(db) || db < -91) { db = -91; }
 
-            console.log(`${LOG_PREFIX} Calculated RMS: ${rms.toFixed(2)}, dB: ${db.toFixed(1)}`);
+            if (__DEV__) { console.log(`${LOG_PREFIX} Calculated RMS: ${rms.toFixed(2)}, dB: ${db.toFixed(1)}`); }
             return db;
 
         } catch (error) {
             console.error(`${LOG_PREFIX} Volume check error (JS):`, error);
-            // Non-fatal, just assume silence to be safe? 
+            // Non-fatal, just assume silence to be safe?
             // If we assume silence on error, user gets "No Speech" which blocks them.
             // BETTER: If check fails, return high volume to ALLOW transcription as fallback.
             // The previous logic returned -91 which blocked the user.
@@ -201,3 +203,5 @@ export class AudioExtractor {
         }
     }
 }
+
+

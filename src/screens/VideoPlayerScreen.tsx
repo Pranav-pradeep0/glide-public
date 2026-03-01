@@ -105,7 +105,7 @@ export default function VideoPlayerScreen({ route }: Props) {
 
     // Derive album name from parent folder if not provided
     const albumName = useMemo(() => {
-        if (routeAlbumName) return routeAlbumName;
+        if (routeAlbumName) {return routeAlbumName;}
         // Extract parent folder name from video path
         const parts = videoPath.replace(/\\/g, '/').split('/');
         if (parts.length >= 2) {
@@ -258,7 +258,7 @@ export default function VideoPlayerScreen({ route }: Props) {
         audioDelay: initialAudioDelay,
         subtitleDelay: initialSubtitleDelay,
         brightness: initialVideoBrightness,
-        duration: savedDuration
+        duration: savedDuration,
     } = useMemo(() => getResumeState(), [getResumeState]);
 
     // Determine initial brightness based on mode
@@ -278,7 +278,7 @@ export default function VideoPlayerScreen({ route }: Props) {
 
     // Memoize resume modal data to prevent recalculations on every render during animations
     const resumeModalData = useMemo(() => {
-        if (!resumePosition) return null;
+        if (!resumePosition) {return null;}
 
         const remaining = savedDuration ? Math.max(0, savedDuration - resumePosition) : 0;
         // Calculate finish time once based on current time when history is loaded
@@ -290,7 +290,7 @@ export default function VideoPlayerScreen({ route }: Props) {
             formattedTime: formatTime(resumePosition),
             remainingTime: savedDuration ? remaining : undefined,
             finishByTime: finishBy,
-            showRecap: resumePosition > 120 && (!!imdbId || !!albumName)
+            showRecap: resumePosition > 120 && (!!imdbId || !!albumName),
         };
     }, [resumePosition, savedDuration, imdbId, albumName]);
 
@@ -365,7 +365,7 @@ export default function VideoPlayerScreen({ route }: Props) {
             if (settings.brightnessMode === 'global') {
                 updateSettings({ globalBrightness: val });
             }
-        }
+        },
     });
 
     // Tracks hook
@@ -393,10 +393,10 @@ export default function VideoPlayerScreen({ route }: Props) {
     // ========================================================================
 
     const savePlaybackProgress = useCallback(() => {
-        if (!videoPath || !videoName) return;
+        if (!videoPath || !videoName) {return;}
 
         const isNetwork = NavigationService.isNetworkStream(videoPath);
-        if (isNetwork) return;
+        if (isNetwork) {return;}
 
         if (player.state.duration > 0) {
             // Guard: If we have a resume position but the player is still at 0 (or near 0),
@@ -404,7 +404,7 @@ export default function VideoPlayerScreen({ route }: Props) {
             // This prevents overwriting deep history with 0 on immediate exit.
             const currentTime = player.currentTimeRef.current;
             if (resumePosition && resumePosition > 10 && currentTime < 2) {
-                console.log('[VideoPlayer] Skipping save: Player at start but resume expected at', resumePosition);
+                if (__DEV__) {console.log('[VideoPlayer] Skipping save: Player at start but resume expected at', resumePosition);}
                 return;
             }
 
@@ -432,7 +432,7 @@ export default function VideoPlayerScreen({ route }: Props) {
         settingsHook.settings.audioDelay,
         settingsHook.settings.subtitleDelay,
         settings.brightnessMode,
-        resumePosition
+        resumePosition,
     ]);
 
     // Keep ref updated for usePlayerCore
@@ -727,7 +727,7 @@ export default function VideoPlayerScreen({ route }: Props) {
     const hasNext = currentVideoIndex >= 0 && currentVideoIndex < albumVideos.length - 1;
 
     const handlePrevious = useCallback(() => {
-        if (!hasPrevious) return;
+        if (!hasPrevious) {return;}
         const prevVideo = albumVideos[currentVideoIndex - 1];
         if (prevVideo) {
             ui.closeAllPanels();
@@ -741,7 +741,7 @@ export default function VideoPlayerScreen({ route }: Props) {
     }, [hasPrevious, albumVideos, currentVideoIndex, ui, navigation, albumName, playMode]);
 
     const handleNext = useCallback(() => {
-        if (!hasNext) return;
+        if (!hasNext) {return;}
         const nextVideo = albumVideos[currentVideoIndex + 1];
         if (nextVideo) {
             ui.closeAllPanels();
@@ -784,7 +784,7 @@ export default function VideoPlayerScreen({ route }: Props) {
             return;
         }
 
-        if (!resumePosition) return;
+        if (!resumePosition) {return;}
 
         // Pause player and show RecapModal immediately with loading state
         player.pause();
@@ -794,7 +794,7 @@ export default function VideoPlayerScreen({ route }: Props) {
 
         // Helper function for user feedback
         const setFeedback = (msg: string) => {
-            if (isMounted.current) setRecapLoadingMessage(msg);
+            if (isMounted.current) {setRecapLoadingMessage(msg);}
         };
 
         // Get dialogue through the centralized service
@@ -808,7 +808,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                 cleanTitle || videoName
             );
 
-            if (!isMounted.current) return;
+            if (!isMounted.current) {return;}
 
             if (!dialogue) {
                 setRecapText(null);
@@ -822,7 +822,7 @@ export default function VideoPlayerScreen({ route }: Props) {
             setFeedback('Generating your recap...');
             const summary = await RecapService.generateRecap(dialogue, cleanTitle || videoName);
 
-            if (!isMounted.current) return;
+            if (!isMounted.current) {return;}
 
             if (summary) {
                 setRecapText(summary);
@@ -916,7 +916,7 @@ export default function VideoPlayerScreen({ route }: Props) {
         settingsHook.settings.audioDelay,
         settingsHook.settings.subtitleDelay,
         settings.brightnessMode,
-        persistNow
+        persistNow,
     ]);
 
     // ========================================================================
@@ -969,7 +969,7 @@ export default function VideoPlayerScreen({ route }: Props) {
 
     // Periodic progress save
     useEffect(() => {
-        if (!player.state.isPlaying || !videoPath || !videoName) return;
+        if (!player.state.isPlaying || !videoPath || !videoName) {return;}
 
         const intervalId = setInterval(() => {
             savePlaybackProgress();
@@ -1057,7 +1057,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                         audioTrack={tracksHook.selectedAudioTrackId}
                         textTrack={tracksHook.vlcTextTrackId ?? -1}
                         title={videoName}
-                        artist={albumName || "Glide"}
+                        artist={albumName || 'Glide'}
                         animatedStyle={gestures.videoAnimatedStyle}
                         audioEqualizer={settingsHook.audioEqualizer}
                         audioDelay={settingsHook.settings.audioDelay}
@@ -1098,7 +1098,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                 <View
                     style={[
                         StyleSheet.absoluteFill,
-                        { backgroundColor: 'black', opacity: 0.5, zIndex: 1 }
+                        { backgroundColor: 'black', opacity: 0.5, zIndex: 1 },
                     ]}
                     pointerEvents="none"
                 />
@@ -1381,4 +1381,6 @@ const styles = StyleSheet.create({
         elevation: 10,
     },
 });
+
+
 

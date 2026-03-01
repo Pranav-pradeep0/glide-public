@@ -1,3 +1,4 @@
+/* eslint-disable no-shadow */
 const x265Exp = /(?<x265>x265)/i;
 const h265Exp = /(?<h265>h265)/i;
 const x264Exp = /(?<x264>x264)/i;
@@ -22,13 +23,13 @@ const codecExp = new RegExp([
 ].join('|'), 'i');
 export var VideoCodec;
 (function (VideoCodec) {
-    VideoCodec["X265"] = "x265";
-    VideoCodec["X264"] = "x264";
-    VideoCodec["H264"] = "h264";
-    VideoCodec["H265"] = "h265";
-    VideoCodec["WMV"] = "WMV";
-    VideoCodec["XVID"] = "xvid";
-    VideoCodec["DVDR"] = "dvdr";
+    VideoCodec.X265 = 'x265';
+    VideoCodec.X264 = 'x264';
+    VideoCodec.H264 = 'h264';
+    VideoCodec.H265 = 'h265';
+    VideoCodec.WMV = 'WMV';
+    VideoCodec.XVID = 'xvid';
+    VideoCodec.DVDR = 'dvdr';
 })(VideoCodec || (VideoCodec = {}));
 export function parseVideoCodec(title) {
     const result = codecExp.exec(title);

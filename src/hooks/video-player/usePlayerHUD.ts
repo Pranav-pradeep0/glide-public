@@ -1,6 +1,6 @@
 /**
  * usePlayerHUD Hook - FIXED
- * 
+ *
  * Fixed: Speed HUD now only hides visually during gesture, doesn't reset rate
  * until gesture explicitly ends via resetSpeed()
  */
@@ -59,7 +59,7 @@ function hudReducer(state: HUDState, action: HUDAction): HUDState {
             };
         case 'SHOW_BRIGHTNESS':
             // OPTIMIZATION: If already showing, don't update (value handled by SharedValue)
-            if (state.brightness.show) return state;
+            if (state.brightness.show) {return state;}
             return {
                 ...state,
                 brightness: { show: true, value: action.value },
@@ -71,7 +71,7 @@ function hudReducer(state: HUDState, action: HUDAction): HUDState {
             };
         case 'SHOW_VOLUME':
             // OPTIMIZATION: If already showing, don't update (value handled by SharedValue)
-            if (state.volume.show) return state;
+            if (state.volume.show) {return state;}
             return {
                 ...state,
                 volume: { show: true, value: action.value },
@@ -202,7 +202,7 @@ export function usePlayerHUD(): UsePlayerHUDReturn {
                 time,
                 startTime,
                 direction: effectiveDirection,
-                side
+                side,
             });
         }
 
@@ -373,12 +373,12 @@ export function usePlayerHUD(): UsePlayerHUDReturn {
     useEffect(() => {
         return () => {
             const timers = timerRefs.current;
-            if (timers.seek) clearTimeout(timers.seek);
-            if (timers.brightness) clearTimeout(timers.brightness);
-            if (timers.volume) clearTimeout(timers.volume);
-            if (timers.speed) clearTimeout(timers.speed);
-            if (timers.resize) clearTimeout(timers.resize);
-            if (timers.ripple) clearTimeout(timers.ripple);
+            if (timers.seek) {clearTimeout(timers.seek);}
+            if (timers.brightness) {clearTimeout(timers.brightness);}
+            if (timers.volume) {clearTimeout(timers.volume);}
+            if (timers.speed) {clearTimeout(timers.speed);}
+            if (timers.resize) {clearTimeout(timers.resize);}
+            if (timers.ripple) {clearTimeout(timers.ripple);}
         };
     }, []);
 
@@ -412,7 +412,7 @@ export function usePlayerHUD(): UsePlayerHUDReturn {
         showSpeedHUD, hideSpeedHUD,
         showResizeHUD, hideResizeHUD,
         resetSpeed, updateZoom, resetAll,
-        showRipple, hideRipple
+        showRipple, hideRipple,
     ]);
 }
 

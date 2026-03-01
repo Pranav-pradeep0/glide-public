@@ -1,10 +1,10 @@
 /**
  * usePlayerGestures Hook
- * 
+ *
  * Main gesture compositor for the video player.
  * Combines all gesture sub-hooks into a single composed gesture.
  * Also provides the animated style for video zoom/pan.
- * 
+ *
  * CRITICAL: This hook orchestrates all gesture handling.
  * Changes here can break the entire gesture system.
  */
@@ -76,7 +76,7 @@ interface UsePlayerGesturesReturn {
 
 /**
  * Main gesture hook that composes all gesture handlers.
- * 
+ *
  * Gesture priority (using Race and Exclusive combiners):
  * 1. Pinch (zoom) - highest priority
  * 2. Speed gestures (long press) - need to activate before pan
@@ -179,7 +179,7 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
             try {
                 if (initialBrightness !== undefined) {
                     currentBrightness.value = initialBrightness;
-                    if (onBrightnessChange) onBrightnessChange(initialBrightness);
+                    if (onBrightnessChange) {onBrightnessChange(initialBrightness);}
 
                     if (AudioControlModule) {
                         if (AudioControlModule.setBrightnessSync) {
@@ -277,7 +277,7 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
     }, [hud]);
 
     const handleSpeedReset = useCallback(() => {
-        // hud.resetSpeed() hides immediately. 
+        // hud.resetSpeed() hides immediately.
         // We want to show "1.00x" and let it auto-hide naturally.
         hud.showSpeedHUD(1.0, false);
     }, [hud]);
@@ -422,7 +422,7 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
 
         // Final composition:
         // 1. Zoom/Pan (2 fingers) - wins if 2 fingers detected
-        // 2. Speed gestures (long press) 
+        // 2. Speed gestures (long press)
         // 3. Tap gestures
         // 4. Pan gestures (fallback - 1 finger)
         return Gesture.Race(zoomMultiGesture, speedGestures, tapGestures, panGestures);
@@ -470,7 +470,7 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
     }), [
         composedGesture, videoAnimatedStyle,
         zoomActive, pinchScale, currentBrightness, currentVolume, seekTimeShared,
-        audioController.maxVolume, resetZoom
+        audioController.maxVolume, resetZoom,
     ]);
 }
 

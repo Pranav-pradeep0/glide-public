@@ -1,6 +1,6 @@
 /**
  * usePlayerTracks Hook
- * 
+ *
  * Manages audio and subtitle track selection, subtitle cue parsing,
  * and external subtitle handling.
  */
@@ -39,7 +39,7 @@ interface UsePlayerTracksOptions {
 
 /**
  * Hook for managing audio and subtitle tracks.
- * 
+ *
  * Features:
  * - Audio track loading from VLC
  * - Embedded subtitle track extraction via FFmpeg
@@ -111,7 +111,7 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
             if (defaultAudioLanguage) {
                 const matchedTrackId = findMatchingAudioTrack(tracks, defaultAudioLanguage);
                 if (matchedTrackId !== undefined) {
-                    if (__DEV__) console.log('[usePlayerTracks] Auto-selecting audio track:', matchedTrackId, 'for preference:', defaultAudioLanguage);
+                    if (__DEV__) {console.log('[usePlayerTracks] Auto-selecting audio track:', matchedTrackId, 'for preference:', defaultAudioLanguage);}
                     setSelectedAudioTrackId(matchedTrackId);
                     return;
                 }
@@ -125,7 +125,7 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
     const selectAudioTrack = useCallback((trackId: number | null) => {
         setSelectedAudioTrackId(trackId === null ? undefined : trackId);
         if (__DEV__) {
-            console.log('[usePlayerTracks] Audio track selected:', trackId);
+            if (__DEV__) {console.log('[usePlayerTracks] Audio track selected:', trackId);}
         }
     }, []);
 
@@ -143,7 +143,7 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
                 if (mounted && tracks.length > 0) {
                     setSubtitleTracks(tracks);
                     if (__DEV__) {
-                        console.log('[usePlayerTracks] Extracted subtitle tracks:', tracks.length);
+                        if (__DEV__) {console.log('[usePlayerTracks] Extracted subtitle tracks:', tracks.length);}
                     }
                 }
             } catch (error) {
@@ -184,7 +184,7 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
             const selectedTrack = subtitleTracks.find(t => t.index === selectedSubtitleTrackIndex);
             if (selectedTrack && selectedTrack.isBitmap) {
                 if (__DEV__) {
-                    console.log(`[usePlayerTracks] Bitmap subtitle detected (${selectedTrack.codec}), using VLC native rendering`);
+                    if (__DEV__) {console.log(`[usePlayerTracks] Bitmap subtitle detected (${selectedTrack.codec}), using VLC native rendering`);}
                 }
                 setSubtitleCues([]); // Clear overlay
                 setCurrentSubtitleCue(null);
@@ -197,12 +197,12 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
 
             try {
                 const cues = await SubtitleCueStore.getCues(videoPath, selectedSubtitleTrackIndex);
-                if (!mounted) return;
+                if (!mounted) {return;}
 
                 if (cues && cues.length > 0) {
                     setSubtitleCues(cues);
                     if (__DEV__) {
-                        console.log(`[usePlayerTracks] Subtitle loaded: ${cues.length} cues`);
+                        if (__DEV__) {console.log(`[usePlayerTracks] Subtitle loaded: ${cues.length} cues`);}
                     }
                 } else if (mounted) {
                     setSubtitleCues([]);
@@ -264,7 +264,7 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
             setCurrentExternalName(null);
         }
         if (__DEV__) {
-            console.log('[usePlayerTracks] Subtitle track selected:', trackIndex);
+            if (__DEV__) {console.log('[usePlayerTracks] Subtitle track selected:', trackIndex);}
         }
     }, []);
 
@@ -276,7 +276,7 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
      * Load external subtitle cues (from file picker or API download).
      */
     const loadExternalCues = useCallback((cues: SubtitleCue[], name: string, isSDH: boolean) => {
-        if (!cues || cues.length === 0) return;
+        if (!cues || cues.length === 0) {return;}
 
         // Set as current display subtitle
         setSubtitleCues(cues);
@@ -286,12 +286,12 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
         // Add to external subtitles list if not already there
         setExternalSubtitles(prev => {
             const exists = prev.some(s => s.name === name);
-            if (exists) return prev;
+            if (exists) {return prev;}
             return [...prev, { name, cues, isSDH, source: 'file' }];
         });
 
         if (__DEV__) {
-            console.log('[usePlayerTracks] Loaded external subtitle:', name, cues.length, 'cues', isSDH ? '(SDH)' : '');
+            if (__DEV__) {console.log('[usePlayerTracks] Loaded external subtitle:', name, cues.length, 'cues', isSDH ? '(SDH)' : '');}
         }
     }, []);
 
@@ -301,7 +301,7 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
     const loadSDHForHaptics = useCallback((cues: SubtitleCue[], name: string) => {
         setHapticCues(cues);
         if (__DEV__) {
-            console.log('[usePlayerTracks] Updated haptic cues from SDH:', name, cues.length, 'cues');
+            if (__DEV__) {console.log('[usePlayerTracks] Updated haptic cues from SDH:', name, cues.length, 'cues');}
         }
     }, []);
 
@@ -374,7 +374,7 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
         externalSubtitles, currentExternalName, loadExternalCues, loadSDHForHaptics,
         hapticCues,
         audioTracksForSelector, subtitleTracksForSelector,
-        setAudioTracksFromVLC
+        setAudioTracksFromVLC,
     ]) as UsePlayerTracksReturn & {
         setAudioTracksFromVLC: typeof setAudioTracksFromVLC,
         setSubtitleCues: typeof setSubtitleCues
@@ -382,3 +382,5 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
 }
 
 export default usePlayerTracks;
+
+

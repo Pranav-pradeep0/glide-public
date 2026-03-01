@@ -1,5 +1,5 @@
-const withGradleTasks = require("./android/withGradleTasks");
-const withMobileVlcKit = require("./ios/withMobileVlcKit");
+const withGradleTasks = require('./android/withGradleTasks');
+const withMobileVlcKit = require('./ios/withMobileVlcKit');
 
 /**
  * Adds required native code to work with expo development build

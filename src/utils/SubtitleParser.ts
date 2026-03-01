@@ -8,26 +8,26 @@ export class SubtitleParser {
 
         blocks.forEach((block) => {
             const lines = block.trim().split('\n');
-            if (lines.length < 3) return;
+            if (lines.length < 3) { return; }
 
             const index = parseInt(lines[0], 10);
             const timeMatch = lines[1].match(
                 /(\d{2}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2}),(\d{3})/
             );
 
-            if (!timeMatch) return;
+            if (!timeMatch) { return; }
 
             const startTime =
-                parseInt(timeMatch[1]) * 3600 +
-                parseInt(timeMatch[2]) * 60 +
-                parseInt(timeMatch[3]) +
-                parseInt(timeMatch[4]) / 1000;
+                parseInt(timeMatch[1], 10) * 3600 +
+                parseInt(timeMatch[2], 10) * 60 +
+                parseInt(timeMatch[3], 10) +
+                parseInt(timeMatch[4], 10) / 1000;
 
             const endTime =
-                parseInt(timeMatch[5]) * 3600 +
-                parseInt(timeMatch[6]) * 60 +
-                parseInt(timeMatch[7]) +
-                parseInt(timeMatch[8]) / 1000;
+                parseInt(timeMatch[5], 10) * 3600 +
+                parseInt(timeMatch[6], 10) * 60 +
+                parseInt(timeMatch[7], 10) +
+                parseInt(timeMatch[8], 10) / 1000;
 
             const text = lines.slice(2).join('\n');
             const soundEffect = SubtitleParser.extractSoundEffect(text);
@@ -60,16 +60,16 @@ export class SubtitleParser {
 
                 if (timeMatch) {
                     const startTime =
-                        parseInt(timeMatch[1]) * 3600 +
-                        parseInt(timeMatch[2]) * 60 +
-                        parseInt(timeMatch[3]) +
-                        parseInt(timeMatch[4]) / 1000;
+                        parseInt(timeMatch[1], 10) * 3600 +
+                        parseInt(timeMatch[2], 10) * 60 +
+                        parseInt(timeMatch[3], 10) +
+                        parseInt(timeMatch[4], 10) / 1000;
 
                     const endTime =
-                        parseInt(timeMatch[5]) * 3600 +
-                        parseInt(timeMatch[6]) * 60 +
-                        parseInt(timeMatch[7]) +
-                        parseInt(timeMatch[8]) / 1000;
+                        parseInt(timeMatch[5], 10) * 3600 +
+                        parseInt(timeMatch[6], 10) * 60 +
+                        parseInt(timeMatch[7], 10) +
+                        parseInt(timeMatch[8], 10) / 1000;
 
                     let text = '';
                     i++;
@@ -103,19 +103,19 @@ export class SubtitleParser {
 
             if (inEvents && line.startsWith('Dialogue:')) {
                 const parts = line.substring(9).split(',');
-                if (parts.length < 10) continue;
+                if (parts.length < 10) { continue; }
 
                 const startParts = parts[1].trim().split(':');
                 const endParts = parts[2].trim().split(':');
 
                 const startTime =
-                    parseInt(startParts[0]) * 3600 +
-                    parseInt(startParts[1]) * 60 +
+                    parseInt(startParts[0], 10) * 3600 +
+                    parseInt(startParts[1], 10) * 60 +
                     parseFloat(startParts[2]);
 
                 const endTime =
-                    parseInt(endParts[0]) * 3600 +
-                    parseInt(endParts[1]) * 60 +
+                    parseInt(endParts[0], 10) * 3600 +
+                    parseInt(endParts[1], 10) * 60 +
                     parseFloat(endParts[2]);
 
                 const text = parts.slice(9).join(',').replace(/\\N/g, '\n').replace(/{[^}]*}/g, '');
@@ -130,13 +130,13 @@ export class SubtitleParser {
 
     // Auto-detect format and parse
     static parse(content: string, format?: string): SubtitleCue[] {
-        if (!content) return [];
+        if (!content) { return []; }
 
         // Auto-detect format if not specified
         if (!format) {
-            if (content.includes('WEBVTT')) format = 'vtt';
-            else if (content.includes('[Script Info]')) format = 'ass';
-            else format = 'srt';
+            if (content.includes('WEBVTT')) { format = 'vtt'; }
+            else if (content.includes('[Script Info]')) { format = 'ass'; }
+            else { format = 'srt'; }
         }
 
         switch (format.toLowerCase()) {
@@ -190,12 +190,12 @@ export class SubtitleParser {
     private static extractSoundEffect(text: string): string | undefined {
         // Match [Sound]
         const bracketMatch = text.match(/\[(.*?)\]/);
-        if (bracketMatch) return bracketMatch[1];
+        if (bracketMatch) { return bracketMatch[1]; }
 
         // Match (Sound) - typically used for speaker names but sometimes sounds
         // We prioritize brackets as they are standard for SDH sound effects
         const parenMatch = text.match(/\((.*?)\)/);
-        if (parenMatch) return parenMatch[1];
+        if (parenMatch) { return parenMatch[1]; }
 
         return undefined;
     }

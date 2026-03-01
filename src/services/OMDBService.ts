@@ -43,8 +43,7 @@ export class OMDBService {
                 params.append('y', year.toString());
             }
 
-            console.log(`${LOG_PREFIX} Searching:`, { title, year });
-            console.log(`${LOG_PREFIX} API Key present:`, !!OMDB_API_KEY, 'Length:', OMDB_API_KEY?.length);
+            if (__DEV__) {console.log(`${LOG_PREFIX} Searching:`, { title, year });}
 
             const response = await fetch(`${OMDB_API_URL}?${params}`, {
                 method: 'GET',
@@ -61,16 +60,16 @@ export class OMDBService {
             const data: OMDBResult = await response.json();
 
             if (data.Response === 'False') {
-                console.log(`${LOG_PREFIX} No match:`, data.Error);
+                if (__DEV__) {console.log(`${LOG_PREFIX} No match:`, data.Error);}
                 return null;
             }
 
-            console.log(`${LOG_PREFIX} Found:`, {
+            if (__DEV__) {console.log(`${LOG_PREFIX} Found:`, {
                 title: data.Title,
                 year: data.Year,
                 type: data.Type,
                 imdbID: data.imdbID,
-            });
+            });}
 
             return data;
         } catch (error) {
@@ -99,7 +98,7 @@ export class OMDBService {
 
             const response = await fetch(`${OMDB_API_URL}?${params}`);
 
-            if (!response.ok) return [];
+            if (!response.ok) {return [];}
 
             const data = await response.json();
 
@@ -127,7 +126,7 @@ export class OMDBService {
 
             const response = await fetch(`${OMDB_API_URL}?${params}`);
 
-            if (!response.ok) return null;
+            if (!response.ok) {return null;}
 
             const data: OMDBResult = await response.json();
             return data.Response === 'True' ? data : null;
@@ -137,3 +136,5 @@ export class OMDBService {
         }
     }
 }
+
+

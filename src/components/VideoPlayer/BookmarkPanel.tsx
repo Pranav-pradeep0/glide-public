@@ -108,7 +108,7 @@ export const BookmarkPanel: React.FC<BookmarkPanelProps> = memo(({
 }) => {
     const animationProgress = useSharedValue(visible ? 1 : 0);
 
-    const insets = useSafeAreaInsets()
+    const insets = useSafeAreaInsets();
 
     React.useEffect(() => {
         animationProgress.value = withTiming(visible ? 1 : 0, {
@@ -205,10 +205,10 @@ export const BookmarkPanel: React.FC<BookmarkPanelProps> = memo(({
     );
 }, (prevProps, nextProps) => {
     // Optimize re-renders - only update when necessary
-    if (prevProps.visible !== nextProps.visible) return false;
-    if (prevProps.bookmarks.length !== nextProps.bookmarks.length) return false;
-    if (prevProps.onSelectBookmark !== nextProps.onSelectBookmark) return false; // NEW: Check for callback updates
-    if (Math.abs(prevProps.currentTime - nextProps.currentTime) < 1) return true; // Skip minor time updates
+    if (prevProps.visible !== nextProps.visible) {return false;}
+    if (prevProps.bookmarks.length !== nextProps.bookmarks.length) {return false;}
+    if (prevProps.onSelectBookmark !== nextProps.onSelectBookmark) {return false;} // NEW: Check for callback updates
+    if (Math.abs(prevProps.currentTime - nextProps.currentTime) < 1) {return true;} // Skip minor time updates
     return false;
 });
 

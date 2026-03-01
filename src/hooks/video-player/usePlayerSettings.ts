@@ -1,6 +1,6 @@
 /**
  * usePlayerSettings Hook
- * 
+ *
  * Manages player settings like mute, repeat, decoder, resize mode, and sleep timer.
  */
 
@@ -62,7 +62,7 @@ const initialSettings: PlayerSettings = {
 
 /**
  * Hook for managing player settings.
- * 
+ *
  * Settings include:
  * - Mute toggle
  * - Repeat mode
@@ -76,7 +76,7 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
         onSleepTimerEnd,
         showToast,
         initialAudioDelay = 0,
-        initialSubtitleDelay = 0
+        initialSubtitleDelay = 0,
     } = options;
 
     const [settings, setSettings] = useState<PlayerSettings>({
@@ -127,7 +127,7 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
 
     const setDecoder = useCallback((decoder: 'hardware' | 'software' | 'hardware_plus') => {
         setSettings(prev => {
-            if (prev.decoder === decoder) return prev;
+            if (prev.decoder === decoder) {return prev;}
 
             return {
                 ...prev,
@@ -187,7 +187,7 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
         if (minutes !== null && minutes > 0) {
             // Set actual timer
             sleepTimerRef.current = setTimeout(() => {
-                if (__DEV__) console.log('[usePlayerSettings] Sleep timer triggered');
+                if (__DEV__) {console.log('[usePlayerSettings] Sleep timer triggered');}
                 onSleepTimerEnd?.();
             }, minutes * 60 * 1000);
 
@@ -231,8 +231,8 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
             return {
                 ...prev,
                 videoEnhancement: newValue,
-                // playerKey: prev.playerKey + 1, // Force remount if needed, but maybe not for just video filter? 
-                // Actually video filters often require restart or dynamic update. 
+                // playerKey: prev.playerKey + 1, // Force remount if needed, but maybe not for just video filter?
+                // Actually video filters often require restart or dynamic update.
                 // Let's keep existing behavior if it works.
                 playerKey: prev.playerKey + 1,
             };
@@ -310,7 +310,7 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
 
     // Compute effective bands for VLC
     const audioEqualizer = useMemo(() => {
-        if (!settings.equalizerEnabled) return undefined;
+        if (!settings.equalizerEnabled) {return undefined;}
 
         if (settings.equalizerPreset === 'custom') {
             return settings.customEqualizerBands;
@@ -353,9 +353,10 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
         setSleepTimer, clearSleepTimer,
         toggleBackgroundPlay, toggleVideoEnhancement,
         toggleEqualizer, setEqualizerPreset, setCustomEqualizerBands, setSingleBand, audioEqualizer,
-        setAudioDelay, setSubtitleDelay
+        setAudioDelay, setSubtitleDelay,
     ]);
 }
 
 export default usePlayerSettings;
+
 

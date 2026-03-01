@@ -1,3 +1,4 @@
+/* eslint-disable no-shadow */
 const eightChannelExp = /\b(?<eight>7.?[01])\b/i;
 const sixChannelExp = /\b(?<six>(6[\W]0(?:ch)?)(?=[^\d]|$)|(5[\W][01](?:ch)?)(?=[^\d]|$)|5ch|6ch)\b/i;
 const stereoChannelExp = /(?<stereo>((2[\W]0(?:ch)?)(?=[^\d]|$))|(stereo))/i;
@@ -10,10 +11,10 @@ const channelExp = new RegExp([
 ].join('|'), 'i');
 export var Channels;
 (function (Channels) {
-    Channels["SEVEN"] = "7.1";
-    Channels["SIX"] = "5.1";
-    Channels["STEREO"] = "stereo";
-    Channels["MONO"] = "mono";
+    Channels.SEVEN = '7.1';
+    Channels.SIX = '5.1';
+    Channels.STEREO = 'stereo';
+    Channels.MONO = 'mono';
 })(Channels || (Channels = {}));
 export function parseAudioChannels(title) {
     const channelResult = channelExp.exec(title);

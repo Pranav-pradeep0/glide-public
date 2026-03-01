@@ -46,5 +46,5 @@ export const VideoOrientationService = {
      */
     release: () => {
         VideoOrientation.release();
-    }
+    },
 };

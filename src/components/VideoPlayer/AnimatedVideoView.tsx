@@ -125,7 +125,7 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
                 const clampedResume = Math.max(0, Math.min(maxSeek, currentTime));
 
                 if (clampedResume >= MIN_RESUME_SECONDS && clampedResume < maxSeek) {
-                    console.log('[AnimatedVideoView] Setting start-time for seamless resume:', clampedResume, 'seconds');
+                    if (__DEV__) {console.log('[AnimatedVideoView] Setting start-time for seamless resume:', clampedResume, 'seconds');}
                     return clampedResume;
                 }
             }
@@ -135,7 +135,7 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
 
         // Simple onPlaying handler - no more manual seeking needed!
         const handlePlaying = useCallback(() => {
-            console.log('[DEBUG RACE] AnimatedVideoView forwarding onPlaying to parent');
+            if (__DEV__) {console.log('[DEBUG RACE] AnimatedVideoView forwarding onPlaying to parent');}
             onPlaying();
         }, [onPlaying]);
 
@@ -147,7 +147,7 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
             // Add start-time for seamless resume on player restart
             if (resumeTimeSeconds > 0) {
                 mediaOpts.push(`:start-time=${resumeTimeSeconds}`);
-                console.log('[AnimatedVideoView] Adding --start-time:', resumeTimeSeconds);
+                if (__DEV__) {console.log('[AnimatedVideoView] Adding --start-time:', resumeTimeSeconds);}
             }
 
             return {
@@ -159,7 +159,7 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
         }, [source, decoder, videoEnhancement, repeat, resumeTimeSeconds]);
 
         if (playerKey > 0) {
-            console.log('[AnimatedVideoView] Init Options:', vlcSource.initOptions);
+            if (__DEV__) {console.log('[AnimatedVideoView] Init Options:', vlcSource.initOptions);}
         }
 
         return (
@@ -209,23 +209,23 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
  */
 function areEqual(prevProps: AnimatedVideoViewProps, nextProps: AnimatedVideoViewProps): boolean {
     // Always re-render if these change (they directly affect VLC)
-    if (prevProps.playerKey !== nextProps.playerKey) return false;
-    if (prevProps.source.uri !== nextProps.source.uri) return false;
-    if (prevProps.paused !== nextProps.paused) return false;
-    if (prevProps.rate !== nextProps.rate) return false;
-    if (prevProps.muted !== nextProps.muted) return false;
-    if (prevProps.repeat !== nextProps.repeat) return false;
-    if (prevProps.resizeMode !== nextProps.resizeMode) return false;
-    if (prevProps.decoder !== nextProps.decoder) return false;
-    if (prevProps.videoEnhancement !== nextProps.videoEnhancement) return false;
-    if (prevProps.audioTrack !== nextProps.audioTrack) return false;
-    if (prevProps.textTrack !== nextProps.textTrack) return false;
-    if (prevProps.title !== nextProps.title) return false;
-    if (prevProps.artist !== nextProps.artist) return false;
-    if (prevProps.audioEqualizer !== nextProps.audioEqualizer) return false;
-    if (prevProps.audioDelay !== nextProps.audioDelay) return false;
-    if (prevProps.playInBackground !== nextProps.playInBackground) return false;
-    if (prevProps.onEnd !== nextProps.onEnd) return false; // Important: Check for onEnd handler updates (auto-play closure)
+    if (prevProps.playerKey !== nextProps.playerKey) {return false;}
+    if (prevProps.source.uri !== nextProps.source.uri) {return false;}
+    if (prevProps.paused !== nextProps.paused) {return false;}
+    if (prevProps.rate !== nextProps.rate) {return false;}
+    if (prevProps.muted !== nextProps.muted) {return false;}
+    if (prevProps.repeat !== nextProps.repeat) {return false;}
+    if (prevProps.resizeMode !== nextProps.resizeMode) {return false;}
+    if (prevProps.decoder !== nextProps.decoder) {return false;}
+    if (prevProps.videoEnhancement !== nextProps.videoEnhancement) {return false;}
+    if (prevProps.audioTrack !== nextProps.audioTrack) {return false;}
+    if (prevProps.textTrack !== nextProps.textTrack) {return false;}
+    if (prevProps.title !== nextProps.title) {return false;}
+    if (prevProps.artist !== nextProps.artist) {return false;}
+    if (prevProps.audioEqualizer !== nextProps.audioEqualizer) {return false;}
+    if (prevProps.audioDelay !== nextProps.audioDelay) {return false;}
+    if (prevProps.playInBackground !== nextProps.playInBackground) {return false;}
+    if (prevProps.onEnd !== nextProps.onEnd) {return false;} // Important: Check for onEnd handler updates (auto-play closure)
 
     // Ignore currentTime and duration changes!
     // These update frequently but shouldn't trigger re-render unless playerKey also changes.
@@ -259,4 +259,6 @@ const styles = StyleSheet.create({
         height: '100%',
     },
 });
+
+
 

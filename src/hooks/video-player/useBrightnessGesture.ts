@@ -1,6 +1,6 @@
 /**
  * useBrightnessGesture Hook
- * 
+ *
  * Implements vertical pan gesture on the LEFT side of screen to adjust brightness.
  * Swipe up increases, swipe down decreases.
  */
@@ -94,7 +94,7 @@ export function useBrightnessGesture(options: UseBrightnessGestureOptions) {
             .onUpdate((event) => {
                 'worklet';
 
-                if (isLockedShared.value) return;
+                if (isLockedShared.value) {return;}
 
                 // Calculate delta - negative Y translation = up = increase
                 const delta = -event.translationY * PLAYER_CONSTANTS.BRIGHTNESS_SENSITIVITY;

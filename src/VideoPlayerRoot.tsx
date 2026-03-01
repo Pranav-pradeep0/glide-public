@@ -55,7 +55,7 @@ export default function VideoPlayerRoot({ videoUri }: Props) {
                         videoPath: resolvedPath,
                         videoName: videoName,
                         isExternalOpen: true,
-                    }
+                    },
                 });
             }
             setReady(true);

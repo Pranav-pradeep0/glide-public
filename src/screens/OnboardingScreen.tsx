@@ -40,37 +40,30 @@ const FOOTER_HEIGHT = 8 + 16 + BTN_H + 48;
 
 const TOTAL = 3;
 const LAST = TOTAL - 1;
+const ICON_FRAME_W = 340;
+const ICON_FRAME_H = 200;
 
 // ─── Worklet helpers ──────────────────────────────────────────────────────────
-// Pure arithmetic — no imports, worklet-safe, zero overhead.
-
 function clamp01(t: number): number {
     'worklet';
     return t < 0 ? 0 : t > 1 ? 1 : t;
 }
 
-/**
- * Normalise global progress `p` into [0, 1] over the sub-window [start, end].
- * Returns 0 before `start`, 1 after `end` — never throws.
- */
 function phaseT(p: number, start: number, end: number): number {
     'worklet';
     return clamp01((p - start) / (end - start));
 }
 
-/** Smooth symmetric ease — reads as "natural" body motion. */
 function easeInOut(t: number): number {
     'worklet';
     return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
 }
 
-/** Fast deceleration — ideal for expanding / growing elements. */
 function easeOutQuart(t: number): number {
     'worklet';
     return 1 - Math.pow(1 - t, 4);
 }
 
-/** Gentle deceleration — ideal for text reveals. */
 function easeOutCubic(t: number): number {
     'worklet';
     return 1 - Math.pow(1 - t, 3);
@@ -98,7 +91,7 @@ const SLIDES: SlideData[] = [
     {
         id: '2',
         title: 'Things You Might Like',
-        tagline: 'Experimental features. Working just for now..',
+        tagline: 'Experimental features. Which will elevate your viewing experience.',
         bullets: [
             'Color enhancement',
             'Sync your subtitles in a better way. No more millisecond headaches.',
@@ -124,6 +117,7 @@ interface SlideItemProps {
     shouldAnimate: boolean;
     keepMounted: boolean;
     slideWidth: number;
+    contentTopPadding: number;
     activeFeatureIndex: number;
     onFeatureActivate?: (index: number) => void;
     themeColors: {
@@ -142,6 +136,7 @@ const SlideItem = React.memo<SlideItemProps>(
         shouldAnimate,
         keepMounted,
         slideWidth,
+        contentTopPadding,
         activeFeatureIndex,
         onFeatureActivate,
         themeColors,
@@ -180,19 +175,23 @@ const SlideItem = React.memo<SlideItemProps>(
 
         return (
             <View style={[slideStyles.slide, { width: slideWidth }]}>
-                <View style={slideStyles.content}>
+                <View style={[slideStyles.content, { paddingTop: contentTopPadding }]}>
                     <View style={slideStyles.iconContainer}>
                         {keepMounted
                             ? iconElement
                             : <View style={slideStyles.iconPlaceholder} />
                         }
                     </View>
-                    <Text style={[slideStyles.title, { color: themeColors.text }]}>
-                        {item.title}
-                    </Text>
-                    <Text style={[slideStyles.tagline, { color: themeColors.textSecondary }]}>
-                        {item.tagline}
-                    </Text>
+                    <View style={slideStyles.titleWrap}>
+                        <Text style={[slideStyles.title, { color: themeColors.text }]}>
+                            {item.title}
+                        </Text>
+                    </View>
+                    <View style={slideStyles.taglineWrap}>
+                        <Text style={[slideStyles.tagline, { color: themeColors.textSecondary }]}>
+                            {item.tagline}
+                        </Text>
+                    </View>
                     <View style={slideStyles.bulletsContainer}>
                         {item.bullets.map((bullet, i) => {
                             const isSlide2 = item.id === '2';
@@ -233,6 +232,7 @@ const SlideItem = React.memo<SlideItemProps>(
         prev.shouldAnimate === next.shouldAnimate &&
         prev.keepMounted === next.keepMounted &&
         prev.slideWidth === next.slideWidth &&
+        prev.contentTopPadding === next.contentTopPadding &&
         prev.item.id === next.item.id &&
         prev.activeFeatureIndex === next.activeFeatureIndex &&
         prev.themeColors === next.themeColors,
@@ -271,25 +271,6 @@ const Pagination = React.memo<PaginationProps>(({
 Pagination.displayName = 'Pagination';
 
 // ─── MergingCTA ───────────────────────────────────────────────────────────────
-/**
- * Single animation driver `progress` (0 → 1, 680 ms linear).
- * One withTiming call. Zero JS callbacks between phases.
- * Every animated property derives its own curve from pure worklet math.
- *
- * Phase map  (progress 0 → 1 = 0 → 680 ms):
- *   Buttons slide + fade   [0.00 → 0.55]   easeInOut
- *   Pill fade-in           [0.30 → 0.50]   linear     ← overlaps with button fade
- *   Pill expand            [0.32 → 0.82]   easeOutQuart
- *   Text reveal            [0.74 → 1.00]   easeOutCubic
- *
- * The overlap between button fade-out and pill fade-in produces a natural
- * crossfade so the eye never sees an empty row.
- *
- * Reverse: cancelAnimation + direct assignment — no animation, no flash.
- *
- * containerWsv (shared value) carries the container width into worklets so
- * animated styles always read the live value — never a stale JS closure.
- */
 interface MergingCTAProps {
     isLastSlide: boolean;
     onNext: () => void;
@@ -311,24 +292,15 @@ const MergingCTA = React.memo<MergingCTAProps>(({
     borderColor,
     dark,
 }) => {
-    /**
-     * containerW (state) — drives layout: static `width` prop on button wrappers.
-     * containerWsv (shared value) — read inside worklets for animation math.
-     * Both set together in onLayout; one re-render, no stale reads thereafter.
-     */
     const [containerW, setContainerW] = useState(0);
     const containerWsv = useSharedValue(0);
 
     const btnTextColor = dark ? backgroundColor : '#FFFFFF';
 
-    // The sole animation driver. Easing is linear here;
-    // per-property curves are applied inside each worklet.
     const progress = useSharedValue(0);
 
-    // ── Orchestration ──────────────────────────────────────────────────────
     useEffect(() => {
         if (!isLastSlide) {
-            // Cancel in-progress forward animation and snap instantly.
             cancelAnimation(progress);
             progress.value = 0;
             return;
@@ -336,12 +308,9 @@ const MergingCTA = React.memo<MergingCTAProps>(({
         progress.value = withTiming(1, { duration: 680, easing: Easing.linear });
     }, [isLastSlide]);
 
-    // ── Animated styles ────────────────────────────────────────────────────
-    // All properties computed from `progress` and `containerWsv` on the UI thread.
-
     const skipStyle = useAnimatedStyle(() => {
         const cw = containerWsv.value;
-        if (!cw) return { opacity: 0 };
+        if (!cw) {return { opacity: 0 };}
 
         const bw = (cw - GAP) / 2;
         const t = easeInOut(phaseT(progress.value, 0, 0.55));
@@ -355,7 +324,7 @@ const MergingCTA = React.memo<MergingCTAProps>(({
 
     const nextStyle = useAnimatedStyle(() => {
         const cw = containerWsv.value;
-        if (!cw) return { opacity: 0 };
+        if (!cw) {return { opacity: 0 };}
 
         const bw = (cw - GAP) / 2;
         const t = easeInOut(phaseT(progress.value, 0, 0.55));
@@ -369,11 +338,11 @@ const MergingCTA = React.memo<MergingCTAProps>(({
 
     const pillStyle = useAnimatedStyle(() => {
         const cw = containerWsv.value;
-        if (!cw) return { opacity: 0 };
+        if (!cw) {return { opacity: 0 };}
 
         const bw = (cw - GAP) / 2;
         const expand = easeOutQuart(phaseT(progress.value, 0.32, 0.82));
-        const fadeIn = phaseT(progress.value, 0.30, 0.50); // linear: just fade as it grows in
+        const fadeIn = phaseT(progress.value, 0.30, 0.50);
 
         return {
             width: bw + expand * (cw - bw),
@@ -402,7 +371,6 @@ const MergingCTA = React.memo<MergingCTAProps>(({
         <View style={ctaStyles.row} onLayout={onLayout}>
             {containerW > 0 && (
                 <>
-                    {/* ── Skip ── */}
                     <Animated.View
                         style={[
                             ctaStyles.btnWrapper,
@@ -429,7 +397,6 @@ const MergingCTA = React.memo<MergingCTAProps>(({
                         </Pressable>
                     </Animated.View>
 
-                    {/* ── Next ── */}
                     <Animated.View
                         style={[
                             ctaStyles.btnWrapper,
@@ -450,7 +417,6 @@ const MergingCTA = React.memo<MergingCTAProps>(({
                         </Pressable>
                     </Animated.View>
 
-                    {/* ── Get Started pill (right-anchored, expands leftward) ── */}
                     <Animated.View
                         pointerEvents={isLastSlide ? 'auto' : 'none'}
                         style={[
@@ -494,13 +460,30 @@ MergingCTA.displayName = 'MergingCTA';
 export default function OnboardingScreen() {
     const theme = useTheme();
     const { completeOnboarding } = useAppStore();
-    const { width: screenWidth } = useWindowDimensions();
+    const { width: screenWidth, height: screenHeight } = useWindowDimensions();
 
     const [currentIndex, setCurrentIndex] = useState(0);
     const [isSwiping, setIsSwiping] = useState(false);
     const [activeFeatureIndex, setActiveFeatureIndex] = useState(-1);
 
     const flatListRef = useRef<FlatList<SlideData>>(null);
+
+    // ── FIX 1: Track the intended next index with a ref so handleNext always
+    //    reads the latest committed position, avoiding stale closure bugs.
+    //    This ref is the single source of truth for "where we are navigating to".
+    const pendingIndexRef = useRef(0);
+
+    // ── FIX 2: Guard against double-taps / rapid taps while a programmatic
+    //    scroll is already in flight. Without this, two quick taps on "Next"
+    //    from slide 0 would enqueue scrollToIndex(1) then scrollToIndex(2)
+    //    before onMomentumScrollEnd has had a chance to update currentIndex,
+    //    causing the visible jump from slide 0 → 2.
+    const isScrollingRef = useRef(false);
+
+    const responsiveContentTopPadding = useMemo(
+        () => Math.max(56, Math.min(90, Math.round(screenHeight * 0.11))),
+        [screenHeight],
+    );
 
     const getItemLayout = useCallback(
         (_: unknown, index: number) => ({
@@ -512,23 +495,75 @@ export default function OnboardingScreen() {
     );
 
     const handleNext = useCallback(() => {
-        if (currentIndex < LAST) {
+        // Block if a programmatic scroll is already in progress.
+        if (isScrollingRef.current) {return;}
+
+        // Read the latest index directly from the ref — never from a potentially
+        // stale closure over `currentIndex` state.
+        const idx = pendingIndexRef.current;
+
+        if (idx < LAST) {
+            const nextIdx = idx + 1;
+            isScrollingRef.current = true;
+            // Update the ref immediately so any re-entrant call sees the new value.
+            pendingIndexRef.current = nextIdx;
             setIsSwiping(true);
-            flatListRef.current?.scrollToIndex({ index: currentIndex + 1, animated: true });
+            flatListRef.current?.scrollToIndex({ index: nextIdx, animated: true });
         } else {
             completeOnboarding();
         }
-    }, [currentIndex, completeOnboarding]);
+    }, [completeOnboarding]);
 
     const handleSkip = useCallback(() => completeOnboarding(), [completeOnboarding]);
-    const handleDrag = useCallback(() => setIsSwiping(true), []);
+
+    // ── FIX 3: onScrollBeginDrag must also lock isScrollingRef so that a swipe
+    //    gesture followed by tapping Next before momentum ends can't double-fire.
+    const handleDrag = useCallback(() => {
+        isScrollingRef.current = true;
+        setIsSwiping(true);
+    }, []);
+
     const handleFeatureActivate = useCallback((i: number) => setActiveFeatureIndex(i), []);
 
     const handleMomentumEnd = useCallback(
         (e: NativeSyntheticEvent<NativeScrollEvent>) => {
             const next = Math.round(e.nativeEvent.contentOffset.x / screenWidth);
-            setCurrentIndex(Math.max(0, Math.min(LAST, next)));
+            const clamped = Math.max(0, Math.min(LAST, next));
+
+            // Always sync the ref to the actual scroll position so subsequent
+            // handleNext calls start from the correct slide.
+            pendingIndexRef.current = clamped;
+
+            setCurrentIndex(clamped);
             setIsSwiping(false);
+
+            // Release the scroll lock only after state is queued.
+            isScrollingRef.current = false;
+        },
+        [screenWidth],
+    );
+
+    // ── FIX 4: onScrollEndDrag handles the edge case where the user drags but
+    //    doesn't generate momentum (very slow drag that snaps back). Without
+    //    this, isScrollingRef could stay `true` forever, permanently blocking
+    //    the Next button.
+    const handleScrollEndDrag = useCallback(
+        (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+            // If velocity is ~0 the list snaps without firing onMomentumScrollEnd,
+            // so we must resolve state here too.
+            const velocity = e.nativeEvent.velocity;
+            const isEffectivelyStill =
+                velocity == null ||
+                (Math.abs(velocity.x ?? 0) < 0.1 && Math.abs(velocity.y ?? 0) < 0.1);
+
+            if (isEffectivelyStill) {
+                const next = Math.round(e.nativeEvent.contentOffset.x / screenWidth);
+                const clamped = Math.max(0, Math.min(LAST, next));
+                pendingIndexRef.current = clamped;
+                setCurrentIndex(clamped);
+                setIsSwiping(false);
+                isScrollingRef.current = false;
+            }
         },
         [screenWidth],
     );
@@ -541,12 +576,13 @@ export default function OnboardingScreen() {
                 shouldAnimate={!isSwiping}
                 keepMounted={Math.abs(index - currentIndex) <= 1}
                 slideWidth={screenWidth}
+                contentTopPadding={responsiveContentTopPadding}
                 activeFeatureIndex={activeFeatureIndex}
                 onFeatureActivate={index === 1 ? handleFeatureActivate : undefined}
                 themeColors={theme.colors}
             />
         ),
-        [currentIndex, isSwiping, screenWidth, activeFeatureIndex, handleFeatureActivate, theme.colors],
+        [currentIndex, isSwiping, screenWidth, responsiveContentTopPadding, activeFeatureIndex, handleFeatureActivate, theme.colors],
     );
 
     return (
@@ -561,6 +597,7 @@ export default function OnboardingScreen() {
                 keyExtractor={item => item.id}
                 onScrollBeginDrag={handleDrag}
                 onMomentumScrollEnd={handleMomentumEnd}
+                onScrollEndDrag={handleScrollEndDrag}
                 getItemLayout={getItemLayout}
                 windowSize={3}
                 initialNumToRender={2}
@@ -593,14 +630,22 @@ export default function OnboardingScreen() {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const slideStyles = StyleSheet.create({
     slide: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-    content: { paddingHorizontal: 36, alignItems: 'center', width: '100%' },
-    iconContainer: { marginBottom: 32, height: 200, justifyContent: 'center', alignItems: 'center' },
-    iconPlaceholder: { width: 340, height: 200 },
-    title: { fontSize: 28, fontWeight: 'bold', marginBottom: 6, textAlign: 'center', letterSpacing: 0.3 },
-    tagline: { fontSize: 15, fontStyle: 'italic', marginBottom: 24, textAlign: 'center' },
-    bulletsContainer: { alignSelf: 'flex-start', paddingLeft: 8, marginBottom: 16 },
-    bulletRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
-    bulletDot: { width: 5, height: 5, borderRadius: 2.5, marginRight: 12 },
+    content: { paddingHorizontal: 24, alignItems: 'center', width: '100%', maxWidth: 420 },
+    iconContainer: {
+        marginBottom: 18,
+        width: ICON_FRAME_W,
+        height: ICON_FRAME_H,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    iconPlaceholder: { width: ICON_FRAME_W, height: ICON_FRAME_H },
+    titleWrap: { minHeight: 62, width: '100%', justifyContent: 'center', marginBottom: 2 },
+    title: { fontSize: 28, fontWeight: 'bold', textAlign: 'center', letterSpacing: 0.3, lineHeight: 34 },
+    taglineWrap: { minHeight: 40, width: '100%', justifyContent: 'center', marginBottom: 14 },
+    tagline: { fontSize: 15, fontStyle: 'italic', textAlign: 'center', lineHeight: 21 },
+    bulletsContainer: { width: '100%', minHeight: 118, paddingLeft: 8, marginBottom: 12 },
+    bulletRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 8 },
+    bulletDot: { width: 5, height: 5, borderRadius: 2.5, marginRight: 12, marginTop: 8 },
     bulletText: { fontSize: 14, lineHeight: 20 },
 });
 

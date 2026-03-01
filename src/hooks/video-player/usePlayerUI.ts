@@ -1,6 +1,6 @@
 /**
  * usePlayerUI Hook
- * 
+ *
  * Manages all UI visibility states for the video player:
  * - Controls visibility with auto-hide timer
  * - Lock mode state
@@ -47,7 +47,7 @@ const panelStateKeys: Record<PanelType, keyof UIState> = {
 
 /**
  * Hook for managing video player UI visibility states.
- * 
+ *
  * Key features:
  * - Controls auto-hide after inactivity
  * - Lock mode prevents touch interactions
@@ -156,11 +156,11 @@ export function usePlayerUI(): UsePlayerUIReturn {
     }, []);
 
     const toggleControls = useCallback(() => {
-        // If there was a very recent interaction (e.g. button click), 
+        // If there was a very recent interaction (e.g. button click),
         // ignore this toggle intent (likely from background tap gesture)
         const now = Date.now();
         if (now - lastInteractionTimeRef.current < 300) {
-            if (__DEV__) console.log('[usePlayerUI] Ignoring toggleControls due to recent interaction');
+            if (__DEV__) {console.log('[usePlayerUI] Ignoring toggleControls due to recent interaction');}
             return;
         }
 
@@ -256,7 +256,7 @@ export function usePlayerUI(): UsePlayerUIReturn {
             audioSelectorOpen: false,
             subtitleSelectorOpen: false,
         }));
-        if (__DEV__) console.log('[usePlayerUI] Controls and orientation locked');
+        if (__DEV__) {console.log('[usePlayerUI] Controls and orientation locked');}
     }, []);
 
     const unlock = useCallback(() => {
@@ -267,7 +267,7 @@ export function usePlayerUI(): UsePlayerUIReturn {
             lockIconVisible: false,
             controlsVisible: true,
         }));
-        if (__DEV__) console.log('[usePlayerUI] Controls and orientation unlocked');
+        if (__DEV__) {console.log('[usePlayerUI] Controls and orientation unlocked');}
     }, []);
 
     const toggleLock = useCallback(() => {
@@ -287,7 +287,7 @@ export function usePlayerUI(): UsePlayerUIReturn {
      * This provides feedback that the screen is locked.
      */
     const showLockIconTemporarily = useCallback(() => {
-        if (!state.locked) return;
+        if (!state.locked) {return;}
 
         setState(prev => ({
             ...prev,
@@ -343,7 +343,7 @@ export function usePlayerUI(): UsePlayerUIReturn {
             };
         });
 
-        if (__DEV__) console.log('[usePlayerUI] Panel opened:', panel);
+        if (__DEV__) {console.log('[usePlayerUI] Panel opened:', panel);}
     }, []);
 
     const closePanel = useCallback((panel: PanelType) => {
@@ -359,7 +359,7 @@ export function usePlayerUI(): UsePlayerUIReturn {
             scheduleAutoHide();
         }
 
-        if (__DEV__) console.log('[usePlayerUI] Panel closed:', panel);
+        if (__DEV__) {console.log('[usePlayerUI] Panel closed:', panel);}
     }, [state.controlsVisible, scheduleAutoHide]);
 
     const closeAllPanels = useCallback(() => {
@@ -377,7 +377,7 @@ export function usePlayerUI(): UsePlayerUIReturn {
             scheduleAutoHide();
         }
 
-        if (__DEV__) console.log('[usePlayerUI] All panels closed');
+        if (__DEV__) {console.log('[usePlayerUI] All panels closed');}
     }, [state.controlsVisible, scheduleAutoHide]);
 
     // ========================================================================
@@ -409,8 +409,9 @@ export function usePlayerUI(): UsePlayerUIReturn {
         state, isLockedShared,
         toggleControls, showControls, hideControls, scheduleAutoHide, cancelAutoHide,
         lock, unlock, toggleLock, showLockIconTemporarily,
-        openPanel, closePanel, closeAllPanels
+        openPanel, closePanel, closeAllPanels,
     ]);
 }
 
 export default usePlayerUI;
+

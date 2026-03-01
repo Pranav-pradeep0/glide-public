@@ -6,8 +6,8 @@ import { AppSettings } from '../types';
 const SETTINGS_KEY = '@glide_app:settings';
 
 const mmkvStorage = createMMKV({
-    id: SETTINGS_KEY
-})
+    id: SETTINGS_KEY,
+});
 
 export const storage = {
     async saveSettings(settings: AppSettings): Promise<void> {

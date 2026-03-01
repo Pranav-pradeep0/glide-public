@@ -46,8 +46,8 @@ let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let persistRaf: number | null = null;
 
 function debouncedPersist() {
-    if (persistTimer) clearTimeout(persistTimer);
-    if (persistRaf) cancelAnimationFrame(persistRaf);
+    if (persistTimer) {clearTimeout(persistTimer);}
+    if (persistRaf) {cancelAnimationFrame(persistRaf);}
 
     // Use RAF for immediate feedback, timeout for actual write
     persistRaf = requestAnimationFrame(() => {
@@ -81,7 +81,7 @@ export const useVideoHistoryStore = create<VideoHistoryState>((set, get) => ({
     getVideoHistory: (videoPath: string) => {
         // First try direct path lookup
         const byPath = get().history.get(videoPath);
-        if (byPath) return byPath;
+        if (byPath) {return byPath;}
 
         // For content:// URIs, try to find by videoId derived from path
         // The videoId may have been stored with a different path
@@ -464,8 +464,8 @@ export const useVideoHistoryStore = create<VideoHistoryState>((set, get) => ({
 
     persistNow: () => {
         // Clear pending debounce timers
-        if (persistTimer) clearTimeout(persistTimer);
-        if (persistRaf) cancelAnimationFrame(persistRaf);
+        if (persistTimer) {clearTimeout(persistTimer);}
+        if (persistRaf) {cancelAnimationFrame(persistRaf);}
         persistTimer = null;
         persistRaf = null;
 

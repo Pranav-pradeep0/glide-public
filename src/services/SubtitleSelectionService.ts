@@ -85,7 +85,7 @@ export class SubtitleSelectionService {
         // Sort by score descending
         scored.sort((a, b) => b.score - a.score);
 
-        console.log(`${LOG_PREFIX} Scored ${tracks.length} embedded tracks`);
+        if (__DEV__) {console.log(`${LOG_PREFIX} Scored ${tracks.length} embedded tracks`);}
         return scored;
     }
 
@@ -126,7 +126,7 @@ export class SubtitleSelectionService {
         // Sort by score descending
         scored.sort((a, b) => b.score - a.score);
 
-        console.log(`${LOG_PREFIX} Scored ${subtitles.length} API subtitles`);
+        if (__DEV__) {console.log(`${LOG_PREFIX} Scored ${subtitles.length} API subtitles`);}
         return scored;
     }
 
@@ -140,15 +140,15 @@ export class SubtitleSelectionService {
     ): ScoredTrack | null {
         const scored = this.scoreEmbeddedTracks(tracks, preferredLang);
 
-        if (scored.length === 0) return null;
+        if (scored.length === 0) {return null;}
 
         const best = scored[0];
         if (best.score >= minConfidence) {
-            console.log(`${LOG_PREFIX} Selected embedded track: index ${best.track.index}, score ${best.score}`);
+            if (__DEV__) {console.log(`${LOG_PREFIX} Selected embedded track: index ${best.track.index}, score ${best.score}`);}
             return best;
         }
 
-        console.log(`${LOG_PREFIX} No embedded track met confidence threshold (${minConfidence})`);
+        if (__DEV__) {console.log(`${LOG_PREFIX} No embedded track met confidence threshold (${minConfidence})`);}
         return null;
     }
 
@@ -162,15 +162,15 @@ export class SubtitleSelectionService {
     ): ScoredSubtitleResult | null {
         const scored = this.scoreAPISubtitles(subtitles, preferredLang);
 
-        if (scored.length === 0) return null;
+        if (scored.length === 0) {return null;}
 
         const best = scored[0];
         if (best.score >= minConfidence) {
-            console.log(`${LOG_PREFIX} Selected API subtitle: ${best.subtitle.id}, score ${best.score}`);
+            if (__DEV__) {console.log(`${LOG_PREFIX} Selected API subtitle: ${best.subtitle.id}, score ${best.score}`);}
             return best;
         }
 
-        console.log(`${LOG_PREFIX} No API subtitle met confidence threshold (${minConfidence})`);
+        if (__DEV__) {console.log(`${LOG_PREFIX} No API subtitle met confidence threshold (${minConfidence})`);}
         return null;
     }
 
@@ -210,7 +210,7 @@ export class SubtitleSelectionService {
         // Consider it SDH if at least 5% of cues have SDH patterns
         const isSDH = ratio >= 0.05;
 
-        console.log(`${LOG_PREFIX} Content validation: ${sdhCueCount}/${sampleSize} SDH cues, confidence ${confidence}%`);
+        if (__DEV__) {console.log(`${LOG_PREFIX} Content validation: ${sdhCueCount}/${sampleSize} SDH cues, confidence ${confidence}%`);}
 
         return { isSDH, confidence, matchedPatterns };
     }
@@ -230,29 +230,31 @@ export class SubtitleSelectionService {
         // Try each track from highest scored to lowest
         for (const { track, score } of scored) {
             // Skip tracks with very low name-based score unless it's the only option
-            if (score < 0 && scored.length > 1) continue;
+            if (score < 0 && scored.length > 1) {continue;}
 
             try {
-                console.log(`${LOG_PREFIX} Checking track ${track.index} (${track.title || track.language}) for SDH content...`);
+                if (__DEV__) {console.log(`${LOG_PREFIX} Checking track ${track.index} (${track.title || track.language}) for SDH content...`);}
                 const cues = await extractAndParse(track.index);
 
-                if (!cues || cues.length === 0) continue;
+                if (!cues || cues.length === 0) {continue;}
 
                 // Validate content
                 const validation = this.validateSDHContent(cues);
 
                 if (validation.isSDH) {
-                    console.log(`${LOG_PREFIX} ✓ Track ${track.index} has SDH content (confidence ${validation.confidence}%)`);
+                    if (__DEV__) {console.log(`${LOG_PREFIX} ✓ Track ${track.index} has SDH content (confidence ${validation.confidence}%)`);}
                     return { track, cues };
                 } else {
-                    console.log(`${LOG_PREFIX} ✗ Track ${track.index} lacks SDH content`);
+                    if (__DEV__) {console.log(`${LOG_PREFIX} ✗ Track ${track.index} lacks SDH content`);}
                 }
             } catch (error) {
                 console.error(`${LOG_PREFIX} Error checking track ${track.index}:`, error);
             }
         }
 
-        console.log(`${LOG_PREFIX} No tracks with verified SDH content found`);
+        if (__DEV__) {console.log(`${LOG_PREFIX} No tracks with verified SDH content found`);}
         return null;
     }
 }
+
+

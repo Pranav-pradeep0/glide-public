@@ -1,6 +1,6 @@
 /**
  * Video Player Hooks
- * 
+ *
  * Modular hook-based architecture for the video player.
  * This index file re-exports all hooks and types for easy importing.
  */

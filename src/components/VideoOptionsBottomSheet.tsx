@@ -33,7 +33,7 @@ const MetadataItem = ({
     label,
     value,
     badge,
-    theme
+    theme,
 }: {
     icon: string;
     label: string;
@@ -65,7 +65,7 @@ const ActionButton = ({
     color,
     onPress,
     danger = false,
-    theme
+    theme,
 }: {
     icon: string;
     label: string;
@@ -81,7 +81,7 @@ const ActionButton = ({
     >
         <View style={[
             styles.actionIcon,
-            { backgroundColor: danger ? 'rgba(255,59,48,0.1)' : theme.colors.surfaceVariant }
+            { backgroundColor: danger ? 'rgba(255,59,48,0.1)' : theme.colors.surfaceVariant },
         ]}>
             <Feather
                 name={icon as any}
@@ -91,7 +91,7 @@ const ActionButton = ({
         </View>
         <Text style={[
             styles.actionLabel,
-            { color: danger ? theme.colors.error : theme.colors.text }
+            { color: danger ? theme.colors.error : theme.colors.text },
         ]}>
             {label}
         </Text>
@@ -131,6 +131,7 @@ export const VideoOptionsBottomSheet: React.FC<VideoOptionsProps> = ({
 
     const { thumbnail } = useThumbnail(path, duration);
     const [aspectRatio, setAspectRatio] = useState<number>(1.77);
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const [isPortrait, setIsPortrait] = useState(false);
 
     useEffect(() => {
@@ -140,7 +141,7 @@ export const VideoOptionsBottomSheet: React.FC<VideoOptionsProps> = ({
                 setAspectRatio(ratio);
                 setIsPortrait(height > width);
             }, (err) => {
-                console.log('Failed to get image size', err);
+                if (__DEV__) { console.log('Failed to get image size', err); }
             });
         }
     }, [thumbnail]);
@@ -164,7 +165,7 @@ export const VideoOptionsBottomSheet: React.FC<VideoOptionsProps> = ({
             FFprobeKit.getMediaInformation(path).then(async (session) => {
                 const information = session.getMediaInformation();
                 if (information) {
-                    const props = information.getAllProperties();
+                    // information.getAllProperties(); // Removed unused props
 
                     // Extract streams
                     const streams = information.getStreams();
@@ -183,7 +184,7 @@ export const VideoOptionsBottomSheet: React.FC<VideoOptionsProps> = ({
                                 // Simple check if it's a fraction or number
                                 if (rFrameRate.includes('/')) {
                                     const [num, den] = rFrameRate.split('/');
-                                    const calculated = parseInt(num) / parseInt(den);
+                                    const calculated = parseInt(num, 10) / parseInt(den, 10);
                                     fps = calculated.toFixed(0) + ' fps';
                                 } else {
                                     fps = parseFloat(rFrameRate).toFixed(0) + ' fps';
@@ -191,7 +192,7 @@ export const VideoOptionsBottomSheet: React.FC<VideoOptionsProps> = ({
                             }
                         } else if (stream.getType() === 'audio') {
                             audioCodec = stream.getCodec();
-                            sampleRate = stream.getSampleRate() ? `${parseInt(stream.getSampleRate()) / 1000} kHz` : '';
+                            sampleRate = stream.getSampleRate() ? `${parseInt(stream.getSampleRate(), 10) / 1000} kHz` : '';
                         } else if (stream.getType() === 'subtitle') {
                             const codec = stream.getCodec();
                             const tags = stream.getTags();
@@ -200,10 +201,10 @@ export const VideoOptionsBottomSheet: React.FC<VideoOptionsProps> = ({
 
                             // Map common codecs to friendly names if needed
                             let friendlyCodec = codec;
-                            if (codec === 'subrip') friendlyCodec = 'SRT';
-                            if (codec === 'hdmv_pgs_subtitle') friendlyCodec = 'PGS';
-                            if (codec === 'ass') friendlyCodec = 'SSA';
-                            if (codec === 'mov_text') friendlyCodec = 'MOV';
+                            if (codec === 'subrip') { friendlyCodec = 'SRT'; }
+                            if (codec === 'hdmv_pgs_subtitle') { friendlyCodec = 'PGS'; }
+                            if (codec === 'ass') { friendlyCodec = 'SSA'; }
+                            if (codec === 'mov_text') { friendlyCodec = 'MOV'; }
 
 
                             subtitleTracks.push({ lang, codec: friendlyCodec.toUpperCase() });
@@ -214,7 +215,7 @@ export const VideoOptionsBottomSheet: React.FC<VideoOptionsProps> = ({
                     const bitrateVal = information.getBitrate(); // in bps
                     let bitrate = '';
                     if (bitrateVal) {
-                        const bps = parseInt(bitrateVal);
+                        const bps = parseInt(bitrateVal, 10);
                         if (bps > 1000000) {
                             bitrate = (bps / 1000000).toFixed(1) + ' Mbps';
                         } else {
@@ -244,7 +245,7 @@ export const VideoOptionsBottomSheet: React.FC<VideoOptionsProps> = ({
                         sampleRate,
                         subtitles: subtitlesStr || undefined,
                         subtitleBadge: subtitleBadge || undefined,
-                        loading: false
+                        loading: false,
                     });
                 } else {
                     setExtendedMeta(prev => ({ ...prev, loading: false }));
@@ -254,17 +255,17 @@ export const VideoOptionsBottomSheet: React.FC<VideoOptionsProps> = ({
     }, [visible, path]);
 
     const formattedDate = useMemo(() => {
-        if (!date) return 'Unknown';
+        if (!date) { return 'Unknown'; }
         return new Date(date).toLocaleDateString(undefined, {
             year: 'numeric',
             month: 'short',
             day: 'numeric',
             hour: '2-digit',
-            minute: '2-digit'
+            minute: '2-digit',
         });
     }, [date]);
 
-    if (!video) return null;
+    if (!video) { return null; }
 
     const handleAction = (action: () => void) => {
         onClose();
@@ -301,7 +302,7 @@ export const VideoOptionsBottomSheet: React.FC<VideoOptionsProps> = ({
                         </View>
 
                         <View style={styles.landscapeLayout}>
-                            <View style={[styles.landscapeThumbnailWrapper, { backgroundColor: theme.colors.surfaceVariant, aspectRatio: 1.77 }]}>
+                            <View style={[styles.landscapeThumbnailWrapper, { backgroundColor: theme.colors.surfaceVariant, aspectRatio }]}>
                                 {thumbnail ? (
                                     <>
                                         {/* Blurred Background for Portrait/Weird Aspect Ratios */}
@@ -533,3 +534,5 @@ const styles = StyleSheet.create({
         fontWeight: '600',
     },
 });
+
+

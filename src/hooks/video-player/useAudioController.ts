@@ -36,13 +36,13 @@ interface UseAudioControllerReturn {
 
 /**
  * Audio Controller Hook
- * 
+ *
  * Uses the custom AudioControlModule native module for:
  * - System volume control (0-100%)
  * - VLC boost control (100-200%)
  * - Audio route detection
  * - Hardware button listening
- * 
+ *
  * Designed for smooth gesture-driven volume control.
  */
 export function useAudioController(
@@ -56,12 +56,12 @@ export function useAudioController(
         bluetooth: 100,
         wired: 100,
         usb: 100,
-        unknown: 100
+        unknown: 100,
     });
 
     const [audioRoute, setAudioRoute] = useState<AudioRoute>({
         type: 'speaker',
-        maxVolume: 100
+        maxVolume: 100,
     });
 
     const [volume, setVolumeState] = useState(initialVolume);
@@ -80,7 +80,7 @@ export function useAudioController(
     // Initialize and start listening
     useEffect(() => {
         if (!AudioControlModule) {
-            if (__DEV__) console.warn('[AudioController] AudioControlModule not available');
+            if (__DEV__) {console.warn('[AudioController] AudioControlModule not available');}
             return;
         }
 
@@ -88,7 +88,7 @@ export function useAudioController(
         AudioControlModule.getCurrentRoute().then((result: any) => {
             setAudioRoute({
                 type: result.route as AudioRouteType,
-                maxVolume: result.maxVolume
+                maxVolume: result.maxVolume,
             });
         });
 
@@ -103,7 +103,7 @@ export function useAudioController(
                 bluetooth: percentage,
                 wired: percentage,
                 usb: percentage,
-                unknown: percentage
+                unknown: percentage,
             });
         });
 
@@ -158,7 +158,7 @@ export function useAudioController(
                     // Update route history
                     setVolumePerRoute(prev => ({
                         ...prev,
-                        [audioRoute.type]: newVolume
+                        [audioRoute.type]: newVolume,
                     }));
 
                     // Trigger HUD display via callback
@@ -182,11 +182,11 @@ export function useAudioController(
                 const { route, previousRoute, maxVolume } = event;
                 const newRouteType = route as AudioRouteType;
 
-                if (__DEV__) console.log(`[AudioController] Route changed: ${previousRoute} -> ${route} (Max: ${maxVolume})`);
+                if (__DEV__) {console.log(`[AudioController] Route changed: ${previousRoute} -> ${route} (Max: ${maxVolume})`);}
 
                 setAudioRoute({
                     type: newRouteType,
-                    maxVolume: maxVolume
+                    maxVolume: maxVolume,
                 });
 
                 // Get saved volume for this route, clamped to new max
@@ -202,9 +202,9 @@ export function useAudioController(
                     AudioControlModule.setVolume(Math.min(targetVolume, 100));
 
                     if (targetVolume <= 100) {
-                        if (vlcRef.current?.setVolume) vlcRef.current.setVolume(100);
+                        if (vlcRef.current?.setVolume) {vlcRef.current.setVolume(100);}
                     } else {
-                        if (vlcRef.current?.setVolume) vlcRef.current.setVolume(targetVolume);
+                        if (vlcRef.current?.setVolume) {vlcRef.current.setVolume(targetVolume);}
                     }
 
                     return prev;
@@ -236,7 +236,7 @@ export function useAudioController(
     // Apply volume (called during gestures and manual sets)
     // STABLE CALLBACK: Uses refs to avoid recreation and stale closures
     const applyVolume = useCallback((normalizedValue: number, fromGesture: boolean = false) => {
-        if (!AudioControlModule) return;
+        if (!AudioControlModule) {return;}
 
         // Mark gesture active
         if (fromGesture) {
@@ -272,11 +272,11 @@ export function useAudioController(
                 AudioControlModule.setVolumeSync(systemPercentage);
             } else {
                 AudioControlModule.setVolume(systemPercentage).catch((err: any) => {
-                    if (__DEV__) console.warn('[AudioController] setVolume error:', err);
+                    if (__DEV__) {console.warn('[AudioController] setVolume error:', err);}
                 });
             }
         } catch (error) {
-            if (__DEV__) console.warn('[AudioController] Native setVolume failed:', error);
+            if (__DEV__) {console.warn('[AudioController] Native setVolume failed:', error);}
         }
 
         // Handle VLC boost for 100-200%
@@ -295,7 +295,7 @@ export function useAudioController(
             setVolumeState(percentage);
             setVolumePerRoute(prev => ({
                 ...prev,
-                [currentRoute.type]: percentage
+                [currentRoute.type]: percentage,
             }));
         }
 
@@ -312,7 +312,7 @@ export function useAudioController(
         setVolumeState(finalVolume);
         setVolumePerRoute(prev => ({
             ...prev,
-            [audioRoute.type]: finalVolume
+            [audioRoute.type]: finalVolume,
         }));
 
         // Update tracking to prevent quantized feedback from overriding
@@ -332,13 +332,14 @@ export function useAudioController(
         currentVolumeShared,
         applyVolume,
         setVolume,
-        onGestureEnd
+        onGestureEnd,
     }), [
         volume,
         audioRoute,
         currentVolumeShared,
         applyVolume,
         setVolume,
-        onGestureEnd
+        onGestureEnd,
     ]);
 }
+

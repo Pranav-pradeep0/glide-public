@@ -5,14 +5,14 @@ import Svg, { Rect, Path, Circle, G, Text, Line } from 'react-native-svg';
 // DISPLAY MODE ICONS
 // ============================================================================
 
-export const ContainIcon = ({ size = 20, color = "#fff" }: { size?: number, color?: string }) => (
+export const ContainIcon = ({ size = 20, color = '#fff' }: { size?: number, color?: string }) => (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         <Rect x="2" y="3" width="20" height="18" rx="2" strokeOpacity={0.6} />
         <Rect x="6" y="7" width="12" height="10" rx="1" fill={color} stroke="none" />
     </Svg>
 );
 
-export const CoverIcon = ({ size = 20, color = "#fff" }: { size?: number, color?: string }) => (
+export const CoverIcon = ({ size = 20, color = '#fff' }: { size?: number, color?: string }) => (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         <Rect x="2" y="3" width="20" height="18" rx="2" strokeOpacity={0.6} />
         <Rect x="4" y="5" width="16" height="14" rx="1" fill={color} fillOpacity={0.9} stroke="none" />
@@ -20,7 +20,7 @@ export const CoverIcon = ({ size = 20, color = "#fff" }: { size?: number, color?
     </Svg>
 );
 
-export const StretchIcon = ({ size = 20, color = "#fff" }: { size?: number, color?: string }) => (
+export const StretchIcon = ({ size = 20, color = '#fff' }: { size?: number, color?: string }) => (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         <Rect x="2" y="3" width="20" height="18" rx="2" strokeOpacity={0.6} />
         <Path d="M7 12H17M7 12L9 10M7 12L9 14M17 12L15 10M17 12L15 14" stroke={color} strokeWidth={2} />
@@ -28,21 +28,21 @@ export const StretchIcon = ({ size = 20, color = "#fff" }: { size?: number, colo
     </Svg>
 );
 
-export const FillIcon = ({ size = 20, color = "#fff" }: { size?: number, color?: string }) => (
+export const FillIcon = ({ size = 20, color = '#fff' }: { size?: number, color?: string }) => (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         <Rect x="2" y="3" width="20" height="18" rx="2" strokeOpacity={0.6} />
         <Rect x="4" y="5" width="16" height="14" rx="1" fill={color} stroke="none" />
     </Svg>
 );
 
-export const NoneIcon = ({ size = 20, color = "#fff" }: { size?: number, color?: string }) => (
+export const NoneIcon = ({ size = 20, color = '#fff' }: { size?: number, color?: string }) => (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         <Rect x="2" y="3" width="20" height="18" rx="2" strokeOpacity={0.6} />
         <Rect x="8" y="8" width="8" height="8" rx="1" fill={color} fillOpacity={0.85} stroke="none" />
     </Svg>
 );
 
-export const ScaleDownIcon = ({ size = 20, color = "#fff" }: { size?: number, color?: string }) => (
+export const ScaleDownIcon = ({ size = 20, color = '#fff' }: { size?: number, color?: string }) => (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         <Rect x="2" y="3" width="20" height="18" rx="2" strokeOpacity={0.6} />
         <Rect x="7" y="8" width="10" height="8" rx="1" fill={color} fillOpacity={0.7} stroke="none" />
@@ -50,7 +50,7 @@ export const ScaleDownIcon = ({ size = 20, color = "#fff" }: { size?: number, co
     </Svg>
 );
 
-export const BestFitIcon = ({ size = 20, color = "#fff" }: { size?: number, color?: string }) => (
+export const BestFitIcon = ({ size = 20, color = '#fff' }: { size?: number, color?: string }) => (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         <Rect x="2" y="3" width="20" height="18" rx="2" strokeOpacity={0.6} />
         <Rect x="5" y="6" width="14" height="12" rx="1" fill={color} fillOpacity={0.85} stroke="none" />
@@ -62,7 +62,7 @@ export const BestFitIcon = ({ size = 20, color = "#fff" }: { size?: number, colo
 // OTHER ICONS
 // ============================================================================
 
-export const PipIcon = ({ size = 20, color = "#fff" }: { size?: number, color?: string }) => {
+export const PipIcon = ({ size = 20, color = '#fff' }: { size?: number, color?: string }) => {
     return (
         <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
             <Rect x="2" y="4" width="20" height="16" rx="2" strokeOpacity={1} />
@@ -71,7 +71,7 @@ export const PipIcon = ({ size = 20, color = "#fff" }: { size?: number, color?: 
     );
 };
 
-export const AudioIcon = ({ size = 20, color = "#fff" }: { size?: number, color?: string }) => (
+export const AudioIcon = ({ size = 20, color = '#fff' }: { size?: number, color?: string }) => (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         <Path d="M11 5L6 9H2V15H6L11 19V5Z" strokeOpacity={1} />
         <Path d="M15.54 8.46C16.4774 9.39764 17.0039 10.6692 17.0039 11.995C17.0039 13.3208 16.4774 14.5924 15.54 15.53" stroke={color} strokeWidth={2.5} />
@@ -79,7 +79,7 @@ export const AudioIcon = ({ size = 20, color = "#fff" }: { size?: number, color?
     </Svg>
 );
 
-export const SubtitleIcon = ({ size = 20, color = "#fff" }: { size?: number, color?: string }) => (
+export const SubtitleIcon = ({ size = 20, color = '#fff' }: { size?: number, color?: string }) => (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         <Rect x="2" y="4" width="20" height="16" rx="2" strokeOpacity={1} />
         <Rect x="6" y="10" width="12" height="2" rx="1" fill={color} stroke="none" />
@@ -87,7 +87,7 @@ export const SubtitleIcon = ({ size = 20, color = "#fff" }: { size?: number, col
     </Svg>
 );
 
-export const BookmarkListIcon = ({ size = 20, color = "#fff" }: { size?: number, color?: string }) => (
+export const BookmarkListIcon = ({ size = 20, color = '#fff' }: { size?: number, color?: string }) => (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         <Path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" strokeOpacity={1} />
         <Rect x="8" y="7" width="8" height="2" rx="1" fill={color} stroke="none" />
@@ -95,7 +95,7 @@ export const BookmarkListIcon = ({ size = 20, color = "#fff" }: { size?: number,
     </Svg>
 );
 
-export const OrientationLockIcon = ({ size = 20, color = "#fff", locked = false }: { size?: number, color?: string, locked?: boolean }) => (
+export const OrientationLockIcon = ({ size = 20, color = '#fff', locked = false }: { size?: number, color?: string, locked?: boolean }) => (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         <Rect x="5" y="2" width="14" height="20" rx="3" strokeOpacity={0.6} />
         {locked ? (
@@ -109,7 +109,7 @@ export const OrientationLockIcon = ({ size = 20, color = "#fff", locked = false 
     </Svg>
 );
 
-export const BackgroundPlayIcon = ({ size = 20, color = "#fff" }: { size?: number, color?: string }) => (
+export const BackgroundPlayIcon = ({ size = 20, color = '#fff' }: { size?: number, color?: string }) => (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         <Path d="M4 12V9a8 8 0 0 1 16 0v3" strokeOpacity={1} />
         <Rect x="2" y="12" width="6" height="10" rx="3" fill={color} stroke="none" />
@@ -117,7 +117,7 @@ export const BackgroundPlayIcon = ({ size = 20, color = "#fff" }: { size?: numbe
     </Svg>
 );
 
-export const NightModeIcon = ({ size = 20, color = "#fff", active = false }: { size?: number, color?: string, active?: boolean }) => (
+export const NightModeIcon = ({ size = 20, color = '#fff', active = false }: { size?: number, color?: string, active?: boolean }) => (
     active ? (
         <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
             <Path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" fill={color} stroke="none" />
@@ -153,10 +153,10 @@ export const getResizeModeIcon = (resizeMode: string) => {
     }
 };
 
-export const HapticsIcon = ({ size = 20, color = "#fff", active = true }: { size?: number, color?: string, active?: boolean }) => (
+export const HapticsIcon = ({ size = 20, color = '#fff', active = true }: { size?: number, color?: string, active?: boolean }) => (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         {/* Central element */}
-        <Rect x="10" y="5" width="4" height="14" rx="2" fill={active ? color : "none"} stroke={color} />
+        <Rect x="10" y="5" width="4" height="14" rx="2" fill={active ? color : 'none'} stroke={color} />
         {/* Left waves */}
         <Path d="M6 8v8" stroke={color} strokeOpacity={active ? 1 : 0.6} />
         <Path d="M2.5 10v4" stroke={color} strokeOpacity={active ? 0.6 : 0.3} />
@@ -206,17 +206,17 @@ interface AnimatedIconProps {
 }
 
 // Improved Volume Icon with standard paths but animated opacities
-export const AnimatedVolumeIconStandard = ({ size = 20, color = "#fff", progress, maxVolume = 1.0 }: AnimatedIconProps) => {
+export const AnimatedVolumeIconStandard = ({ size = 20, color = '#fff', progress, maxVolume = 1.0 }: AnimatedIconProps) => {
     // Speaker Base
     const baseProps = useAnimatedProps(() => ({
-        fillOpacity: progress.value > 0 ? 1 : 0.5
+        fillOpacity: progress.value > 0 ? 1 : 0.5,
     }));
 
     // Inner Wave
     const wave1Props = useAnimatedProps(() => {
         const normalized = progress.value / maxVolume;
         return {
-            strokeOpacity: normalized > 0.01 ? 1 : 0.3
+            strokeOpacity: normalized > 0.01 ? 1 : 0.3,
         };
     });
 
@@ -224,7 +224,7 @@ export const AnimatedVolumeIconStandard = ({ size = 20, color = "#fff", progress
     const wave2Props = useAnimatedProps(() => {
         const normalized = progress.value / maxVolume;
         return {
-            strokeOpacity: normalized > 0.5 ? 1 : 0.3
+            strokeOpacity: normalized > 0.5 ? 1 : 0.3,
         };
     });
 
@@ -242,12 +242,12 @@ const useRayOpacity = (progress: Animated.SharedValue<number>, threshold: number
     return useAnimatedProps(() => {
         const p = Math.max(0, Math.min(1, progress.value));
         return {
-            strokeOpacity: p >= threshold ? 1 : 0.3
+            strokeOpacity: p >= threshold ? 1 : 0.3,
         };
     });
 };
 
-export const AnimatedBrightnessIcon = ({ size = 20, color = "#fff", progress }: AnimatedIconProps) => {
+export const AnimatedBrightnessIcon = ({ size = 20, color = '#fff', progress }: AnimatedIconProps) => {
     // Rays light up clockwise from top (12 o'clock)
     // 8 rays -> steps of 1/8 = 0.125
 
@@ -292,7 +292,7 @@ export const AnimatedBrightnessIcon = ({ size = 20, color = "#fff", progress }: 
     );
 };
 
-export const VisualEnhancementIcon = ({ size = 20, color = "#fff", active = false }: { size?: number, color?: string, active?: boolean }) => {
+export const VisualEnhancementIcon = ({ size = 20, color = '#fff', active = false }: { size?: number, color?: string, active?: boolean }) => {
     return (
         <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
             {/* Frame/screen outline */}
@@ -302,7 +302,7 @@ export const VisualEnhancementIcon = ({ size = 20, color = "#fff", active = fals
                 width="20"
                 height="16"
                 rx="1.5"
-                stroke={active ? color : "rgba(255,255,255,0.6)"}
+                stroke={active ? color : 'rgba(255,255,255,0.6)'}
                 strokeWidth={1.5}
                 fill="none"
             />
@@ -350,19 +350,19 @@ export const VisualEnhancementIcon = ({ size = 20, color = "#fff", active = fals
             {/* Sparkle effects for enhancement feel */}
             <Path
                 d="M7 7L7.3 7.7L8 8L7.3 8.3L7 9L6.7 8.3L6 8L6.7 7.7L7 7Z"
-                fill={active ? "#FFD60A" : color}
+                fill={active ? '#FFD60A' : color}
                 opacity={active ? 1 : 0.2}
             />
             <Path
                 d="M18 7L18.25 7.5L18.75 7.75L18.25 8L18 8.5L17.75 8L17.25 7.75L17.75 7.5L18 7Z"
-                fill={active ? "#FFD60A" : color}
+                fill={active ? '#FFD60A' : color}
                 opacity={active ? 1 : 0.2}
             />
         </Svg>
     );
 };
 
-export const SmartSyncIcon = ({ size = 20, color = "#fff", active = false }: { size?: number, color?: string, active?: boolean }) => {
+export const SmartSyncIcon = ({ size = 20, color = '#fff', active = false }: { size?: number, color?: string, active?: boolean }) => {
     return (
         <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
             <G opacity={active ? 1 : 0.6}>
@@ -377,7 +377,7 @@ export const SmartSyncIcon = ({ size = 20, color = "#fff", active = false }: { s
     );
 };
 
-export const AutoListenIcon = ({ size = 20, color = "#fff", active = false }: { size?: number, color?: string, active?: boolean }) => {
+export const AutoListenIcon = ({ size = 20, color = '#fff', active = false }: { size?: number, color?: string, active?: boolean }) => {
     return (
         <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
             {/* Subtitle text lines */}
@@ -387,7 +387,7 @@ export const AutoListenIcon = ({ size = 20, color = "#fff", active = false }: { 
                 width="16"
                 height="1.5"
                 rx="1"
-                fill={active ? color : "none"}
+                fill={active ? color : 'none'}
                 stroke={color}
                 strokeWidth={1.5}
             />
@@ -397,7 +397,7 @@ export const AutoListenIcon = ({ size = 20, color = "#fff", active = false }: { 
                 width="12"
                 height="1.5"
                 rx="1"
-                fill={active ? color : "none"}
+                fill={active ? color : 'none'}
                 stroke={color}
                 strokeWidth={1.5}
             />
@@ -439,13 +439,13 @@ export const AutoListenIcon = ({ size = 20, color = "#fff", active = false }: { 
     );
 };
 
-export const RecapIcon = ({ size = 20, color = "#fff", active = false }: { size?: number, color?: string, active?: boolean }) => {
+export const RecapIcon = ({ size = 20, color = '#fff', active = false }: { size?: number, color?: string, active?: boolean }) => {
     return (
         <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
             {/* Film frame/play hybrid */}
             <Path
                 d="M10 9l5 3-5 3V9z"
-                fill={active ? color : "none"}
+                fill={active ? color : 'none'}
                 stroke={color}
                 strokeWidth={1.5}
                 strokeLinejoin="round"

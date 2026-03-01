@@ -14,11 +14,11 @@ export class HapticPatternGenerator {
     static generateFromCue(cue: SubtitleCue): HapticPattern | null {
         // 1. Extract sound effect text
         const soundEffectText = this.extractSoundEffect(cue.text);
-        if (!soundEffectText) return null;
+        if (!soundEffectText) {return null;}
 
         // 2. Match keyword using Smart Matcher
         const match = SmartKeywordMatcher.match(soundEffectText);
-        if (!match) return null;
+        if (!match) {return null;}
 
         // 3. Find full keyword data (including Base Profile)
         const keywordData = HAPTIC_KEYWORDS.find(k => k.keyword === match.keyword);
@@ -64,8 +64,8 @@ export class HapticPatternGenerator {
             waveform: {
                 timings: waveform.timings,
                 amplitudes: waveform.amplitudes,
-                baseIntensity: keywordData.baseProfile.baseIntensity
-            }
+                baseIntensity: keywordData.baseProfile.baseIntensity,
+            },
         };
     }
 
@@ -109,13 +109,13 @@ export class HapticPatternGenerator {
      * Useful for verifying extraction logic across a full movie.
      */
     static debugScanAllCues(cues: SubtitleCue[]) {
-        if (!__DEV__) return;
+        if (!__DEV__) {return;}
 
-        console.log(`--- [Haptic] Scanning ${cues.length} Subtitles ---`);
+        if (__DEV__) {console.log(`--- [Haptic] Scanning ${cues.length} Subtitles ---`);}
         let count = 0;
 
         // Debug: Print first 5 cues raw to check for HTML/formatting issues
-        cues.slice(0, 5).forEach((c, i) => console.log(`[RawCue ${i}]: "${c.text}"`));
+        cues.slice(0, 5).forEach((c, i) => (__DEV__) && console.log(`[RawCue ${i}]: "${c.text}"`));
 
         cues.forEach(cue => {
             // Clean HTML tags first! (New hypothesis: <i> tags breaking regex)
@@ -133,10 +133,12 @@ export class HapticPatternGenerator {
                     const s = seconds % 60;
                     const timestamp = `${h > 0 ? h + ':' : ''}${m < 10 ? '0' + m : m}:${s < 10 ? '0' + s : s}`;
 
-                    console.log(`[${timestamp}] "${cue.text}" -> Detected: ${match.keyword.toUpperCase()} (${match.category})`);
+                    if (__DEV__) {console.log(`[${timestamp}] "${cue.text}" -> Detected: ${match.keyword.toUpperCase()} (${match.category})`);}
                 }
             }
         });
-        console.log(`--- [Haptic] Scan Complete. Found ${count} haptic events. ---`);
+        if (__DEV__) {console.log(`--- [Haptic] Scan Complete. Found ${count} haptic events. ---`);}
     }
 }
+
+

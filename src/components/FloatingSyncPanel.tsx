@@ -85,7 +85,7 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
     }, [subtitleCues, currentTime]);
 
     const handleAutoListen = useCallback(async () => {
-        if (!videoPath || isListening) return;
+        if (!videoPath || isListening) {return;}
 
         try {
             setIsListening(true);
@@ -100,7 +100,7 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
                 // 1. SMART VAD: Check for silence before wasting API call
                 const volume = await AudioExtractor.checkAudioVolume(audioClip);
                 if (volume < -50) {
-                    console.log(`[SmartSync] Silence detected (${volume} dB). Skipping transcription.`);
+                    if (__DEV__) {console.log(`[SmartSync] Silence detected (${volume} dB). Skipping transcription.`);}
                     Alert.alert('No Speech Detected', 'It seems there was no clear speech in this segment. Please try again or type manually.');
                     setIsListening(false);
                     await AudioExtractor.cleanup();
@@ -117,12 +117,12 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
                     language = undefined; // Whisper auto-detects source language for translation
                 } else if (language) {
                     // For native subtitles, try to transcribe in that specific language
-                    // Groq expects ISO-639-1 (2 chars), but we might get 'eng', 'spa', etc. 
+                    // Groq expects ISO-639-1 (2 chars), but we might get 'eng', 'spa', etc.
                     // Mapping simple 3-char codes to 2-char where obvious
                     const map: Record<string, string> = {
                         'spa': 'es', 'fre': 'fr', 'fra': 'fr', 'ger': 'de', 'deu': 'de',
                         'ita': 'it', 'por': 'pt', 'rus': 'ru', 'jpn': 'ja', 'chi': 'zh',
-                        'hin': 'hi', 'kor': 'ko', 'mal': 'ml'
+                        'hin': 'hi', 'kor': 'ko', 'mal': 'ml',
                     };
                     if (map[language]) {
                         language = map[language];
@@ -132,11 +132,11 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
                     }
                 }
 
-                console.log(`[SmartSync] Auto-listening with task: ${task}, language: ${language || 'auto'}`);
+                if (__DEV__) {console.log(`[SmartSync] Auto-listening with task: ${task}, language: ${language || 'auto'}`);}
 
                 const text = await SpeechToTextService.transcribe(audioClip, {
                     language,
-                    task
+                    task,
                 });
 
                 if (text && text.trim()) {
@@ -215,7 +215,7 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
                             <View style={styles.valueContainer}>
                                 <Text style={[
                                     styles.valueText,
-                                    value !== 0 && styles.valueTextActive
+                                    value !== 0 && styles.valueTextActive,
                                 ]}>
                                     {formattedValue}
                                 </Text>
@@ -238,7 +238,7 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
                             <Pressable
                                 style={({ pressed }) => [
                                     styles.smartButton,
-                                    pressed && styles.buttonPressed
+                                    pressed && styles.buttonPressed,
                                 ]}
                                 onPress={handleToggleSearch}
                                 hitSlop={8}
@@ -258,7 +258,7 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
                                     style={({ pressed }) => [
                                         styles.actionButton,
                                         pressed && styles.buttonPressed,
-                                        value === 0 && styles.disabledButton
+                                        value === 0 && styles.disabledButton,
                                     ]}
                                     onPress={handleReset}
                                     disabled={value === 0}
@@ -300,7 +300,7 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
                     >
                         <View style={[
                             styles.inputWrapper,
-                            isFocused && styles.inputWrapperFocused
+                            isFocused && styles.inputWrapperFocused,
                         ]}>
                             <Feather name="search" size={14} color={isFocused ? '#FFF' : '#666'} style={styles.searchIcon} />
                             <TextInput
@@ -353,7 +353,7 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
                                             key={`${item.cue.startTime}-${index}`}
                                             style={({ pressed }) => [
                                                 styles.resultItem,
-                                                pressed && styles.resultItemPressed
+                                                pressed && styles.resultItemPressed,
                                             ]}
                                             onPress={() => applySync(item)}
                                         >
@@ -403,7 +403,7 @@ const styles = StyleSheet.create({
         paddingHorizontal: 16,
         borderWidth: 1,
         borderColor: 'rgba(255, 255, 255, 0.1)',
-        shadowColor: "#000",
+        shadowColor: '#000',
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.3,
         shadowRadius: 4.65,
@@ -642,3 +642,5 @@ const styles = StyleSheet.create({
         opacity: 0.6,
     },
 });
+
+

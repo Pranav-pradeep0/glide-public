@@ -55,7 +55,7 @@ function MainTabs() {
                     <View style={[StyleSheet.absoluteFill, { borderRadius: 32, overflow: 'hidden' }]}>
                         <BlurView
                             style={StyleSheet.absoluteFill}
-                            blurType={theme.dark ? "dark" : "light"}
+                            blurType={theme.dark ? 'dark' : 'light'}
                             blurAmount={20}
                             reducedTransparencyFallbackColor={theme.colors.card}
                         />
@@ -116,9 +116,9 @@ export default function RootNavigator({ onReady }: RootNavigatorProps) {
 
     useEffect(() => {
         const handleUrl = (url: string) => {
-            console.log('[RootNavigator] URL event received:', url);
+            if (__DEV__) {console.log('[RootNavigator] URL event received:', url);}
             if (DeepLinkService.isVideoUri(url)) {
-                console.log('[RootNavigator] Received video URL in main activity, ignoring');
+                if (__DEV__) {console.log('[RootNavigator] Received video URL in main activity, ignoring');}
             }
         };
         const unsubscribe = DeepLinkService.addUrlListener(handleUrl);
@@ -126,7 +126,7 @@ export default function RootNavigator({ onReady }: RootNavigatorProps) {
     }, []);
 
     const onNavigationReady = useCallback(() => {
-        console.log('[RootNavigator] Navigation ready');
+        if (__DEV__) {console.log('[RootNavigator] Navigation ready');}
         // Wait for one frame to ensure paint has started
         requestAnimationFrame(() => {
             onReady?.();
@@ -211,3 +211,5 @@ export default function RootNavigator({ onReady }: RootNavigatorProps) {
         </NavigationContainer>
     );
 }
+
+

@@ -22,7 +22,7 @@ export class SubtitleSyncService {
         query: string,
         currentTime: number
     ): MatchResult[] {
-        if (!query || query.trim().length < 2) return [];
+        if (!query || query.trim().length < 2) { return []; }
 
         const normalizedQuery = this.normalize(query);
 
@@ -37,7 +37,7 @@ export class SubtitleSyncService {
                 // If we found good matches in a smaller window, we stop here to avoid
                 // confusion with similar phrases further away in the movie.
                 // Strip score before returning
-                return windowResults.slice(0, 5).map(({ score, ...rest }) => rest);
+                return windowResults.slice(0, 5).map(({ score: _, ...rest }) => rest);
             }
         }
 
@@ -67,14 +67,14 @@ export class SubtitleSyncService {
                 matches.push({
                     cue,
                     score,
-                    matchedText: cue.text
+                    matchedText: cue.text,
                 });
             }
         }
 
         // Sort by score then proximity
         return matches.sort((a, b) => {
-            if (Math.abs(b.score - a.score) > 10) return b.score - a.score;
+            if (Math.abs(b.score - a.score) > 10) { return b.score - a.score; }
             return Math.abs(a.cue.startTime - currentTime) - Math.abs(b.cue.startTime - currentTime);
         });
     }
@@ -82,8 +82,8 @@ export class SubtitleSyncService {
     private static normalize(text: string): string {
         return text
             .toLowerCase()
-            .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "")
-            .replace(/\s{2,}/g, " ")
+            .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, '')
+            .replace(/\s{2,}/g, ' ')
             .trim();
     }
 
@@ -126,7 +126,7 @@ export class SubtitleSyncService {
             let matches = 0;
             // Simple word overlap
             for (const word of queryWords) {
-                if (normalizedCue.includes(word)) matches++;
+                if (normalizedCue.includes(word)) { matches++; }
             }
 
             const denominator = Math.min(queryWords.length, cueWords.length);

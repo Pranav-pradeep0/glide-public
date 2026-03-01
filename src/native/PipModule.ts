@@ -1,6 +1,6 @@
 /**
  * PipModule - TypeScript wrapper for native PIP functionality
- * 
+ *
  * Provides:
  * - enterPipMode() - Enter Picture-in-Picture mode
  * - isInPipMode() - Check if currently in PIP mode

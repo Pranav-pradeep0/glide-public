@@ -22,7 +22,7 @@ export class SubtitlePickerService {
      */
     static async pickFromStorage(): Promise<PickedSubtitle | null> {
         try {
-            console.log(`${LOG_PREFIX} Opening subtitle picker`);
+            if (__DEV__) {console.log(`${LOG_PREFIX} Opening subtitle picker`);}
 
             // Use new @react-native-documents/picker API
             const result = await pick({
@@ -31,12 +31,12 @@ export class SubtitlePickerService {
             });
 
             if (!result || result.length === 0) {
-                console.log(`${LOG_PREFIX} No file selected`);
+                if (__DEV__) {console.log(`${LOG_PREFIX} No file selected`);}
                 return null;
             }
 
             const file = result[0];
-            console.log(`${LOG_PREFIX} User selected:`, file.name);
+            if (__DEV__) {console.log(`${LOG_PREFIX} User selected:`, file.name);}
 
             // Check extension
             const fileName = file.name || '';
@@ -55,7 +55,7 @@ export class SubtitlePickerService {
                 const cachePath = `${RNFS.CachesDirectoryPath}/picked_subtitle_${Date.now()}${ext}`;
                 await RNFS.copyFile(filePath, cachePath);
                 filePath = cachePath;
-                console.log(`${LOG_PREFIX} Copied to cache:`, cachePath);
+                if (__DEV__) {console.log(`${LOG_PREFIX} Copied to cache:`, cachePath);}
             } else {
                 // Clean file:// prefix if present
                 filePath = filePath.replace('file://', '');
@@ -63,7 +63,7 @@ export class SubtitlePickerService {
 
             // Read file content
             const content = await RNFS.readFile(filePath, 'utf8');
-            console.log(`${LOG_PREFIX} Read file: ${content.length} chars`);
+            if (__DEV__) {console.log(`${LOG_PREFIX} Read file: ${content.length} chars`);}
 
             // Parse subtitle
             const format = ext === '.srt' ? 'srt' : ext === '.vtt' ? 'vtt' : 'ass';
@@ -73,7 +73,7 @@ export class SubtitlePickerService {
                 throw new Error('Could not parse subtitle file. Please check the file format.');
             }
 
-            console.log(`${LOG_PREFIX} Parsed ${cues.length} cues`);
+            if (__DEV__) {console.log(`${LOG_PREFIX} Parsed ${cues.length} cues`);}
 
             return {
                 path: filePath,
@@ -85,7 +85,7 @@ export class SubtitlePickerService {
         } catch (error: any) {
             // Check if user cancelled using error code
             if (isErrorWithCode(error) && error.code === 'OPERATION_CANCELED') {
-                console.log(`${LOG_PREFIX} User cancelled`);
+                if (__DEV__) {console.log(`${LOG_PREFIX} User cancelled`);}
                 return null;
             }
 
@@ -102,7 +102,7 @@ export class SubtitlePickerService {
         try {
             // Content URIs don't have scannable directories
             if (videoPath.startsWith('content://')) {
-                console.log(`${LOG_PREFIX} Skipping external subtitle scan for content URI`);
+                if (__DEV__) {console.log(`${LOG_PREFIX} Skipping external subtitle scan for content URI`);}
                 return [];
             }
 
@@ -110,7 +110,7 @@ export class SubtitlePickerService {
             const videoName = videoPath.substring(videoPath.lastIndexOf('/') + 1);
             const videoBaseName = videoName.substring(0, videoName.lastIndexOf('.'));
 
-            console.log(`${LOG_PREFIX} Searching for subtitles matching:`, videoBaseName);
+            if (__DEV__) {console.log(`${LOG_PREFIX} Searching for subtitles matching:`, videoBaseName);}
 
             const files = await RNFS.readDir(videoDir);
             const matchingSubtitles: string[] = [];
@@ -127,7 +127,7 @@ export class SubtitlePickerService {
                             subBaseName.startsWith(videoBaseName + '.') ||
                             subBaseName.startsWith(videoBaseName + '_')) {
                             matchingSubtitles.push(file.path);
-                            console.log(`${LOG_PREFIX} Found matching:`, file.name);
+                            if (__DEV__) {console.log(`${LOG_PREFIX} Found matching:`, file.name);}
                         }
                     }
                 }
@@ -183,3 +183,5 @@ export class SubtitlePickerService {
         }
     }
 }
+
+

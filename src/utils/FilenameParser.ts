@@ -62,7 +62,7 @@ export class FilenameParser {
 
             // Quality Construction
             const partsQuality: string[] = [];
-            if (parsed.resolution) partsQuality.push(parsed.resolution);
+            if (parsed.resolution) {partsQuality.push(parsed.resolution);}
 
             // Source: Filter out junk
             if (parsed.sources && parsed.sources.length > 0) {
@@ -70,12 +70,12 @@ export class FilenameParser {
                 partsQuality.push(uniqueSources.join(' '));
             }
 
-            if (parsed.videoCodec) partsQuality.push(parsed.videoCodec);
+            if (parsed.videoCodec) {partsQuality.push(parsed.videoCodec);}
 
             if (parsed.edition) {
                 Object.keys(parsed.edition).forEach(k => {
                     // @ts-ignore
-                    if (parsed.edition[k]) partsQuality.push(k.toUpperCase());
+                    if (parsed.edition[k]) {partsQuality.push(k.toUpperCase());}
                 });
             }
             if (parsed.revision) {
@@ -100,8 +100,8 @@ export class FilenameParser {
                     partsGroup.push(parsed.group);
                 }
             }
-            if (parsed.audioCodec) partsGroup.push(parsed.audioCodec);
-            if (parsed.audioChannels) partsGroup.push(parsed.audioChannels);
+            if (parsed.audioCodec) {partsGroup.push(parsed.audioCodec);}
+            if (parsed.audioChannels) {partsGroup.push(parsed.audioChannels);}
 
             let group = partsGroup.join(' ').trim();
 
@@ -125,7 +125,7 @@ export class FilenameParser {
                 episode: (parsed as any).episodeNumbers?.[0],
                 fullSeason: (parsed as any).fullSeason || false,
                 quality: quality,
-                group: group
+                group: group,
             };
         } catch (error) {
             console.warn('[FilenameParser] Parsing error, falling back:', error);
@@ -136,7 +136,7 @@ export class FilenameParser {
             return {
                 title: fallbackTitle,
                 isTVShow: false,
-                year: undefined
+                year: undefined,
             };
         }
     }

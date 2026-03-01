@@ -21,7 +21,7 @@ export class SpeechToTextService {
      * @returns Transcribed text
      */
     static async transcribe(audioPath: string, options: TranscribeOptions = {}): Promise<string> {
-        console.log(`${LOG_PREFIX} Starting transcription for: ${audioPath}`, options);
+        if (__DEV__) {console.log(`${LOG_PREFIX} Starting transcription for: ${audioPath}`, options);}
 
         try {
             const formData = new FormData();
@@ -64,7 +64,7 @@ export class SpeechToTextService {
             }
 
             const data: TranscriptionResponse = await response.json();
-            console.log(`${LOG_PREFIX} Transcription complete: "${data.text.substring(0, 50)}..."`);
+            if (__DEV__) {console.log(`${LOG_PREFIX} Transcription complete: "${data.text.substring(0, 50)}..."`);}
 
             return data.text.trim();
         } catch (error) {
@@ -73,3 +73,5 @@ export class SpeechToTextService {
         }
     }
 }
+
+

@@ -11,8 +11,8 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
             primitive: 'oscillator',
             baseFreq: 0.5, // Slow breath
             baseIntensity: 80,
-            envelope: { attack: 0.3, decay: 0.1, sustain: 0.6, release: 0.5 }
-        }
+            envelope: { attack: 0.3, decay: 0.1, sustain: 0.6, release: 0.5 },
+        },
     },
     {
         keyword: 'heartbeat',
@@ -30,7 +30,7 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
                     baseFreq: 1.2,
                     baseIntensity: 150,
                     envelope: { attack: 0.05, decay: 0.1, sustain: 0.0, release: 0.1 },
-                    durationMultiplier: 0.4
+                    durationMultiplier: 0.4,
                 },
                 {
                     primitive: 'pulse',
@@ -38,10 +38,10 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
                     baseIntensity: 100,
                     envelope: { attack: 0.05, decay: 0.1, sustain: 0.0, release: 0.1 },
                     startTimeOffset: 250, // The "dub"
-                    durationMultiplier: 0.4
-                }
-            ]
-        }
+                    durationMultiplier: 0.4,
+                },
+            ],
+        },
     },
     {
         keyword: 'engine',
@@ -52,8 +52,8 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
             primitive: 'oscillator',
             baseFreq: 15, // Low rumble
             baseIntensity: 100,
-            envelope: { attack: 0.1, decay: 0.0, sustain: 1.0, release: 0.1 }
-        }
+            envelope: { attack: 0.1, decay: 0.0, sustain: 1.0, release: 0.1 },
+        },
     },
     {
         keyword: 'wind',
@@ -64,8 +64,8 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
             primitive: 'oscillator',
             baseFreq: 2.0, // Swirling wind
             baseIntensity: 60,
-            envelope: { attack: 0.5, decay: 0.0, sustain: 0.8, release: 0.5 }
-        }
+            envelope: { attack: 0.5, decay: 0.0, sustain: 0.8, release: 0.5 },
+        },
     },
 
     // Textured (Rough, irregular)
@@ -86,7 +86,7 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
                     baseFreq: 0,
                     baseIntensity: 255,
                     envelope: { attack: 0.0, decay: 0.2, sustain: 0.0, release: 0.0 },
-                    durationMultiplier: 0.2
+                    durationMultiplier: 0.2,
                 },
                 {
                     // Layer 2: The Deep Rolling Rumble
@@ -94,7 +94,7 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
                     baseFreq: 5,
                     baseIntensity: 200,
                     grainSize: 40,
-                    envelope: { attack: 0.1, decay: 0.8, sustain: 0.3, release: 0.5 }
+                    envelope: { attack: 0.1, decay: 0.8, sustain: 0.3, release: 0.5 },
                 },
                 {
                     // Layer 3: Sub-bass Shockwave
@@ -102,10 +102,10 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
                     baseFreq: 2.0,
                     baseIntensity: 150,
                     envelope: { attack: 0.2, decay: 0.5, sustain: 1.0, release: 0.8 },
-                    startTimeOffset: 100
-                }
-            ]
-        }
+                    startTimeOffset: 100,
+                },
+            ],
+        },
     },
     {
         keyword: 'growl',
@@ -117,8 +117,8 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
             baseFreq: 8, // Low growl
             baseIntensity: 120,
             grainSize: 30,
-            envelope: { attack: 0.2, decay: 0.1, sustain: 0.7, release: 0.3 }
-        }
+            envelope: { attack: 0.2, decay: 0.1, sustain: 0.7, release: 0.3 },
+        },
     },
     {
         keyword: 'thunder',
@@ -138,7 +138,7 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
                     baseIntensity: 150,
                     grainSize: 10,
                     envelope: { attack: 0.0, decay: 0.2, sustain: 0.0, release: 0.1 },
-                    durationMultiplier: 0.3
+                    durationMultiplier: 0.3,
                 },
                 {
                     // Layer 2: Rolling Distant Rumble
@@ -146,10 +146,10 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
                     baseFreq: 4,
                     baseIntensity: 180,
                     grainSize: 60,
-                    envelope: { attack: 0.5, decay: 0.5, sustain: 0.5, release: 0.8 }
-                }
-            ]
-        }
+                    envelope: { attack: 0.5, decay: 0.5, sustain: 0.5, release: 0.8 },
+                },
+            ],
+        },
     },
     {
         keyword: 'crash',
@@ -168,7 +168,7 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
                     baseFreq: 0,
                     baseIntensity: 220,
                     envelope: { attack: 0.0, decay: 0.1, sustain: 0.0, release: 0.0 },
-                    durationMultiplier: 0.1
+                    durationMultiplier: 0.1,
                 },
                 {
                     // Layer 2: The Shattering Glass
@@ -177,10 +177,10 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
                     baseIntensity: 160,
                     grainSize: 5,
                     envelope: { attack: 0.1, decay: 0.4, sustain: 0.2, release: 0.4 },
-                    startTimeOffset: 50
-                }
-            ]
-        }
+                    startTimeOffset: 50,
+                },
+            ],
+        },
     },
     {
         keyword: 'gravel',
@@ -192,8 +192,8 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
             baseFreq: 0,
             baseIntensity: 90,
             grainSize: 20, // Fine grain
-            envelope: { attack: 0.1, decay: 0.1, sustain: 0.8, release: 0.1 }
-        }
+            envelope: { attack: 0.1, decay: 0.1, sustain: 0.8, release: 0.1 },
+        },
     },
     {
         keyword: 'firing',
@@ -204,8 +204,8 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
             primitive: 'transient',
             baseFreq: 0,
             baseIntensity: 200,
-            envelope: { attack: 0, decay: 0.1, sustain: 0, release: 0 }
-        }
+            envelope: { attack: 0, decay: 0.1, sustain: 0, release: 0 },
+        },
     },
 
     // Impact (Sharp, single event)
@@ -218,8 +218,8 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
             primitive: 'transient',
             baseFreq: 0,
             baseIntensity: 220,
-            envelope: { attack: 0, decay: 0.1, sustain: 0, release: 0 }
-        }
+            envelope: { attack: 0, decay: 0.1, sustain: 0, release: 0 },
+        },
     },
     {
         keyword: 'punch',
@@ -230,8 +230,8 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
             primitive: 'transient',
             baseFreq: 0,
             baseIntensity: 160,
-            envelope: { attack: 0.0, decay: 0.1, sustain: 0.0, release: 0.0 }
-        }
+            envelope: { attack: 0.0, decay: 0.1, sustain: 0.0, release: 0.0 },
+        },
     },
     {
         keyword: 'door',
@@ -250,7 +250,7 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
                     baseFreq: 8,
                     baseIntensity: 140,
                     envelope: { attack: 0.05, decay: 0.2, sustain: 0.0, release: 0.0 },
-                    durationMultiplier: 0.4
+                    durationMultiplier: 0.4,
                 },
                 {
                     // Layer 2: Echo/Vibration
@@ -259,10 +259,10 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
                     baseIntensity: 80,
                     grainSize: 30,
                     envelope: { attack: 0.1, decay: 0.4, sustain: 0.0, release: 0.2 },
-                    startTimeOffset: 150
-                }
-            ]
-        }
+                    startTimeOffset: 150,
+                },
+            ],
+        },
     },
     {
         keyword: 'snap',
@@ -273,8 +273,8 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
             primitive: 'transient',
             baseFreq: 0,
             baseIntensity: 100,
-            envelope: { attack: 0.0, decay: 0.05, sustain: 0.0, release: 0.0 }
-        }
+            envelope: { attack: 0.0, decay: 0.05, sustain: 0.0, release: 0.0 },
+        },
     },
 
     // Rhythmic (Repeating patterns)
@@ -287,8 +287,8 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
             primitive: 'pulse',
             baseFreq: 2.0, // Walking pace
             baseIntensity: 60,
-            envelope: { attack: 0.05, decay: 0.1, sustain: 0.0, release: 0.0 }
-        }
+            envelope: { attack: 0.05, decay: 0.1, sustain: 0.0, release: 0.0 },
+        },
     },
     {
         keyword: 'marching',
@@ -299,8 +299,8 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
             primitive: 'pulse',
             baseFreq: 1.5,
             baseIntensity: 100,
-            envelope: { attack: 0.05, decay: 0.1, sustain: 0.0, release: 0.0 }
-        }
+            envelope: { attack: 0.05, decay: 0.1, sustain: 0.0, release: 0.0 },
+        },
     },
     {
         keyword: 'knocking',
@@ -311,8 +311,8 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
             primitive: 'pulse',
             baseFreq: 5.0, // Sharp tap
             baseIntensity: 80,
-            envelope: { attack: 0.0, decay: 0.05, sustain: 0.0, release: 0.0 }
-        }
+            envelope: { attack: 0.0, decay: 0.05, sustain: 0.0, release: 0.0 },
+        },
     },
     {
         keyword: 'beeping',
@@ -323,8 +323,8 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
             primitive: 'oscillator',
             baseFreq: 100, // High pitch beep simulation
             baseIntensity: 120,
-            envelope: { attack: 0.01, decay: 0.05, sustain: 0.8, release: 0.05 }
-        }
+            envelope: { attack: 0.01, decay: 0.05, sustain: 0.8, release: 0.05 },
+        },
     },
     {
         keyword: 'typing',
@@ -335,8 +335,8 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
             primitive: 'transient',
             baseFreq: 0,
             baseIntensity: 60,
-            envelope: { attack: 0.0, decay: 0.05, sustain: 0.0, release: 0.0 }
-        }
+            envelope: { attack: 0.0, decay: 0.05, sustain: 0.0, release: 0.0 },
+        },
     },
     {
         keyword: 'clicking',
@@ -347,8 +347,8 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
             primitive: 'transient',
             baseFreq: 0,
             baseIntensity: 50,
-            envelope: { attack: 0.0, decay: 0.03, sustain: 0.0, release: 0.0 }
-        }
+            envelope: { attack: 0.0, decay: 0.03, sustain: 0.0, release: 0.0 },
+        },
     },
     {
         keyword: 'ticking',
@@ -359,8 +359,8 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
             primitive: 'pulse',
             baseFreq: 1.0,
             baseIntensity: 40,
-            envelope: { attack: 0.0, decay: 0.02, sustain: 0.0, release: 0.0 }
-        }
+            envelope: { attack: 0.0, decay: 0.02, sustain: 0.0, release: 0.0 },
+        },
     },
     {
         keyword: 'applause',
@@ -372,7 +372,7 @@ export const HAPTIC_KEYWORDS: HapticKeyword[] = [
             baseFreq: 0,
             baseIntensity: 90,
             grainSize: 15,
-            envelope: { attack: 0.1, decay: 0.2, sustain: 0.6, release: 0.3 }
-        }
-    }
+            envelope: { attack: 0.1, decay: 0.2, sustain: 0.6, release: 0.3 },
+        },
+    },
 ];

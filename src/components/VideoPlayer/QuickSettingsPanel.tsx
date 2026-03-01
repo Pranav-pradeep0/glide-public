@@ -10,7 +10,7 @@ import Animated, {
     FadeIn,
     FadeOut,
     SlideInLeft,
-    SlideOutLeft
+    SlideOutLeft,
 } from 'react-native-reanimated';
 
 import { useWindowDimensions } from 'react-native';
@@ -110,7 +110,7 @@ export const QuickSettingsPanel: React.FC<QuickSettingsPanelProps> = memo((props
                         width: PANEL_WIDTH,
                         paddingTop: props.insets?.top || 0,
                         paddingBottom: props.insets?.bottom || 0,
-                    }
+                    },
                 ]}
             >
                 {/* Content */}
@@ -171,14 +171,14 @@ export const QuickSettingsPanel: React.FC<QuickSettingsPanelProps> = memo((props
                                                 key={val}
                                                 style={[
                                                     styles.presetChip,
-                                                    hapticSettings.intensity === val && styles.activeChip
+                                                    hapticSettings.intensity === val && styles.activeChip,
                                                 ]}
                                                 onPress={() => handlePresetSelect(val)}
                                                 disabled={!hapticSettings.enabled}
                                             >
                                                 <Text style={[
                                                     styles.chipText,
-                                                    hapticSettings.intensity === val && styles.activeChipText
+                                                    hapticSettings.intensity === val && styles.activeChipText,
                                                 ]}>
                                                     {['Light', 'Medium', 'Strong'][idx]}
                                                 </Text>
@@ -198,13 +198,13 @@ export const QuickSettingsPanel: React.FC<QuickSettingsPanelProps> = memo((props
                                         key={rate}
                                         style={[
                                             styles.gridItem,
-                                            props.playbackRate === rate && styles.activeGridItem
+                                            props.playbackRate === rate && styles.activeGridItem,
                                         ]}
                                         onPress={() => props.onPlaybackRateChange(rate)}
                                     >
                                         <Text style={[
                                             styles.gridItemText,
-                                            props.playbackRate === rate && styles.activeGridItemText
+                                            props.playbackRate === rate && styles.activeGridItemText,
                                         ]}>{rate}x</Text>
                                     </Pressable>
                                 ))}
@@ -225,7 +225,7 @@ export const QuickSettingsPanel: React.FC<QuickSettingsPanelProps> = memo((props
                                     >
                                         <Text style={[
                                             styles.gridItemText,
-                                            props.resizeMode === mode && styles.activeGridItemText
+                                            props.resizeMode === mode && styles.activeGridItemText,
                                         ]}>{label}</Text>
                                     </Pressable>
                                 ))}
@@ -241,7 +241,7 @@ export const QuickSettingsPanel: React.FC<QuickSettingsPanelProps> = memo((props
                                     onPress={props.onToggleMute}
                                 >
                                     <View style={styles.iconCircle}>
-                                        <Feather name={props.muted ? "volume-x" : "volume-2"} size={20} color={props.muted ? "#000" : "#FFF"} />
+                                        <Feather name={props.muted ? 'volume-x' : 'volume-2'} size={20} color={props.muted ? '#000' : '#FFF'} />
                                     </View>
                                     <Text style={[styles.toolLabel, props.muted && styles.activeToolLabel]}>Mute</Text>
                                 </Pressable>
@@ -250,7 +250,7 @@ export const QuickSettingsPanel: React.FC<QuickSettingsPanelProps> = memo((props
                                     onPress={props.onToggleRepeat}
                                 >
                                     <View style={styles.iconCircle}>
-                                        <Feather name="repeat" size={20} color={props.repeat ? "#000" : "#FFF"} />
+                                        <Feather name="repeat" size={20} color={props.repeat ? '#000' : '#FFF'} />
                                     </View>
                                     <Text style={[styles.toolLabel, props.repeat && styles.activeToolLabel]}>Repeat</Text>
                                 </Pressable>
@@ -271,13 +271,13 @@ export const QuickSettingsPanel: React.FC<QuickSettingsPanelProps> = memo((props
                                         key={opt.label}
                                         style={[
                                             styles.capsuleTab,
-                                            props.sleepTimer === opt.value && styles.activeCapsule
+                                            props.sleepTimer === opt.value && styles.activeCapsule,
                                         ]}
                                         onPress={() => props.onSetSleepTimer(opt.value)}
                                     >
                                         <Text style={[
                                             styles.capsuleText,
-                                            props.sleepTimer === opt.value && styles.activeCapsuleText
+                                            props.sleepTimer === opt.value && styles.activeCapsuleText,
                                         ]}>{opt.label}</Text>
                                     </Pressable>
                                 ))}
@@ -293,13 +293,13 @@ export const QuickSettingsPanel: React.FC<QuickSettingsPanelProps> = memo((props
                                         key={mode}
                                         style={[
                                             styles.segmentBtn,
-                                            props.decoder === mode && styles.activeSegment
+                                            props.decoder === mode && styles.activeSegment,
                                         ]}
                                         onPress={() => props.onSetDecoder(mode)}
                                     >
                                         <Text style={[
                                             styles.segmentText,
-                                            props.decoder === mode && styles.activeSegmentText
+                                            props.decoder === mode && styles.activeSegmentText,
                                         ]}>
                                             {mode === 'hardware_plus' ? 'HW+' : mode === 'hardware' ? 'HW' : 'SW'}
                                         </Text>
@@ -506,7 +506,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         borderWidth: 1,
         borderColor: 'transparent',
-        padding: 8
+        padding: 8,
     },
     activeGridItem: {
         backgroundColor: '#FFF',

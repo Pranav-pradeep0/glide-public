@@ -66,7 +66,7 @@ export const BookmarkToast = memo<BookmarkToastProps>(({ visible, message, durat
         opacity: opacity.value,
     }));
 
-    if (!visible && translateY.value === -100) return null;
+    if (!visible && translateY.value === -100) {return null;}
 
     return (
         <Animated.View style={[styles.container, animatedStyle]} pointerEvents="none">

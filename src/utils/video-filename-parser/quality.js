@@ -1,3 +1,4 @@
+/* eslint-disable no-shadow */
 import { parseResolution, Resolution } from './resolution.js';
 import { parseSource, parseSourceGroups, Source } from './source.js';
 import { parseVideoCodec, VideoCodec } from './videoCodec.js';
@@ -10,9 +11,9 @@ const rawHdExp = /\b(?<rawhd>RawHD|1080i[-_. ]HDTV|Raw[-_. ]HD|MPEG[-_. ]?2)\b/i
 const highDefPdtvRegex = /hr[-_. ]ws/i;
 export var QualityModifier;
 (function (QualityModifier) {
-    QualityModifier["REMUX"] = "REMUX";
-    QualityModifier["BRDISK"] = "BRDISK";
-    QualityModifier["RAWHD"] = "RAWHD";
+    QualityModifier.REMUX = 'REMUX';
+    QualityModifier.BRDISK = 'BRDISK';
+    QualityModifier.RAWHD = 'RAWHD';
 })(QualityModifier || (QualityModifier = {}));
 export function parseQualityModifyers(title) {
     const normalizedTitle = title.trim().replace(/_/g, ' ').trim().toLowerCase();

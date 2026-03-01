@@ -54,7 +54,7 @@ export default class VLCPlayerView extends Component {
     playInBackground: false,
     isGG: false,
     autoplay: true,
-    errorTitle: 'error'
+    errorTitle: 'error',
   };
 
   componentDidMount() {
@@ -66,7 +66,7 @@ export default class VLCPlayerView extends Component {
   }
 
   componentWillUnmount() {
-    this.vlcPlayer._onStopped()
+    this.vlcPlayer._onStopped();
 
     if (this.bufferInterval) {
       clearInterval(this.bufferInterval);
@@ -77,7 +77,7 @@ export default class VLCPlayerView extends Component {
 
   componentDidUpdate(prevProps, prevState) {
     if (this.props.uri !== prevProps.uri) {
-      console.log("componentDidUpdate");
+      console.log('componentDidUpdate');
       this.changeUrl = true;
     }
   }
@@ -104,7 +104,7 @@ export default class VLCPlayerView extends Component {
       showLeftButton,
       showMiddleButton,
       showRightButton,
-      errorTitle
+      errorTitle,
     } = this.props;
     let { isLoading, loadingSuccess, showControls, isError } = this.state;
     let showGG = false;
@@ -342,7 +342,7 @@ export default class VLCPlayerView extends Component {
     this.setState({
       isError: true,
     });
-    onError && onError()
+    onError && onError();
   };
 
   _onOpen = e => {
@@ -368,7 +368,7 @@ export default class VLCPlayerView extends Component {
         this.setState({
           paused: false,
         });
-      })
+      });
     } else {
       this.vlcPlayer.seek(0);
       this.setState({
@@ -382,7 +382,7 @@ export default class VLCPlayerView extends Component {
         this.setState({
           paused: false,
         });
-      })
+      });
     }
   };
 
@@ -430,9 +430,9 @@ export default class VLCPlayerView extends Component {
    * @param event
    */
   onEnded(event) {
-    console.log('onEnded ---------->')
-    console.log(event)
-    console.log('<---------- onEnded ')
+    console.log('onEnded ---------->');
+    console.log(event);
+    console.log('<---------- onEnded ');
     let { currentTime, totalTime } = this.state;
     // [bavv add start]
     let { onVLCEnded, onEnd, autoplay, isGG } = this.props;

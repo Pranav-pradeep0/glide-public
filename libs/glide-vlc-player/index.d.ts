@@ -1,15 +1,15 @@
-import type { Component } from "react";
-import { StyleProp, ViewStyle } from "react-native";
+import type { Component } from 'react';
+import { StyleProp, ViewStyle } from 'react-native';
 
 /**
  * Video aspect ratio type
  */
-export type PlayerAspectRatio = "16:9" | "1:1" | "4:3" | "3:2" | "21:9" | "9:16";
+export type PlayerAspectRatio = '16:9' | '1:1' | '4:3' | '3:2' | '21:9' | '9:16';
 
 /**
  * Video resize mode
  */
-export type PlayerResizeMode = "fill" | "contain" | "cover" | "none" | "scale-down" | "stretch" | "best-fit";
+export type PlayerResizeMode = 'fill' | 'contain' | 'cover' | 'none' | 'scale-down' | 'stretch' | 'best-fit';
 
 /**
  * VLC Player source configuration options
@@ -21,25 +21,25 @@ export interface VLCPlayerSource {
   uri: string;
   /**
    * VLC Player initialization type
-   * 
+   *
    *  - Default configuration: `1`
    *  - Custom configuration: `2`
-   * 
+   *
    * See `initOptions` for more information
-   * 
+   *
    * @default 1
    */
   initType?: 1 | 2;
   /**
    * https://wiki.videolan.org/VLC_command-line_help/
-   * 
+   *
    * VLC Player initialization options
-   * 
+   *
    * `["--network-caching=50", "--rtsp-tcp"]`
-   * 
+   *
    * If `repeat` is set on props this will default to ["--repeat"] unless
    * another `--repeat` or `--input-repeat` flag is passed.
-   * 
+   *
    * @default []
    */
   initOptions?: string[];
@@ -90,7 +90,7 @@ export type VideoInfo = {
   /**
    * Total playback video size
    */
-  videoSize: Record<"width" | "height", number>;
+  videoSize: Record<'width' | 'height', number>;
 
   /**
    * List of playback audio tracks
@@ -103,11 +103,11 @@ export type VideoInfo = {
   textTracks: Track[];
 };
 
-type OnPlayingEventProps = Pick<VideoInfo, "duration" | "target"> & {
+type OnPlayingEventProps = Pick<VideoInfo, 'duration' | 'target'> & {
   seekable: boolean;
 };
 
-type OnProgressEventProps = Pick<VideoInfo, "duration" | "target"> & {
+type OnProgressEventProps = Pick<VideoInfo, 'duration' | 'target'> & {
   /**
    * Current playback time
    */
@@ -141,7 +141,7 @@ export type VLCSeekEventProps = {
   position: number;
 };
 
-type SimpleCallbackEventProps = Pick<VideoInfo, "target">;
+type SimpleCallbackEventProps = Pick<VideoInfo, 'target'>;
 
 export type VLCPlayerCallbackProps = {
   /**
@@ -380,7 +380,7 @@ declare class PlaybackMethods<T> extends Component<T> {
   stopRecording();
 
   /**
-   * Stop playing 
+   * Stop playing
    */
   stopPlayer();
 
@@ -393,7 +393,7 @@ declare class PlaybackMethods<T> extends Component<T> {
 
   /**
    * Seek to the given position
-   * 
+   *
    * @param pos Position to seek to (as a percentage of the full duration)
    */
   seek(pos: number);
@@ -405,14 +405,14 @@ declare class PlaybackMethods<T> extends Component<T> {
 
   /**
    * Change auto aspect ratio setting
-   * 
+   *
    * @param useAuto Whether or not to use auto aspect ratio
    */
   autoAspectRatio(useAuto: boolean);
 
   /**
    * Update video aspect ratio e.g. `"16:9"`
-   * 
+   *
    * @param ratio Aspect ratio to use
    */
   changeVideoAspectRatio(ratio: string);

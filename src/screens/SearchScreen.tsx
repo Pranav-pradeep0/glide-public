@@ -191,7 +191,7 @@ export default function SearchScreen() {
 
     const handleVideoLongPress = useCallback((video: VideoFile) => {
         // TODO: Implement options bottom sheet
-        console.log('Long press:', video.name);
+        if (__DEV__) {console.log('Long press:', video.name);}
     }, []);
 
     const handleRefresh = useCallback(async () => {
@@ -363,7 +363,7 @@ export default function SearchScreen() {
                     styles.listContent,
                     results.length === 0 && styles.emptyListContent,
                     viewMode === 'grid' && styles.gridListContent,
-                    { paddingBottom: insets.bottom + 20 }
+                    { paddingBottom: insets.bottom + 20 },
                 ]}
                 numColumns={viewMode === 'grid' ? GRID_COLUMNS : 1}
                 key={viewMode} // Force re-render when switching view modes
@@ -583,3 +583,5 @@ const styles = StyleSheet.create({
         fontSize: 12,
     },
 });
+
+

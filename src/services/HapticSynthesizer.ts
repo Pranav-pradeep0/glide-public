@@ -38,7 +38,7 @@ export class HapticSynthesizer {
 
             for (let i = 0; i < layerSteps; i++) {
                 const stepIndex = offsetSteps + i;
-                if (stepIndex >= steps) break;
+                if (stepIndex >= steps) {break;}
 
                 const time = i * this.STEP_MS;
                 const progress = i / layerSteps;
@@ -64,7 +64,7 @@ export class HapticSynthesizer {
                 const adjAttack = layer.envelope.attack / (context.sharpness * 1.5 + 0.1);
                 const envValue = this.calculateEnvelope(progress, {
                     ...layer.envelope,
-                    attack: Math.min(0.4, adjAttack)
+                    attack: Math.min(0.4, adjAttack),
                 });
                 sample *= envValue;
 

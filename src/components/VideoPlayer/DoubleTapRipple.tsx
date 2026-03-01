@@ -1,6 +1,6 @@
 /**
  * DoubleTapRipple Component - Minimalistic Design
- * 
+ *
  * A clean, subtle ripple effect with a single expanding ring.
  * Designed for elegance and performance.
  */
@@ -81,7 +81,7 @@ export const DoubleTapRipple: React.FC<DoubleTapRippleProps> = React.memo(({
         };
     }, [x, y]);
 
-    if (!show) return null;
+    if (!show) {return null;}
 
     return (
         <View style={styles.container} pointerEvents="none">

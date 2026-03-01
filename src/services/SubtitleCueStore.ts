@@ -35,7 +35,7 @@ export class SubtitleCueStore {
             const oldest = this.lru.shift();
             if (oldest) {
                 this.cache.delete(oldest);
-                if (__DEV__) console.log(`${LOG_PREFIX} Evicted oldest cue cache entry:`, oldest);
+                if (__DEV__) {console.log(`${LOG_PREFIX} Evicted oldest cue cache entry:`, oldest);}
             }
         }
     }
@@ -48,7 +48,7 @@ export class SubtitleCueStore {
             const oldest = this.tracksLru.shift();
             if (oldest) {
                 this.tracksCache.delete(oldest);
-                if (__DEV__) console.log(`${LOG_PREFIX} Evicted oldest tracks cache entry:`, oldest);
+                if (__DEV__) {console.log(`${LOG_PREFIX} Evicted oldest tracks cache entry:`, oldest);}
             }
         }
     }
@@ -60,7 +60,7 @@ export class SubtitleCueStore {
         // 1. Check cache
         const cached = this.tracksCache.get(videoPath);
         if (cached) {
-            if (__DEV__) console.log(`${LOG_PREFIX} Tracks cache HIT for:`, videoPath);
+            if (__DEV__) {console.log(`${LOG_PREFIX} Tracks cache HIT for:`, videoPath);}
             this.recordTracksAccess(videoPath);
             return cached;
         }
@@ -68,13 +68,13 @@ export class SubtitleCueStore {
         // 2. Check pending
         const pending = this.pendingTracksPromises.get(videoPath);
         if (pending) {
-            if (__DEV__) console.log(`${LOG_PREFIX} Waiting for parallel tracks extraction:`, videoPath);
+            if (__DEV__) {console.log(`${LOG_PREFIX} Waiting for parallel tracks extraction:`, videoPath);}
             return pending;
         }
 
         // 3. Extract with locking
         const tracksPromise = (async () => {
-            if (__DEV__) console.log(`${LOG_PREFIX} Tracks cache MISS for:`, videoPath);
+            if (__DEV__) {console.log(`${LOG_PREFIX} Tracks cache MISS for:`, videoPath);}
             try {
                 const tracks = await SubtitleExtractor.getSubtitleTracks(videoPath);
                 if (tracks && tracks.length > 0) {
@@ -101,7 +101,7 @@ export class SubtitleCueStore {
         const key = this.getCacheKey(videoPath, trackIndex);
         const cached = this.cache.get(key);
         if (cached) {
-            if (__DEV__) console.log(`${LOG_PREFIX} Cache HIT for:`, key);
+            if (__DEV__) {console.log(`${LOG_PREFIX} Cache HIT for:`, key);}
             this.recordAccess(key);
             return cached;
         }
@@ -116,24 +116,24 @@ export class SubtitleCueStore {
 
         // 1. Check in-memory cache
         const cached = this.getCachedCues(videoPath, trackIndex);
-        if (cached) return cached;
+        if (cached) {return cached;}
 
         // 2. Check for pending extraction of the same track
         const pending = this.pendingPromises.get(key);
         if (pending) {
-            if (__DEV__) console.log(`${LOG_PREFIX} Waiting for parallel extraction:`, key);
+            if (__DEV__) {console.log(`${LOG_PREFIX} Waiting for parallel extraction:`, key);}
             return pending;
         }
 
         // 3. Perform extraction with locking
         const extractionPromise = (async () => {
-            if (__DEV__) console.log(`${LOG_PREFIX} Cache MISS for ${key}, extracting...`);
+            if (__DEV__) {console.log(`${LOG_PREFIX} Cache MISS for ${key}, extracting...`);}
             try {
                 const path = await SubtitleExtractor.extractSubtitle(videoPath, trackIndex, 'srt');
-                if (!path) return [];
+                if (!path) {return [];}
 
                 const content = await SubtitleExtractor.readSubtitleFile(path);
-                if (!content) return [];
+                if (!content) {return [];}
 
                 const cues = SubtitleParser.parse(content, 'srt');
 
@@ -141,7 +141,7 @@ export class SubtitleCueStore {
                 // We have the cues in memory now, so the file is no longer needed.
                 try {
                     await RNFS.unlink(path);
-                    if (__DEV__) console.log(`${LOG_PREFIX} Deleted temp file after parsing:`, path);
+                    if (__DEV__) {console.log(`${LOG_PREFIX} Deleted temp file after parsing:`, path);}
                 } catch (e) {
                     // Non-fatal error
                     console.warn(`${LOG_PREFIX} Failed to delete temp file:`, path, e);
@@ -150,7 +150,7 @@ export class SubtitleCueStore {
                 if (cues && cues.length > 0) {
                     this.cache.set(key, cues);
                     this.recordAccess(key);
-                    if (__DEV__) console.log(`${LOG_PREFIX} Cached ${cues.length} cues for:`, key);
+                    if (__DEV__) {console.log(`${LOG_PREFIX} Cached ${cues.length} cues for:`, key);}
                     return cues;
                 }
                 return [];
@@ -180,7 +180,7 @@ export class SubtitleCueStore {
         // 1. Filter out bitmap tracks
         const textTracks = tracks.filter(t => !t.isBitmap && SubtitleExtractor.isTextSubtitle(t.codec));
         if (textTracks.length === 0) {
-            if (__DEV__) console.log(`${LOG_PREFIX} No text-based tracks found.`);
+            if (__DEV__) {console.log(`${LOG_PREFIX} No text-based tracks found.`);}
             return null;
         }
 
@@ -192,7 +192,7 @@ export class SubtitleCueStore {
         const best = scored[0]?.track;
 
         if (!best) {
-            if (__DEV__) console.warn(`${LOG_PREFIX} No optimal track found among ${textTracks.length} text tracks.`);
+            if (__DEV__) {console.warn(`${LOG_PREFIX} No optimal track found among ${textTracks.length} text tracks.`);}
             return null;
         }
 
@@ -201,7 +201,7 @@ export class SubtitleCueStore {
 
         // 4. Verification fallback: If the "best" track was empty/failed, try the next best one
         if (cues.length === 0 && scored.length > 1) {
-            if (__DEV__) console.log(`${LOG_PREFIX} Best track ${best.index} was empty, trying runner-up...`);
+            if (__DEV__) {console.log(`${LOG_PREFIX} Best track ${best.index} was empty, trying runner-up...`);}
             const runnerUp = scored[1].track;
             const runnerUpCues = await this.getCues(videoPath, runnerUp.index);
             if (runnerUpCues.length > 0) {
@@ -227,12 +227,12 @@ export class SubtitleCueStore {
             this.lru = this.lru.filter(k => k !== key);
         });
 
-        // NOTE: We keep the track list cache (tracksCache) so that returning to the Details 
+        // NOTE: We keep the track list cache (tracksCache) so that returning to the Details
         // screen or choosing a different track doesn't trigger a redundant FFprobe.
         // It will be cleared eventually via tracksLru or app cleanup.
 
         if (__DEV__ && (keysToEvict.length > 0)) {
-            console.log(`${LOG_PREFIX} Evicted ${keysToEvict.length} cue entries for:`, videoPath);
+            if (__DEV__) {console.log(`${LOG_PREFIX} Evicted ${keysToEvict.length} cue entries for:`, videoPath);}
         }
     }
 
@@ -240,7 +240,7 @@ export class SubtitleCueStore {
      * Complete cleanup: clear cache and delete all temporary files.
      */
     static async cleanup() {
-        if (__DEV__) console.log(`${LOG_PREFIX} Final cleanup initiated...`);
+        if (__DEV__) {console.log(`${LOG_PREFIX} Final cleanup initiated...`);}
         this.cache.clear();
         this.tracksCache.clear();
         this.pendingPromises.clear();
@@ -254,3 +254,5 @@ export class SubtitleCueStore {
         }
     }
 }
+
+

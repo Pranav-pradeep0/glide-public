@@ -21,8 +21,8 @@ export default class ControlBtn extends Component {
     titleGolive: 'Go live',
     showLeftButton: true,
     showMiddleButton: true,
-    showRightButton: true
-  }
+    showRightButton: true,
+  };
 
   _getTime = (data = 0) => {
     let hourCourse = Math.floor(data / 3600);
@@ -72,7 +72,7 @@ export default class ControlBtn extends Component {
       showLeftButton,
       showMiddleButton,
       showRightButton,
-      style
+      style,
     } = this.props;
     return (
       <View style={[styles.controls, style]}>

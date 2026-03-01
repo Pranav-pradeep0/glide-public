@@ -8,15 +8,15 @@ import Animated, {
 import { RecapIcon } from './PlayerIcons';
 
 const formatVerboseTime = (seconds: number): string => {
-    if (!isFinite(seconds) || seconds < 0) return '';
+    if (!isFinite(seconds) || seconds < 0) {return '';}
 
     const hrs = Math.floor(seconds / 3600);
     const mins = Math.floor((seconds % 3600) / 60);
     const secs = Math.floor(seconds % 60);
 
     const parts = [];
-    if (hrs > 0) parts.push(`${hrs}h`);
-    if (mins > 0) parts.push(`${mins}m`);
+    if (hrs > 0) {parts.push(`${hrs}h`);}
+    if (mins > 0) {parts.push(`${mins}m`);}
     // Only show seconds if less than a minute, or if we want full precision
     // For "remaining time", usually H:M is enough if > 0, but user asked for "mn sc hr"
     // Let's do:
@@ -25,14 +25,14 @@ const formatVerboseTime = (seconds: number): string => {
     // < 1m: 30s
 
     if (hrs > 0) {
-        // If hours exist, we can probably skip seconds for cleaner look, 
-        // OR keep them if user explicitly said "mn sc hr". 
+        // If hours exist, we can probably skip seconds for cleaner look,
+        // OR keep them if user explicitly said "mn sc hr".
         // "sholdnt we show mn sc hr or something wit the tim e?" -> implies all parts.
         // Let's show all parts if they exist.
-        if (secs > 0) parts.push(`${secs}s`);
+        if (secs > 0) {parts.push(`${secs}s`);}
     } else {
         if (mins > 0) {
-            if (secs > 0) parts.push(`${secs}s`);
+            if (secs > 0) {parts.push(`${secs}s`);}
         } else {
             parts.push(`${secs}s`);
         }
@@ -72,7 +72,7 @@ export const ResumeModal: React.FC<ResumeModalProps> = ({
 }) => {
     const { width } = useWindowDimensions();
 
-    if (!visible) return null;
+    if (!visible) {return null;}
 
     const formattedRemaining = remainingTime !== undefined ? formatVerboseTime(remainingTime) : null;
 
@@ -91,7 +91,7 @@ export const ResumeModal: React.FC<ResumeModalProps> = ({
                     exiting={FadeOut.duration(200)}
                     style={[
                         styles.container,
-                        { maxWidth: 420 }
+                        { maxWidth: 420 },
                     ]}
                 >
                     {/* Header with close button */}
@@ -102,7 +102,7 @@ export const ResumeModal: React.FC<ResumeModalProps> = ({
                         <Pressable
                             style={({ pressed }) => [
                                 styles.closeBtn,
-                                pressed && styles.buttonPressed
+                                pressed && styles.buttonPressed,
                             ]}
                             onPress={onClose}
                             hitSlop={10}
@@ -148,7 +148,7 @@ export const ResumeModal: React.FC<ResumeModalProps> = ({
                             style={({ pressed }) => [
                                 styles.actionButton,
                                 styles.secondaryButton,
-                                pressed && styles.buttonPressed
+                                pressed && styles.buttonPressed,
                             ]}
                             onPress={onRestart}
                         >
@@ -162,7 +162,7 @@ export const ResumeModal: React.FC<ResumeModalProps> = ({
                                     styles.actionButton,
                                     styles.secondaryButton,
                                     pressed && styles.buttonPressed,
-                                    isGeneratingRecap && { opacity: 0.5 }
+                                    isGeneratingRecap && { opacity: 0.5 },
                                 ]}
                                 onPress={onRecap}
                                 disabled={isGeneratingRecap}
@@ -180,7 +180,7 @@ export const ResumeModal: React.FC<ResumeModalProps> = ({
                             style={({ pressed }) => [
                                 styles.actionButton,
                                 styles.primaryButton,
-                                pressed && styles.buttonPressed
+                                pressed && styles.buttonPressed,
                             ]}
                             onPress={onResume}
                         >

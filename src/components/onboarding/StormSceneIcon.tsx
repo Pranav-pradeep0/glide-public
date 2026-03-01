@@ -40,7 +40,7 @@ function hr(n: number): number {
 // tension 0.3–0.4 gives organic natural curves without overshooting
 function smoothPath(pts: [number, number][], tension = 0.33): string {
     const n = pts.length;
-    if (n < 2) return '';
+    if (n < 2) {return '';}
     let d = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
     for (let i = 0; i < n - 1; i++) {
         const p0 = pts[Math.max(0, i - 1)];
@@ -371,7 +371,7 @@ function StormSceneAnimatedIcon({
         after(strike, 4700);
 
         const loop = () => {
-            if (!alive.current) return;
+            if (!alive.current) {return;}
             strike();
             if (Math.random() < 0.40) { after(strike, 100 + Math.random() * 220); }
             after(loop, 5200 + Math.random() * 1600);

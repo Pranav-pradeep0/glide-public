@@ -29,7 +29,7 @@ export default class CommonVideo extends Component {
     this.initialHeight = 200;
 
     if (props.widthCamera) {
-      deviceWidth = props.widthCamera
+      deviceWidth = props.widthCamera;
     }
   }
 
@@ -101,7 +101,7 @@ export default class CommonVideo extends Component {
     let { url } = nextProps;
     let { currentUrl, storeUrl } = preState;
     if (url && url !== storeUrl) {
-      if (storeUrl === "") {
+      if (storeUrl === '') {
         return {
           currentUrl: url,
           storeUrl: url,
@@ -109,7 +109,7 @@ export default class CommonVideo extends Component {
         };
       } else {
         return {
-          currentUrl: "",
+          currentUrl: '',
           storeUrl: url,
           isEndGG: false,
         };
@@ -123,21 +123,21 @@ export default class CommonVideo extends Component {
     if (this.props.url !== prevState.storeUrl && this._componentMounted) {
       this.setState({
         storeUrl: this.props.url,
-        currentUrl: this.props.url
-      })
+        currentUrl: this.props.url,
+      });
     }
   }
 
   componentDidMount() {
-    this._componentMounted = true
-    StatusBar.setBarStyle("light-content");
+    this._componentMounted = true;
+    StatusBar.setBarStyle('light-content');
     let { style, isGG } = this.props;
 
     if (style && style.height && !isNaN(style.height)) {
       this.initialHeight = style.height;
     }
     this.setState({
-      currentVideoAspectRatio: deviceWidth + ":" + this.initialHeight,
+      currentVideoAspectRatio: deviceWidth + ':' + this.initialHeight,
     });
 
     let { isFull } = this.props;
@@ -159,7 +159,7 @@ export default class CommonVideo extends Component {
   _closeFullScreen = () => {
     let { closeFullScreen, BackHandle, Orientation } = this.props;
     if (this._componentMounted) {
-      this.setState({ isFull: false, currentVideoAspectRatio: deviceWidth + ":" + this.initialHeight, });
+      this.setState({ isFull: false, currentVideoAspectRatio: deviceWidth + ':' + this.initialHeight });
     }
     BackHandle && BackHandle.removeBackFunction(_fullKey);
     Orientation && Orientation.lockToPortrait;
@@ -171,7 +171,7 @@ export default class CommonVideo extends Component {
   _toFullScreen = () => {
     let { startFullScreen, BackHandle, Orientation } = this.props;
     //StatusBar.setTranslucent(true);
-    this.setState({ isFull: true, currentVideoAspectRatio: deviceHeight + ":" + deviceWidth, });
+    this.setState({ isFull: true, currentVideoAspectRatio: deviceHeight + ':' + deviceWidth });
     StatusBar.setHidden(true);
     BackHandle && BackHandle.addBackFunction(_fullKey, this._closeFullScreen);
     startFullScreen && startFullScreen();
@@ -188,7 +188,7 @@ export default class CommonVideo extends Component {
         this.initialHeight = height;
       }
     }
-  }
+  };
 
   render() {
     let { url, ggUrl, showGG, onGGEnd, onEnd, onError, style, height, title, onLeftPress, showBack, showTitle, closeFullScreen, videoAspectRatio, fullVideoAspectRatio } = this.props;
@@ -312,20 +312,20 @@ export default class CommonVideo extends Component {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000'
+    backgroundColor: '#000',
   },
   topView: {
     top: Platform.OS === 'ios' ? statusBarHeight : 0,
     left: 0,
     height: 45,
     position: 'absolute',
-    width: '100%'
+    width: '100%',
   },
   backBtn: {
     height: 45,
     width: '100%',
     flexDirection: 'row',
-    alignItems: 'center'
+    alignItems: 'center',
   },
   btn: {
     marginLeft: 10,
@@ -336,5 +336,5 @@ const styles = StyleSheet.create({
     height: 40,
     borderRadius: 20,
     width: 40,
-  }
+  },
 });

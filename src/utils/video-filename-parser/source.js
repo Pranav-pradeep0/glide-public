@@ -1,3 +1,4 @@
+/* eslint-disable no-shadow */
 const blurayExp = /\b(?<bluray>M?Blu-?Ray|HDDVD|BD|UHDBD|BDISO|BDMux|BD25|BD50|BR.?DISK|Bluray(1080|720)p?|BD(1080|720)p?|REMUX|ISO)\b/i;
 export const webdlExp = /\b(?<webdl>WEB[-_. ]DL|HDRIP|WEBDL|WEB-DLMux|NF|APTV|NETFLIX|NetflixU?HD|DSNY|DSNP|HMAX|AMZN|AmazonHD|iTunesHD|MaxdomeHD|WebHD\b|[. ]WEB[. ](?:[xh]26[45]|DD5[. ]1)|\d+0p[. ]WEB[. ]|\b\s\/\sWEB\s\/\s\b|AMZN[. ]WEB[. ])\b/i;
 const webripExp = /\b(?<webrip>WebRip|Web-Rip|WEBCap|WEBMux)\b/i;
@@ -19,17 +20,17 @@ const sdtvExp = /\b(?<sdtv>SDTV)\b/i;
 const tvripExp = /\b(?<tvrip>TVRip)\b/i;
 export var Source;
 (function (Source) {
-    Source["BLURAY"] = "BLURAY";
-    Source["WEBDL"] = "WEBDL";
-    Source["WEBRIP"] = "WEBRIP";
-    Source["DVD"] = "DVD";
-    Source["CAM"] = "CAM";
-    Source["SCREENER"] = "SCREENER";
-    Source["PPV"] = "PPV";
-    Source["TELESYNC"] = "TELESYNC";
-    Source["TELECINE"] = "TELECINE";
-    Source["WORKPRINT"] = "WORKPRINT";
-    Source["TV"] = "TV";
+    Source.BLURAY = 'BLURAY';
+    Source.WEBDL = 'WEBDL';
+    Source.WEBRIP = 'WEBRIP';
+    Source.DVD = 'DVD';
+    Source.CAM = 'CAM';
+    Source.SCREENER = 'SCREENER';
+    Source.PPV = 'PPV';
+    Source.TELESYNC = 'TELESYNC';
+    Source.TELECINE = 'TELECINE';
+    Source.WORKPRINT = 'WORKPRINT';
+    Source.TV = 'TV';
 })(Source || (Source = {}));
 export function parseSourceGroups(title) {
     const normalizedName = title.replace(/_/g, ' ').replace(/\[/g, ' ').replace(/\]/g, ' ').trim();

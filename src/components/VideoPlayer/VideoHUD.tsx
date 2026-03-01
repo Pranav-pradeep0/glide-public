@@ -6,7 +6,7 @@ import Animated, {
     useDerivedValue,
     SharedValue,
     useAnimatedStyle,
-    withTiming
+    withTiming,
 } from 'react-native-reanimated';
 import { DoubleTapRipple } from './DoubleTapRipple';
 import { getResizeModeIcon, AnimatedVolumeIconStandard, AnimatedBrightnessIcon } from './PlayerIcons';
@@ -74,8 +74,8 @@ const VerticalHUD: React.FC<VerticalHUDProps> = React.memo(({ value, icon, side,
                 // Dynamic vertical centering adjustment
                 // Portrait height: Text(20) + Gap(8) + Track(80) + Gap(8) + Icon(24) = 140 -> -70
                 // Landscape height: Text(20) + Gap(8) + Track(120) + Gap(8) + Icon(32) = 188 -> -94
-                marginTop: isPortrait ? -70 : -94
-            }
+                marginTop: isPortrait ? -70 : -94,
+            },
         ]} pointerEvents="none">
             <ReanimatedText
                 value={value}
@@ -204,7 +204,7 @@ export const VideoHUD: React.FC<VideoHUDProps> = React.memo(({
 
     // Calculate time difference for display
     const timeDiff = useMemo(() => {
-        if (!showSeekHUD || seekStartTime === 0) return null;
+        if (!showSeekHUD || seekStartTime === 0) {return null;}
         // We'll use the animated value's current snapshot for initial display
         // Actual updates are driven by the shared value
         return null; // Will be calculated in the animated text
@@ -214,7 +214,7 @@ export const VideoHUD: React.FC<VideoHUDProps> = React.memo(({
     const timeDiffFormatter = useMemo(() => {
         return (val: number) => {
             'worklet';
-            if (seekStartTime === 0) return '';
+            if (seekStartTime === 0) {return '';}
             const diff = val - seekStartTime;
             return formatTimeDiff(diff);
         };
@@ -294,7 +294,7 @@ export const VideoHUD: React.FC<VideoHUDProps> = React.memo(({
                         // Landscape needs to be higher (45%) due to tall bottom controls
                         // Portrait remains perfectly centered (50%)
                         { top: isPortrait ? '50%' : '45%' },
-                        seekHUDPositionStyle
+                        seekHUDPositionStyle,
                     ]}
                     pointerEvents="none"
                 >

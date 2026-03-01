@@ -193,8 +193,8 @@ export default function FoldersScreen() {
 
     const sortedAlbums = useMemo(() => {
         return [...albums].sort((a, b) => {
-            if (sortBy === 'name') return a.title.localeCompare(b.title);
-            if (sortBy === 'count') return b.count - a.count;
+            if (sortBy === 'name') {return a.title.localeCompare(b.title);}
+            if (sortBy === 'count') {return b.count - a.count;}
             // For 'recent', we don't have timestamp data, so fallback to name
             return a.title.localeCompare(b.title);
         });

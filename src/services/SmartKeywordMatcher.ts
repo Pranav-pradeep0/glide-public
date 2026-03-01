@@ -22,7 +22,7 @@ export class SmartKeywordMatcher {
      * @returns The best matching haptic category and keyword, or null if no match
      */
     static match(text: string): HapticMatch | null {
-        if (!text) return null;
+        if (!text) {return null;}
 
         const normalizedText = text.toLowerCase().trim();
         // Split by anything that isn't a letter or number (punctuation, spaces, etc.)
@@ -45,7 +45,7 @@ export class SmartKeywordMatcher {
                     keyword: entry.keyword,
                     category: entry.category,
                     priority: entry.priority,
-                    confidence: 1.0
+                    confidence: 1.0,
                 };
 
                 // Keep the highest priority match
@@ -63,7 +63,7 @@ export class SmartKeywordMatcher {
                             keyword: entry.keyword, // Use the canonical keyword
                             category: entry.category,
                             priority: entry.priority,
-                            confidence: 0.9
+                            confidence: 0.9,
                         };
 
                         if (!bestMatch || match.priority > bestMatch.priority) {
@@ -86,21 +86,21 @@ export class SmartKeywordMatcher {
         const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const regex = new RegExp(`\\b${escaped}\\b`, 'i');
 
-        if (regex.test(fullText)) return true;
+        if (regex.test(fullText)) {return true;}
 
         // 2. Check each word for variations (stems)
         for (const word of words) {
             // Exact match (covered by regex, but kept for safety/perf)
-            if (word === keyword) return true;
+            if (word === keyword) {return true;}
 
             // Plural handling (footsteps -> footstep)
-            if (word === keyword + 's') return true;
-            if (word === keyword + 'es') return true;
+            if (word === keyword + 's') {return true;}
+            if (word === keyword + 'es') {return true;}
 
             // Verb forms (growling -> growl, growled -> growl)
-            if (word.endsWith('ing') && word.slice(0, -3) === keyword) return true;
-            if (word.endsWith('ing') && word.slice(0, -3) === keyword.slice(0, -1)) return true; // runn-ing -> run
-            if (word.endsWith('ed') && word.slice(0, -2) === keyword) return true;
+            if (word.endsWith('ing') && word.slice(0, -3) === keyword) {return true;}
+            if (word.endsWith('ing') && word.slice(0, -3) === keyword.slice(0, -1)) {return true;} // runn-ing -> run
+            if (word.endsWith('ed') && word.slice(0, -2) === keyword) {return true;}
         }
 
         return false;

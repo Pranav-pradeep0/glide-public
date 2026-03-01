@@ -1,6 +1,6 @@
 /**
  * useTapGestures Hook
- * 
+ *
  * Implements tap gestures for video player:
  * - Single tap: Toggle controls visibility
  * - Double tap left: Seek backward 10 seconds
@@ -37,12 +37,12 @@ interface UseTapGesturesOptions {
 
 /**
  * Creates tap gestures for the video player.
- * 
+ *
  * Returns composed gesture that handles:
  * - Single tap: Toggle controls
  * - Double tap left half: Seek -10s
  * - Double tap right half: Seek +10s
- * 
+ *
  * Double taps take priority over single taps.
  */
 export function useTapGestures(options: UseTapGesturesOptions) {

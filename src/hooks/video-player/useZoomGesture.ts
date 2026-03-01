@@ -1,6 +1,6 @@
 /**
  * useZoomGesture Hook
- * 
+ *
  * Implements pinch-to-zoom and pan gestures for video zoom.
  * Pinch zooms the video, pan moves it when zoomed.
  */
@@ -42,7 +42,7 @@ interface UseZoomGestureOptions {
 
 /**
  * Creates pinch and pan gestures for video zoom control.
- * 
+ *
  * Pinch: Zoom in/out (1x to 3x)
  * Pan (when zoomed): Move the video around
  */
@@ -87,7 +87,7 @@ export function useZoomGesture(options: UseZoomGestureOptions) {
             .onUpdate((event) => {
                 'worklet';
 
-                if (isLockedShared.value || !pinchActive.value) return;
+                if (isLockedShared.value || !pinchActive.value) {return;}
 
                 const newScale = Math.max(
                     PLAYER_CONSTANTS.ZOOM_MIN,
@@ -109,7 +109,7 @@ export function useZoomGesture(options: UseZoomGestureOptions) {
             .onEnd(() => {
                 'worklet';
 
-                if (!pinchActive.value) return;
+                if (!pinchActive.value) {return;}
                 pinchActive.value = false;
                 zoomActive.value = false;
 
@@ -121,7 +121,7 @@ export function useZoomGesture(options: UseZoomGestureOptions) {
             .onFinalize(() => {
                 'worklet';
 
-                if (!pinchActive.value) return;
+                if (!pinchActive.value) {return;}
                 pinchActive.value = false;
                 zoomActive.value = false;
 
@@ -151,7 +151,7 @@ export function useZoomGesture(options: UseZoomGestureOptions) {
             .onStart(() => {
                 'worklet';
 
-                if (isLockedShared.value) return;
+                if (isLockedShared.value) {return;}
 
                 panStartX.value = panX.value;
                 panStartY.value = panY.value;
@@ -160,8 +160,8 @@ export function useZoomGesture(options: UseZoomGestureOptions) {
                 'worklet';
 
                 // Only pan when zoomed and not locked
-                if (isLockedShared.value) return;
-                if (!zoomActive.value && pinchScale.value <= 1) return;
+                if (isLockedShared.value) {return;}
+                if (!zoomActive.value && pinchScale.value <= 1) {return;}
 
                 // Calculate max pan based on zoom level
                 const maxPan = ((pinchScale.value - 1) * Math.min(screenWidth, screenHeight)) / 2;
@@ -184,7 +184,7 @@ export function useZoomGesture(options: UseZoomGestureOptions) {
         panStartX,
         panStartY,
         zoomActive,
-        isLockedShared // Added explicit dependency
+        isLockedShared, // Added explicit dependency
     ]);
 
     return { pinchGesture, panGesture };

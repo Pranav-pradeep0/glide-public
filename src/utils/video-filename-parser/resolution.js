@@ -1,12 +1,13 @@
+/* eslint-disable no-shadow */
 import { parseSource, Source } from './source.js';
 export var Resolution;
 (function (Resolution) {
-    Resolution["R2160P"] = "2160P";
-    Resolution["R1080P"] = "1080P";
-    Resolution["R720P"] = "720P";
-    Resolution["R576P"] = "576P";
-    Resolution["R540P"] = "540P";
-    Resolution["R480P"] = "480P";
+    Resolution.R2160P = '2160P';
+    Resolution.R1080P = '1080P';
+    Resolution.R720P = '720P';
+    Resolution.R576P = '576P';
+    Resolution.R540P = '540P';
+    Resolution.R480P = '480P';
 })(Resolution || (Resolution = {}));
 const R2160pExp = /(?<R2160P>2160p|4k[-_. ](?:UHD|HEVC|BD)|(?:UHD|HEVC|BD)[-_. ]4k|\b(4k)\b|COMPLETE.UHD|UHD.COMPLETE)/i;
 const R1080pExp = /(?<R1080P>1080(i|p)|1920x1080)(10bit)?/i;

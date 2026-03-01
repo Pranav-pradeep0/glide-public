@@ -31,7 +31,7 @@ export class HapticEngineService {
             try {
                 this.hasAmplitudeControl = HapticModule.hasAmplitudeControl();
                 if (__DEV__) {
-                    console.log('[HapticEngine] Amplitude control:', this.hasAmplitudeControl);
+                    if (__DEV__) {console.log('[HapticEngine] Amplitude control:', this.hasAmplitudeControl);}
                 }
             } catch (error) {
                 if (__DEV__) {
@@ -86,7 +86,7 @@ export class HapticEngineService {
      * Triggers a haptic pattern if it meets priority and timing constraints
      */
     public triggerHaptic(pattern: HapticPattern) {
-        if (!this.isEnabled) return;
+        if (!this.isEnabled) {return;}
 
         const now = Date.now();
 
@@ -120,7 +120,7 @@ export class HapticEngineService {
 
     private playPattern(pattern: HapticPattern) {
         if (__DEV__) {
-            console.log(`[HapticEngine] Playing: ${pattern.soundEffect} (${pattern.category}), intensity: ${pattern.intensity}, duration: ${pattern.duration}ms`);
+            if (__DEV__) {console.log(`[HapticEngine] Playing: ${pattern.soundEffect} (${pattern.category}), intensity: ${pattern.intensity}, duration: ${pattern.duration}ms`);}
         }
 
         if (Platform.OS === 'android' && this.hasAmplitudeControl && HapticModule) {
@@ -128,7 +128,7 @@ export class HapticEngineService {
                 // Use waveform for patterned categories
                 if (pattern.waveform && pattern.category !== 'impact') {
                     if (__DEV__) {
-                        console.log(`[HapticEngine] Using waveform with ${pattern.waveform.timings.length} steps`);
+                        if (__DEV__) {console.log(`[HapticEngine] Using waveform with ${pattern.waveform.timings.length} steps`);}
                     }
                     HapticModule.vibrateWaveform(
                         pattern.waveform.timings,
@@ -155,3 +155,5 @@ export class HapticEngineService {
         Vibration.vibrate(clampedDuration);
     }
 }
+
+

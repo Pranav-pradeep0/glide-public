@@ -16,7 +16,7 @@ export function useHapticFeedback({
     currentTime,
     subtitleCues,
     isPlaying,
-    subtitleDelay = 0
+    subtitleDelay = 0,
 }: UseHapticFeedbackProps) {
     const lastProcessedCueIndex = useRef<number>(-1);
     const engine = HapticEngineService.getInstance();
@@ -53,7 +53,7 @@ export function useHapticFeedback({
 
             if (pattern) {
                 if (__DEV__) {
-                    console.log(`[Haptic] Triggering: ${pattern.soundEffect} (${pattern.category})`);
+                    if (__DEV__) {console.log(`[Haptic] Triggering: ${pattern.soundEffect} (${pattern.category})`);}
                 }
                 engine.triggerHaptic(pattern);
                 lastProcessedCueIndex.current = activeCue.index;
@@ -73,3 +73,5 @@ export function useHapticFeedback({
 
     return {};
 }
+
+

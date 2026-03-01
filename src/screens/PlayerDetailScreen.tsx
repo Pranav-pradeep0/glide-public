@@ -14,7 +14,6 @@ import {
     Image,
     ScrollView,
     Dimensions,
-    StatusBar,
     Animated, // Added
     Easing,   // Added
     useWindowDimensions, // Added
@@ -29,7 +28,7 @@ import { useAppStore } from '@/store/appStore';
 import { SubtitleCueStore } from '@/services/SubtitleCueStore';
 import { ContentDetector } from '../services/ContentDetector';
 import { OMDBResult } from '../services/OMDBService';
-import { SubtitleExtractor, SubtitleTrack } from '../utils/SubtitleExtractor';
+import { SubtitleTrack } from '../utils/SubtitleExtractor';
 import { SubtitleParser } from '../utils/SubtitleParser';
 import { SubtitleSelectionService } from '../services/SubtitleSelectionService';
 import { SubtitlePickerService } from '../services/SubtitlePickerService';
@@ -75,88 +74,45 @@ export default function PlayerDetailScreen() {
 
     // Helper to get high-resolution poster
     const getHighResPoster = useCallback((url: string) => {
-        if (!url || url === 'N/A') return url;
+        if (!url || url === 'N/A') { return url; }
         // Replaces _SX300.jpg, _SY1000.jpg, _CR0,0,0,0.jpg etc with .jpg
         return url.replace(/_S[XY]\d+(?:_CR\d+,\d+,\d+,\d+)?.*?\.jpg$/i, '.jpg');
     }, []);
 
     // Subtitle data
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const [embeddedTracks, setEmbeddedTracks] = useState<SubtitleTrack[]>([]);
     const [apiSubtitles, setApiSubtitles] = useState<SubtitleResult[]>([]);
     const [hapticCues, setHapticCues] = useState<SubtitleCue[] | null>(null);
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const [sdhSource, setSdhSource] = useState<string>('');
 
     // Manual picker modal
     const [showManualPicker, setShowManualPicker] = useState(false);
     const [localSubtitles, setLocalSubtitles] = useState<string[]>([]);
 
-    // Run detection on mount
-    useEffect(() => {
-        initPage();
-    }, [videoName]);
-
-    async function initPage() {
-        setDetailsLoading(true);
-        let imdbId: string | undefined;
-
-        // 1. Try to get movie details first
-        try {
-            console.log(`${LOG_PREFIX} Loading movie details/ID for: ${videoName}`);
-            const classification = await ContentDetector.classify(videoName, true);
-
-            if (classification.omdbData) {
-                console.log(`${LOG_PREFIX} Movie details loaded:`, classification.parsedTitle);
-                setMovieDetails(classification.omdbData);
-                imdbId = classification.omdbData.imdbID;
-            } else {
-                console.log(`${LOG_PREFIX} No movie details found`);
-            }
-        } catch (error) {
-            console.warn(`${LOG_PREFIX} Failed to load details:`, error);
-        } finally {
-            setDetailsLoading(false);
-        }
-
-        // 2. Start SDH detection (if enabled)
-        if (settings.hapticSettings.enabled) {
-            runSDHDetection(imdbId);
-        } else {
-            setProcessingStep('');
-        }
-    }
-
-    async function runSDHDetection(imdbId?: string) {
+    // Memoized detection logic
+    const runSDHDetection = useCallback(async (imdbId?: string) => {
         setLoading(true);
         setProcessingStep('Scanning for SDH subtitles...');
 
         try {
             // Step 1: Get embedded subtitle tracks
-            console.log(`${LOG_PREFIX} Getting embedded tracks...`);
+            if (__DEV__) { console.log(`${LOG_PREFIX} Getting embedded tracks...`); }
             const tracks = await SubtitleCueStore.getTracks(videoPath);
             setEmbeddedTracks(tracks);
-            console.log(`${LOG_PREFIX} Found ${tracks.length} embedded tracks`);
 
             // Step 2: Check for local subtitle files
             const locals = await SubtitlePickerService.findMatchingSubtitles(videoPath);
             setLocalSubtitles(locals);
-            console.log(`${LOG_PREFIX} Found ${locals.length} local subtitle files`);
 
             // Step 3: Try to find SDH content in embedded tracks
             if (tracks.length > 0) {
-                setProcessingStep('Checking embedded subtitles for SDH content...');
-
-                const extractAndParse = async (index: number): Promise<SubtitleCue[] | null> => {
-                    return SubtitleCueStore.getCues(videoPath, index);
-                };
-
-                const sdhResult = await SubtitleSelectionService.findBestSDHByContent(
-                    tracks,
-                    extractAndParse,
-                    'en'
-                );
+                setProcessingStep('Checking embedded subtitles...');
+                const extractAndParse = async (index: number) => SubtitleCueStore.getCues(videoPath, index);
+                const sdhResult = await SubtitleSelectionService.findBestSDHByContent(tracks, extractAndParse, 'en');
 
                 if (sdhResult) {
-                    console.log(`${LOG_PREFIX} ✓ Found SDH in embedded track ${sdhResult.track.index}`);
                     setHapticCues(sdhResult.cues);
                     setSdhSource(`Embedded: ${sdhResult.track.title || sdhResult.track.language || 'Track ' + sdhResult.track.index}`);
                     setLoading(false);
@@ -167,49 +123,32 @@ export default function PlayerDetailScreen() {
 
             // Step 4: Try local subtitle files
             if (locals.length > 0) {
-                setProcessingStep('Checking local subtitle files...');
-
-                for (const localPath of locals) {
-                    try {
-                        const picked = await SubtitlePickerService.loadFromPath(localPath);
-                        if (picked && picked.cues.length > 0) {
-                            const validation = SubtitleSelectionService.validateSDHContent(picked.cues);
-                            if (validation.isSDH) {
-                                console.log(`${LOG_PREFIX} ✓ Found SDH in local file: ${picked.name}`);
-                                setHapticCues(picked.cues);
-                                setSdhSource(`Local: ${picked.name}`);
-                                setLoading(false);
-                                setProcessingStep('');
-                                return;
-                            }
-                        }
-                    } catch (e) {
-                        console.error(`${LOG_PREFIX} Local file error:`, e);
+                setProcessingStep('Checking local files...');
+                for (const sPath of locals) {
+                    const picked = await SubtitlePickerService.loadFromPath(sPath);
+                    if (picked && SubtitleSelectionService.validateSDHContent(picked.cues).isSDH) {
+                        setHapticCues(picked.cues);
+                        setSdhSource(`Local: ${picked.name}`);
+                        setLoading(false);
+                        setProcessingStep('');
+                        return;
                     }
                 }
             }
 
             // Step 5: Search API for subtitles
-            setProcessingStep('Searching online for SDH subtitles...');
-            console.log(`${LOG_PREFIX} Searching API with:`, { videoName, imdbId });
+            setProcessingStep('Searching online...');
             const apiResult = await searchSDHSubtitles(videoName, 'en', imdbId);
-
             setApiSubtitles(apiResult.subtitles);
-            console.log(`${LOG_PREFIX} API returned ${apiResult.subtitles.length} subtitles`);
 
             if (apiResult.subtitles.length > 0) {
-                // Simplified Logic: Just pick the first one flagged as HI/SDH
                 const bestAPI = apiResult.subtitles.find(s => s.hearingImpaired || (s.sdhScore && s.sdhScore > 5));
-
                 if (bestAPI) {
-                    setProcessingStep('Downloading SDH subtitle...');
+                    setProcessingStep('Downloading...');
                     const content = await downloadSubtitle(bestAPI.downloadUrl);
-
                     if (content) {
                         const cues = SubtitleParser.parse(content, 'srt');
-                        // Basic validation to ensure we actually got cues
                         if (cues.length > 0) {
-                            console.log(`${LOG_PREFIX} ✓ Auto-selected SDH: ${bestAPI.release}`);
                             setHapticCues(cues);
                             setSdhSource(`Online: ${bestAPI.release}`);
                             setLoading(false);
@@ -220,17 +159,40 @@ export default function PlayerDetailScreen() {
                 }
             }
 
-            // No SDH found automatically
-            console.log(`${LOG_PREFIX} No SDH subtitle found automatically`);
             setLoading(false);
             setProcessingStep('');
-
         } catch (error) {
             console.error(`${LOG_PREFIX} Detection error:`, error);
             setLoading(false);
             setProcessingStep('');
         }
-    }
+    }, [videoPath, videoName]);
+
+    const initPage = useCallback(async () => {
+        setDetailsLoading(true);
+        let imdbId: string | undefined;
+
+        try {
+            const classification = await ContentDetector.classify(videoName, true);
+            if (classification.omdbData) {
+                setMovieDetails(classification.omdbData);
+                imdbId = classification.omdbData.imdbID;
+            }
+        } catch (error) {
+            console.warn(`${LOG_PREFIX} Failed to load details:`, error);
+        } finally {
+            setDetailsLoading(false);
+        }
+
+        if (settings.hapticSettings.enabled) {
+            runSDHDetection(imdbId);
+        }
+    }, [videoName, settings.hapticSettings.enabled, runSDHDetection]);
+
+    // Run detection on mount or when video changes
+    useEffect(() => {
+        initPage();
+    }, [initPage]);
 
     function navigateToPlayer(cues?: SubtitleCue[] | null) {
         navigation.navigate('VideoPlayer', {
@@ -385,7 +347,7 @@ export default function PlayerDetailScreen() {
             >
                 <View style={styles.subtitleRow}>
                     <Feather
-                        name={isSDH ? "headphones" : "file-text"}
+                        name={isSDH ? 'headphones' : 'file-text'}
                         size={18}
                         color={isSDH ? theme.colors.primary : theme.colors.textSecondary}
                     />
@@ -403,7 +365,7 @@ export default function PlayerDetailScreen() {
         );
     };
 
-    const hasHaptics = hapticCues && hapticCues.length > 0;
+    // const hasHaptics = hapticCues && hapticCues.length > 0; // Removed unused var
 
     return (
         <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
@@ -448,7 +410,7 @@ export default function PlayerDetailScreen() {
                 } : {
                     height: portraitHeroHeight,
                     width: '100%',
-                }
+                },
             ]}>
                 {movieDetails ? (
                     movieDetails.Poster && movieDetails.Poster !== 'N/A' ? (
@@ -511,7 +473,7 @@ export default function PlayerDetailScreen() {
                         marginLeft: isLandscape ? '40%' : 0, // Push content to right
                         minHeight: isLandscape ? height : height * 0.7,
                         paddingTop: isLandscape ? insets.top + 24 : 24, // Add padding for status bar in landscape
-                    }
+                    },
                 ]}>
 
                     {/* Content Container */}
@@ -589,7 +551,7 @@ export default function PlayerDetailScreen() {
                                             styles.primaryButton,
                                             {
                                                 backgroundColor: theme.colors.primary,
-                                                opacity: loading ? 0.8 : 1
+                                                opacity: loading ? 0.8 : 1,
                                             },
                                         ]}
                                         onPress={loading ? undefined : handlePlayWithHaptics}
@@ -806,7 +768,7 @@ const styles = StyleSheet.create({
         borderTopRightRadius: 32,
         paddingTop: 24,
         minHeight: Dimensions.get('window').height,
-        shadowColor: "#000",
+        shadowColor: '#000',
         shadowOffset: { width: 0, height: -2 }, // Shadow upwards
         shadowOpacity: 0.1,
         shadowRadius: 10,
@@ -895,7 +857,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         gap: 8,
-        shadowColor: "#000",
+        shadowColor: '#000',
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.15,
         shadowRadius: 8,
@@ -957,7 +919,7 @@ const styles = StyleSheet.create({
         paddingVertical: 10,
         borderRadius: 12,
         borderWidth: 1,
-        shadowColor: "#000",
+        shadowColor: '#000',
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.05,
         shadowRadius: 4,
@@ -1068,3 +1030,5 @@ const styles = StyleSheet.create({
         fontWeight: '600',
     },
 });
+
+

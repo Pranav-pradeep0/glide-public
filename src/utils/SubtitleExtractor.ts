@@ -39,11 +39,13 @@ export class SubtitleExtractor {
      */
     private static async resolveVideoPath(videoPath: string): Promise<string> {
         const startTime = Date.now();
-        console.log(`${LOG_PREFIX} [resolveVideoPath] START`, {
-            originalPath: videoPath,
-            isContentUri: videoPath.startsWith('content://'),
-            platform: Platform.OS,
-        });
+        if (__DEV__) {
+            console.log(`${LOG_PREFIX} [resolveVideoPath] START`, {
+                originalPath: videoPath,
+                isContentUri: videoPath.startsWith('content://'),
+                platform: Platform.OS,
+            });
+        }
 
         // Silence FFmpeg logs
         await FFmpegKitConfig.setLogLevel(Level.AV_LOG_ERROR);
@@ -55,10 +57,12 @@ export class SubtitleExtractor {
                 const exists = await RNFS.exists(cleanPath);
 
                 if (exists) {
-                    console.log(`${LOG_PREFIX} [resolveVideoPath] Using file path directly`, {
-                        path: cleanPath,
-                        durationMs: Date.now() - startTime,
-                    });
+                    if (__DEV__) {
+                        console.log(`${LOG_PREFIX} [resolveVideoPath] Using file path directly`, {
+                            path: cleanPath,
+                            durationMs: Date.now() - startTime,
+                        });
+                    }
                     return cleanPath;
                 }
 
@@ -76,11 +80,13 @@ export class SubtitleExtractor {
 
                         if (exists) {
                             const duration = Date.now() - startTime;
-                            console.log(`${LOG_PREFIX} [resolveVideoPath] ✓ Resolved to real path`, {
-                                originalUri: videoPath.substring(0, 60) + '...',
-                                realPath: cleanPath.substring(0, 60) + '...',
-                                durationMs: duration,
-                            });
+                            if (__DEV__) {
+                                console.log(`${LOG_PREFIX} [resolveVideoPath] ✓ Resolved to real path`, {
+                                    originalUri: videoPath.substring(0, 60) + '...',
+                                    realPath: cleanPath.substring(0, 60) + '...',
+                                    durationMs: duration,
+                                });
+                            }
                             return cleanPath;
                         }
                     }
@@ -92,11 +98,13 @@ export class SubtitleExtractor {
                 try {
                     const safPath = await FFmpegKitConfig.getSafParameterForRead(videoPath);
                     const duration = Date.now() - startTime;
-                    console.log(`${LOG_PREFIX} [resolveVideoPath] ✓ Using SAF protocol`, {
-                        originalUri: videoPath.substring(0, 60) + '...',
-                        safPath: safPath.substring(0, 60) + '...',
-                        durationMs: duration,
-                    });
+                    if (__DEV__) {
+                        console.log(`${LOG_PREFIX} [resolveVideoPath] ✓ Using SAF protocol`, {
+                            originalUri: videoPath.substring(0, 60) + '...',
+                            safPath: safPath.substring(0, 60) + '...',
+                            durationMs: duration,
+                        });
+                    }
                     return safPath;
                 } catch (safError) {
                     console.error(`${LOG_PREFIX} [resolveVideoPath] SAF conversion failed`, {
@@ -108,10 +116,12 @@ export class SubtitleExtractor {
 
             // For iOS or other URIs, return as-is
             const duration = Date.now() - startTime;
-            console.log(`${LOG_PREFIX} [resolveVideoPath] Using original path`, {
-                path: videoPath,
-                durationMs: duration,
-            });
+            if (__DEV__) {
+                console.log(`${LOG_PREFIX} [resolveVideoPath] Using original path`, {
+                    path: videoPath,
+                    durationMs: duration,
+                });
+            }
             return videoPath;
 
         } catch (error) {
@@ -131,10 +141,12 @@ export class SubtitleExtractor {
      */
     static async getSubtitleTracks(videoPath: string): Promise<SubtitleTrack[]> {
         const startTime = Date.now();
-        console.log(`${LOG_PREFIX} [getSubtitleTracks] START`, {
-            videoPath: videoPath.substring(0, 60) + '...',
-            timestamp: new Date().toISOString(),
-        });
+        if (__DEV__) {
+            console.log(`${LOG_PREFIX} [getSubtitleTracks] START`, {
+                videoPath: videoPath.substring(0, 60) + '...',
+                timestamp: new Date().toISOString(),
+            });
+        }
 
         try {
             // Silence FFmpeg logs
@@ -143,24 +155,28 @@ export class SubtitleExtractor {
             // For content:// URIs on Android, use native probe with file descriptor
             // This works even when the minimal FFmpeg build lacks SAF protocol support
             if (Platform.OS === 'android' && videoPath.startsWith('content://')) {
-                console.log(`${LOG_PREFIX} [getSubtitleTracks] Using native probe for content URI`);
+                if (__DEV__) { console.log(`${LOG_PREFIX} [getSubtitleTracks] Using native probe for content URI`); }
 
                 try {
                     const output = await SimpleThumbnail.probeSubtitleTracks(videoPath);
 
                     if (output) {
                         const data = JSON.parse(output);
-                        console.log(`${LOG_PREFIX} [getSubtitleTracks] Native probe result`, {
-                            hasStreams: !!data.streams,
-                            streamCount: data.streams?.length || 0,
-                        });
+                        if (__DEV__) {
+                            console.log(`${LOG_PREFIX} [getSubtitleTracks] Native probe result`, {
+                                hasStreams: !!data.streams,
+                                streamCount: data.streams?.length || 0,
+                            });
+                        }
 
                         const tracks = this.parseSubtitleStreams(data);
                         const duration = Date.now() - startTime;
-                        console.log(`${LOG_PREFIX} [getSubtitleTracks] ✓ SUCCESS (native)`, {
-                            subtitleTracks: tracks.length,
-                            durationMs: duration,
-                        });
+                        if (__DEV__) {
+                            console.log(`${LOG_PREFIX} [getSubtitleTracks] ✓ SUCCESS (native)`, {
+                                subtitleTracks: tracks.length,
+                                durationMs: duration,
+                            });
+                        }
                         return tracks;
                     }
                 } catch (nativeError) {
@@ -173,18 +189,20 @@ export class SubtitleExtractor {
 
             // Resolve path and use standard FFprobe
             const resolvedPath = await this.resolveVideoPath(videoPath);
-            console.log(`${LOG_PREFIX} [getSubtitleTracks] Path resolved for FFprobe`);
+            if (__DEV__) { console.log(`${LOG_PREFIX} [getSubtitleTracks] Path resolved for FFprobe`); }
 
             const command = `-v quiet -print_format json -show_streams -select_streams s "${resolvedPath}"`;
-            console.log(`${LOG_PREFIX} [getSubtitleTracks] Executing FFprobe`);
+            if (__DEV__) { console.log(`${LOG_PREFIX} [getSubtitleTracks] Executing FFprobe`); }
 
             const session = await FFprobeKit.execute(command);
             const returnCode = await session.getReturnCode();
 
-            console.log(`${LOG_PREFIX} [getSubtitleTracks] FFprobe return code`, {
-                code: returnCode?.getValue(),
-                isSuccess: ReturnCode.isSuccess(returnCode),
-            });
+            if (__DEV__) {
+                console.log(`${LOG_PREFIX} [getSubtitleTracks] FFprobe return code`, {
+                    code: returnCode?.getValue(),
+                    isSuccess: ReturnCode.isSuccess(returnCode),
+                });
+            }
 
             if (!ReturnCode.isSuccess(returnCode)) {
                 const output = await session.getOutput();
@@ -200,17 +218,19 @@ export class SubtitleExtractor {
             const output = await session.getOutput();
 
             if (!output || output.trim().length === 0) {
-                console.log(`${LOG_PREFIX} [getSubtitleTracks] No subtitle streams found`);
+                if (__DEV__) { console.log(`${LOG_PREFIX} [getSubtitleTracks] No subtitle streams found`); }
                 return [];
             }
 
             let data;
             try {
                 data = JSON.parse(output);
-                console.log(`${LOG_PREFIX} [getSubtitleTracks] JSON parsed`, {
-                    hasStreams: !!data.streams,
-                    streamCount: data.streams?.length || 0,
-                });
+                if (__DEV__) {
+                    console.log(`${LOG_PREFIX} [getSubtitleTracks] JSON parsed`, {
+                        hasStreams: !!data.streams,
+                        streamCount: data.streams?.length || 0,
+                    });
+                }
             } catch (parseError) {
                 console.error(`${LOG_PREFIX} [getSubtitleTracks] JSON parse error`, {
                     error: parseError instanceof Error ? parseError.message : String(parseError),
@@ -222,10 +242,12 @@ export class SubtitleExtractor {
             const tracks = this.parseSubtitleStreams(data);
 
             const duration = Date.now() - startTime;
-            console.log(`${LOG_PREFIX} [getSubtitleTracks] ✓ SUCCESS`, {
-                subtitleTracks: tracks.length,
-                durationMs: duration,
-            });
+            if (__DEV__) {
+                console.log(`${LOG_PREFIX} [getSubtitleTracks] ✓ SUCCESS`, {
+                    subtitleTracks: tracks.length,
+                    durationMs: duration,
+                });
+            }
 
             return tracks;
         } catch (error) {
@@ -277,24 +299,26 @@ export class SubtitleExtractor {
         outputFormat: 'srt' | 'vtt' | 'ass' = 'srt'
     ): Promise<string | null> {
         const startTime = Date.now();
-        console.log(`${LOG_PREFIX} [extractSubtitle] START`, {
-            videoPath: videoPath.substring(0, 60) + '...',
-            subtitleIndex,
-            outputFormat,
-            timestamp: new Date().toISOString(),
-        });
+        if (__DEV__) {
+            console.log(`${LOG_PREFIX} [extractSubtitle] START`, {
+                videoPath: videoPath.substring(0, 60) + '...',
+                subtitleIndex,
+                outputFormat,
+                timestamp: new Date().toISOString(),
+            });
+        }
 
         try {
             // Silence FFmpeg logs
             await FFmpegKitConfig.setLogLevel(Level.AV_LOG_ERROR);
 
             const outputPath = `${RNFS.CachesDirectoryPath}/subtitle_${Date.now()}.${outputFormat}`;
-            console.log(`${LOG_PREFIX} [extractSubtitle] Output path:`, outputPath);
+            if (__DEV__) { console.log(`${LOG_PREFIX} [extractSubtitle] Output path:`, outputPath); }
 
             // For content:// URIs on Android, use native extraction with file descriptor
             // This works even when the minimal FFmpeg build lacks SAF protocol support
             if (Platform.OS === 'android' && videoPath.startsWith('content://')) {
-                console.log(`${LOG_PREFIX} [extractSubtitle] Using native extraction for content URI`);
+                if (__DEV__) { console.log(`${LOG_PREFIX} [extractSubtitle] Using native extraction for content URI`); }
 
                 try {
                     const result = await SimpleThumbnail.extractSubtitle(
@@ -309,12 +333,14 @@ export class SubtitleExtractor {
                         if (exists) {
                             const fileInfo = await RNFS.stat(result);
                             const duration = Date.now() - startTime;
-                            console.log(`${LOG_PREFIX} [extractSubtitle] ✓ SUCCESS (native)`, {
-                                outputPath: result,
-                                fileSize: fileInfo.size,
-                                fileSizeKB: (fileInfo.size / 1024).toFixed(2),
-                                durationMs: duration,
-                            });
+                            if (__DEV__) {
+                                console.log(`${LOG_PREFIX} [extractSubtitle] ✓ SUCCESS (native)`, {
+                                    outputPath: result,
+                                    fileSize: fileInfo.size,
+                                    fileSizeKB: (fileInfo.size / 1024).toFixed(2),
+                                    durationMs: duration,
+                                });
+                            }
                             return result;
                         }
                     }
@@ -330,7 +356,7 @@ export class SubtitleExtractor {
 
             // Resolve path and use standard FFmpeg
             const resolvedPath = await this.resolveVideoPath(videoPath);
-            console.log(`${LOG_PREFIX} [extractSubtitle] Path resolved for FFmpeg`);
+            if (__DEV__) { console.log(`${LOG_PREFIX} [extractSubtitle] Path resolved for FFmpeg`); }
 
             const codecMap: Record<string, string> = {
                 srt: 'srt',
@@ -339,7 +365,7 @@ export class SubtitleExtractor {
             };
             const codec = codecMap[outputFormat];
             const command = `-v quiet -i "${resolvedPath}" -map 0:${subtitleIndex} -c:s ${codec} "${outputPath}"`;
-            if (__DEV__) console.log(`${LOG_PREFIX} [extractSubtitle] Executing FFmpeg`);
+            if (__DEV__) { console.log(`${LOG_PREFIX} [extractSubtitle] Executing FFmpeg`); }
 
             const session = await FFmpegKit.execute(command);
             const returnCode = await session.getReturnCode();
@@ -347,10 +373,12 @@ export class SubtitleExtractor {
             if (ReturnCode.isSuccess(returnCode)) {
                 if (await RNFS.exists(outputPath)) {
                     if (__DEV__) {
-                        console.log(`${LOG_PREFIX} [extractSubtitle] ✓ SUCCESS`, {
-                            outputPath,
-                            durationMs: Date.now() - startTime,
-                        });
+                        if (__DEV__) {
+                            console.log(`${LOG_PREFIX} [extractSubtitle] ✓ SUCCESS`, {
+                                outputPath,
+                                durationMs: Date.now() - startTime,
+                            });
+                        }
                     }
                     return outputPath;
                 }
@@ -390,10 +418,12 @@ export class SubtitleExtractor {
      */
     static async readSubtitleFile(filePath: string): Promise<string | null> {
         const startTime = Date.now();
-        console.log(`${LOG_PREFIX} [readSubtitleFile] START`, {
-            filePath: filePath.substring(0, 60) + '...',
-            timestamp: new Date().toISOString(),
-        });
+        if (__DEV__) {
+            console.log(`${LOG_PREFIX} [readSubtitleFile] START`, {
+                filePath: filePath.substring(0, 60) + '...',
+                timestamp: new Date().toISOString(),
+            });
+        }
 
         try {
             const exists = await RNFS.exists(filePath);
@@ -405,19 +435,22 @@ export class SubtitleExtractor {
             }
 
             const fileInfo = await RNFS.stat(filePath);
-            console.log(`${LOG_PREFIX} [readSubtitleFile] Reading file`, {
-                size: fileInfo.size,
-                sizeKB: (fileInfo.size / 1024).toFixed(2),
-            });
+            if (__DEV__) {
+                console.log(`${LOG_PREFIX} [readSubtitleFile] Reading file`, {
+                    size: fileInfo.size,
+                    sizeKB: (fileInfo.size / 1024).toFixed(2),
+                });
+            }
 
             const content = await RNFS.readFile(filePath, 'utf8');
-            const duration = Date.now() - startTime;
 
             if (__DEV__) {
-                console.log(`${LOG_PREFIX} [readSubtitleFile] ✓ SUCCESS`, {
-                    sizeKB: (content.length / 1024).toFixed(2),
-                    durationMs: Date.now() - startTime,
-                });
+                if (__DEV__) {
+                    console.log(`${LOG_PREFIX} [readSubtitleFile] ✓ SUCCESS`, {
+                        sizeKB: (content.length / 1024).toFixed(2),
+                        durationMs: Date.now() - startTime,
+                    });
+                }
             }
 
             return content;
@@ -432,28 +465,34 @@ export class SubtitleExtractor {
      */
     static async cleanupSubtitleFiles(): Promise<void> {
         const startTime = Date.now();
-        console.log(`${LOG_PREFIX} [cleanupSubtitleFiles] START`, {
-            cachesDir: RNFS.CachesDirectoryPath,
-            timestamp: new Date().toISOString(),
-        });
+        if (__DEV__) {
+            console.log(`${LOG_PREFIX} [cleanupSubtitleFiles] START`, {
+                cachesDir: RNFS.CachesDirectoryPath,
+                timestamp: new Date().toISOString(),
+            });
+        }
 
         try {
             const files = await RNFS.readDir(RNFS.CachesDirectoryPath);
-            console.log(`${LOG_PREFIX} [cleanupSubtitleFiles] Files found`, {
-                totalFiles: files.length,
-            });
+            if (__DEV__) {
+                console.log(`${LOG_PREFIX} [cleanupSubtitleFiles] Files found`, {
+                    totalFiles: files.length,
+                });
+            }
 
             const tempFiles = files.filter((file) =>
                 file.name.match(/^subtitle_\d+\.(srt|vtt|ass)$/)
             );
 
-            console.log(`${LOG_PREFIX} [cleanupSubtitleFiles] Subtitle files to clean`, {
-                count: tempFiles.length,
-                files: tempFiles.map(f => f.name),
-            });
+            if (__DEV__) {
+                console.log(`${LOG_PREFIX} [cleanupSubtitleFiles] Subtitle files to clean`, {
+                    count: tempFiles.length,
+                    files: tempFiles.map(f => f.name),
+                });
+            }
 
             if (tempFiles.length === 0) {
-                console.log(`${LOG_PREFIX} [cleanupSubtitleFiles] No files to clean`);
+                if (__DEV__) { console.log(`${LOG_PREFIX} [cleanupSubtitleFiles] No files to clean`); }
                 return;
             }
 
@@ -461,7 +500,7 @@ export class SubtitleExtractor {
                 tempFiles.map(async (file) => {
                     try {
                         await RNFS.unlink(file.path);
-                        console.log(`${LOG_PREFIX} [cleanupSubtitleFiles] ✓ Deleted:`, file.name);
+                        if (__DEV__) { console.log(`${LOG_PREFIX} [cleanupSubtitleFiles] ✓ Deleted:`, file.name); }
                         return { success: true, name: file.name };
                     } catch (err) {
                         console.error(`${LOG_PREFIX} [cleanupSubtitleFiles] Failed to delete:`, {
@@ -477,12 +516,14 @@ export class SubtitleExtractor {
             const failed = results.filter(r => r.status === 'rejected').length;
             const duration = Date.now() - startTime;
 
-            console.log(`${LOG_PREFIX} [cleanupSubtitleFiles] ✓ COMPLETED`, {
-                total: tempFiles.length,
-                succeeded,
-                failed,
-                durationMs: duration,
-            });
+            if (__DEV__) {
+                console.log(`${LOG_PREFIX} [cleanupSubtitleFiles] ✓ COMPLETED`, {
+                    total: tempFiles.length,
+                    succeeded,
+                    failed,
+                    durationMs: duration,
+                });
+            }
         } catch (error) {
             const duration = Date.now() - startTime;
             console.error(`${LOG_PREFIX} [cleanupSubtitleFiles] FATAL ERROR`, {
@@ -493,3 +534,5 @@ export class SubtitleExtractor {
         }
     }
 }
+
+

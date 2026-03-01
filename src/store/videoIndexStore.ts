@@ -65,11 +65,11 @@ export const useVideoIndexStore = create<VideoIndexState>((set, get) => ({
     initialize: async () => {
         const state = get();
         if (state.isIndexing) {
-            console.log('[VideoIndexStore] Already indexing, skipping');
+            if (__DEV__) {console.log('[VideoIndexStore] Already indexing, skipping');}
             return;
         }
 
-        console.log('[VideoIndexStore] Initializing...');
+        if (__DEV__) {console.log('[VideoIndexStore] Initializing...');}
         set({ isIndexing: true, indexProgress: { scanned: 0, total: 0 } });
 
         try {
@@ -78,7 +78,7 @@ export const useVideoIndexStore = create<VideoIndexState>((set, get) => ({
 
             if (!cached || cached.albums.length === 0) {
                 // First launch - full index
-                console.log('[VideoIndexStore] No cached data, performing full index');
+                if (__DEV__) {console.log('[VideoIndexStore] No cached data, performing full index');}
                 await get().forceFullSync();
                 return;
             }
@@ -92,7 +92,7 @@ export const useVideoIndexStore = create<VideoIndexState>((set, get) => ({
 
             // 3. Get current album counts from CameraRoll
             const currentAlbums = await MediaService.getAlbums();
-            console.log('[VideoIndexStore] Current albums:', currentAlbums.length);
+            if (__DEV__) {console.log('[VideoIndexStore] Current albums:', currentAlbums.length);}
 
             // 4. Diff and sync only changed albums
             const albumsToSync: string[] = [];
@@ -103,11 +103,11 @@ export const useVideoIndexStore = create<VideoIndexState>((set, get) => ({
 
                 if (!cachedAlbum) {
                     // New album
-                    console.log(`[VideoIndexStore] New album: ${current.title}`);
+                    if (__DEV__) {console.log(`[VideoIndexStore] New album: ${current.title}`);}
                     albumsToSync.push(current.title);
                 } else if (cachedAlbum.count !== current.count) {
                     // Count changed
-                    console.log(`[VideoIndexStore] Count changed for ${current.title}: ${cachedAlbum.count} -> ${current.count}`);
+                    if (__DEV__) {console.log(`[VideoIndexStore] Count changed for ${current.title}: ${cachedAlbum.count} -> ${current.count}`);}
                     albumsToSync.push(current.title);
                 }
                 // Note: We can't easily get latestTimestamp from getAlbums without fetching videos
@@ -117,14 +117,14 @@ export const useVideoIndexStore = create<VideoIndexState>((set, get) => ({
             // 5. Remove deleted albums from cache
             for (const cachedTitle of cachedAlbumsMap.keys()) {
                 if (!currentAlbumTitles.has(cachedTitle)) {
-                    console.log(`[VideoIndexStore] Removing deleted album: ${cachedTitle}`);
+                    if (__DEV__) {console.log(`[VideoIndexStore] Removing deleted album: ${cachedTitle}`);}
                     cachedAlbumsMap.delete(cachedTitle);
                 }
             }
 
             // 6. Sync changed albums
             if (albumsToSync.length > 0) {
-                console.log(`[VideoIndexStore] Syncing ${albumsToSync.length} albums...`);
+                if (__DEV__) {console.log(`[VideoIndexStore] Syncing ${albumsToSync.length} albums...`);}
                 set({ indexProgress: { scanned: 0, total: albumsToSync.length } });
 
                 for (let i = 0; i < albumsToSync.length; i++) {
@@ -135,7 +135,7 @@ export const useVideoIndexStore = create<VideoIndexState>((set, get) => ({
                         updatedAlbums.set(albumTitle, syncedAlbum);
                         set({
                             albums: updatedAlbums,
-                            indexProgress: { scanned: i + 1, total: albumsToSync.length }
+                            indexProgress: { scanned: i + 1, total: albumsToSync.length },
                         });
                     }
                 }
@@ -144,7 +144,7 @@ export const useVideoIndexStore = create<VideoIndexState>((set, get) => ({
                 get()._persistToStorage();
             }
 
-            console.log('[VideoIndexStore] Initialization complete');
+            if (__DEV__) {console.log('[VideoIndexStore] Initialization complete');}
             set({ isIndexing: false, isIndexReady: true, indexProgress: null });
 
         } catch (error) {
@@ -154,17 +154,17 @@ export const useVideoIndexStore = create<VideoIndexState>((set, get) => ({
     },
 
     forceFullSync: async () => {
-        console.log('[VideoIndexStore] Starting full sync...');
+        if (__DEV__) {console.log('[VideoIndexStore] Starting full sync...');}
         set({
             isIndexing: true,
             isIndexReady: false,
-            indexProgress: { scanned: 0, total: 0 }
+            indexProgress: { scanned: 0, total: 0 },
         });
 
         try {
             // Get all albums
             const albums = await MediaService.getAlbums();
-            console.log(`[VideoIndexStore] Found ${albums.length} albums`);
+            if (__DEV__) {console.log(`[VideoIndexStore] Found ${albums.length} albums`);}
 
             // Calculate total videos for progress
             const totalVideos = albums.reduce((sum, a) => sum + a.count, 0);
@@ -175,7 +175,7 @@ export const useVideoIndexStore = create<VideoIndexState>((set, get) => ({
 
             // Fetch videos for each album
             for (const album of albums) {
-                console.log(`[VideoIndexStore] Fetching ${album.title} (${album.count} videos)...`);
+                if (__DEV__) {console.log(`[VideoIndexStore] Fetching ${album.title} (${album.count} videos)...`);}
 
                 const allVideos: VideoFile[] = [];
                 let cursor: string | undefined;
@@ -230,7 +230,7 @@ export const useVideoIndexStore = create<VideoIndexState>((set, get) => ({
             // Persist to storage
             get()._persistToStorage();
 
-            console.log(`[VideoIndexStore] Full sync complete. Indexed ${scannedCount} videos.`);
+            if (__DEV__) {console.log(`[VideoIndexStore] Full sync complete. Indexed ${scannedCount} videos.`);}
 
         } catch (error) {
             console.error('[VideoIndexStore] Full sync error:', error);
@@ -240,10 +240,10 @@ export const useVideoIndexStore = create<VideoIndexState>((set, get) => ({
 
     searchVideos: (query: string): VideoFile[] => {
         const q = query.toLowerCase().trim();
-        if (!q) return [];
+        if (!q) {return [];}
 
         const { albums, isIndexReady } = get();
-        if (!isIndexReady) return [];
+        if (!isIndexReady) {return [];}
 
         const allVideos: VideoFile[] = [];
         for (const album of albums.values()) {
@@ -308,9 +308,11 @@ export const useVideoIndexStore = create<VideoIndexState>((set, get) => ({
                 albums: Array.from(albums.values()),
             };
             mmkv.set(INDEX_KEY, JSON.stringify(data));
-            console.log('[VideoIndexStore] Persisted to storage');
+            if (__DEV__) {console.log('[VideoIndexStore] Persisted to storage');}
         } catch (error) {
             console.error('[VideoIndexStore] Persist error:', error);
         }
     },
 }));
+
+

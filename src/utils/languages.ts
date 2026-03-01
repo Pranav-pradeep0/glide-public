@@ -39,13 +39,13 @@ export const LANGUAGES: LanguageOption[] = [
 /**
  * Finds the best matching audio track for a preferred language.
  * Uses smart matching against aliases (e.g., matching "eng" track to "English" preference).
- * 
+ *
  * @param tracks List of available audio tracks
  * @param preferredLanguageName The English name of the preferred language (e.g., "Japanese")
  * @returns The matching track ID or undefined
  */
 export function findMatchingAudioTrack(tracks: NativeAudioTrack[], preferredLanguageName: string | null): number | undefined {
-    if (!preferredLanguageName || !tracks || tracks.length === 0) return undefined;
+    if (!preferredLanguageName || !tracks || tracks.length === 0) {return undefined;}
 
     const normalizedPref = preferredLanguageName.trim().toLowerCase();
 
@@ -57,10 +57,10 @@ export function findMatchingAudioTrack(tracks: NativeAudioTrack[], preferredLang
     const searchTerms = langDef ? langDef.aliases : [normalizedPref];
 
     if (__DEV__) {
-        console.log('[LanguageUtils] Searching for track matching:', {
+        if (__DEV__) {console.log('[LanguageUtils] Searching for track matching:', {
             preference: preferredLanguageName,
-            searchTerms
-        });
+            searchTerms,
+        });}
     }
 
     // Iterate through tracks and try to match
@@ -75,7 +75,7 @@ export function findMatchingAudioTrack(tracks: NativeAudioTrack[], preferredLang
             const trackName = (t.name || '').toLowerCase();
 
             // Check 1: Exact alias match (unlikely for full track names but possible)
-            if (trackName === term) return true;
+            if (trackName === term) {return true;}
 
             // Check 2: Word boundary match (very robust)
             // Regex: anything + non-word + term + non-word + anything OR start/end
@@ -101,7 +101,7 @@ export function findMatchingAudioTrack(tracks: NativeAudioTrack[], preferredLang
         });
 
         if (match) {
-            if (__DEV__) console.log('[LanguageUtils] Match found:', match.name, 'for term:', term);
+            if (__DEV__) {console.log('[LanguageUtils] Match found:', match.name, 'for term:', term);}
             return match.id;
         }
     }
@@ -121,13 +121,13 @@ interface SubtitleTrackForMatching {
 /**
  * Finds the best matching subtitle track for a preferred language.
  * Uses smart matching against aliases (e.g., matching "eng" track to "English" preference).
- * 
+ *
  * @param tracks List of available subtitle tracks
  * @param preferredLanguageName The English name of the preferred language (e.g., "English")
  * @returns The matching track index or undefined
  */
 export function findMatchingSubtitleTrack(tracks: SubtitleTrackForMatching[], preferredLanguageName: string | null): number | undefined {
-    if (!preferredLanguageName || !tracks || tracks.length === 0) return undefined;
+    if (!preferredLanguageName || !tracks || tracks.length === 0) {return undefined;}
 
     const normalizedPref = preferredLanguageName.trim().toLowerCase();
 
@@ -139,10 +139,10 @@ export function findMatchingSubtitleTrack(tracks: SubtitleTrackForMatching[], pr
     const searchTerms = langDef ? langDef.aliases : [normalizedPref];
 
     if (__DEV__) {
-        console.log('[LanguageUtils] Searching for subtitle track matching:', {
+        if (__DEV__) {console.log('[LanguageUtils] Searching for subtitle track matching:', {
             preference: preferredLanguageName,
-            searchTerms
-        });
+            searchTerms,
+        });}
     }
 
     // Iterate through tracks and try to match against language or title
@@ -152,11 +152,11 @@ export function findMatchingSubtitleTrack(tracks: SubtitleTrackForMatching[], pr
             const trackTitle = (t.title || '').toLowerCase();
 
             // Check language field first (most reliable)
-            if (trackLang === term) return true;
-            if (trackLang.includes(term) && term.length >= 2) return true;
+            if (trackLang === term) {return true;}
+            if (trackLang.includes(term) && term.length >= 2) {return true;}
 
             // Check title field
-            if (trackTitle === term) return true;
+            if (trackTitle === term) {return true;}
             if (
                 trackTitle.includes(`[${term}]`) ||
                 trackTitle.includes(`(${term})`) ||
@@ -177,10 +177,12 @@ export function findMatchingSubtitleTrack(tracks: SubtitleTrackForMatching[], pr
         });
 
         if (match) {
-            if (__DEV__) console.log('[LanguageUtils] Subtitle match found:', match.title || match.language, 'for term:', term);
+            if (__DEV__) {console.log('[LanguageUtils] Subtitle match found:', match.title || match.language, 'for term:', term);}
             return match.index;
         }
     }
 
     return undefined;
 }
+
+

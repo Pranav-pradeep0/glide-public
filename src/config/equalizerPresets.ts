@@ -1,6 +1,6 @@
 /**
  * Equalizer Presets Configuration
- * 
+ *
  * Defines standard frequency bands and preset gain values.
  * Frequencies: 60Hz, 170Hz, 310Hz, 600Hz, 1kHz, 3kHz, 6kHz, 12kHz, 14kHz, 16kHz
  */

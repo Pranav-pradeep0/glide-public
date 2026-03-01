@@ -41,7 +41,7 @@ class ThumbnailServiceClass {
      * @param timeMs Time in milliseconds (0 = Smart Scan)
      */
     async getThumbnail(videoPath: string, timeMs: number = 0): Promise<string | null> {
-        if (!videoPath) return null;
+        if (!videoPath) { return null; }
 
         // Create a unique key for this request (path + time)
         const key = `${videoPath}::${timeMs}`;
@@ -96,7 +96,7 @@ class ThumbnailServiceClass {
 
         // LIFO: Take the LAST item
         const task = this.queue.pop();
-        if (!task) return;
+        if (!task) { return; }
 
         this.activeWorkers++;
         this.processingKeys.add(task.key);
@@ -120,7 +120,7 @@ class ThumbnailServiceClass {
                 dest: `file://${outPath}`,
                 time: task.time,
                 width: 320,
-                quality: 60
+                quality: 60,
             });
 
             const finalPath = result?.path ? result.path : null;
@@ -149,7 +149,9 @@ class ThumbnailServiceClass {
     private hashPath(path: string): string {
         let hash = 0;
         for (let i = 0; i < path.length; i++) {
+            // eslint-disable-next-line no-bitwise
             hash = (hash << 5) - hash + path.charCodeAt(i);
+            // eslint-disable-next-line no-bitwise
             hash |= 0;
         }
         return Math.abs(hash).toString(36);

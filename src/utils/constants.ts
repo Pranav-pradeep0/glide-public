@@ -2,7 +2,7 @@ import * as RNFS from '@dr.pogodin/react-native-fs';
 
 export const VIDEO_EXTENSIONS = [
     '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv',
-    '.webm', '.m4v', '.3gp', '.mpeg', '.mpg'
+    '.webm', '.m4v', '.3gp', '.mpeg', '.mpg',
 ];
 
 export const SUBTITLE_EXTENSIONS = ['.srt', '.vtt', '.ass', '.ssa'];

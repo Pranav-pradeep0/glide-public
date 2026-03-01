@@ -136,6 +136,8 @@ android {
                 keyPassword MYAPP_UPLOAD_KEY_PASSWORD
             }
         }
+        // Note: MYAPP_UPLOAD_* properties are loaded from ~/.gradle/gradle.properties (never committed)
+        // For CI, the keystore is decoded from ANDROID_KEYSTORE_BASE64 secret
         debug {
             storeFile file('debug.keystore')
             storePassword 'android'

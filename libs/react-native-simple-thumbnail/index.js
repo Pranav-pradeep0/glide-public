@@ -14,7 +14,7 @@ export default {
 
     /**
      * Resolve a content:// URI to a file path (if possible).
-     * @param uri 
+     * @param uri
      * @returns Promise<string>
      */
     getRealPath(uri) {
@@ -41,5 +41,5 @@ export default {
      */
     extractSubtitle(contentUri, subtitleIndex, outputPath, outputFormat) {
         return SimpleThumbnail.extractSubtitle(contentUri, subtitleIndex, outputPath, outputFormat);
-    }
+    },
 };

@@ -35,7 +35,7 @@ class MediaServiceClass {
     getCachedVideosPage(albumName: string | null, limit = 50, after?: string) {
         const key = this.getVideosCacheKey(albumName, limit, after);
         const entry = this.videoPageCache.get(key);
-        if (!entry) return null;
+        if (!entry) {return null;}
         if (Date.now() - entry.ts > MediaServiceClass.PAGE_CACHE_TTL_MS) {
             this.videoPageCache.delete(key);
             return null;
@@ -185,7 +185,7 @@ class MediaServiceClass {
         }
         while (this.videoPageCache.size > MediaServiceClass.PAGE_CACHE_MAX_ENTRIES) {
             const oldestKey = this.videoPageCache.keys().next().value;
-            if (!oldestKey) break;
+            if (!oldestKey) {break;}
             this.videoPageCache.delete(oldestKey);
         }
     }
@@ -199,7 +199,7 @@ class MediaServiceClass {
         }
         while (this.resolvedPathCache.size > MediaServiceClass.PATH_CACHE_MAX_ENTRIES) {
             const oldestKey = this.resolvedPathCache.keys().next().value;
-            if (!oldestKey) break;
+            if (!oldestKey) {break;}
             this.resolvedPathCache.delete(oldestKey);
         }
     }

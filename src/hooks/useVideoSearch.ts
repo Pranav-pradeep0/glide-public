@@ -16,7 +16,7 @@ interface UseVideoSearchResult {
 /**
  * Hook for searching videos with debouncing.
  * Uses the video index store for instant in-memory search.
- * 
+ *
  * @param debounceMs - Debounce delay in milliseconds (default: 300)
  */
 export function useVideoSearch(debounceMs = 300): UseVideoSearchResult {

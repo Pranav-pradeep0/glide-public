@@ -9,7 +9,7 @@ const albumVideosCache = new Map<string, {
 const dirtyAlbumCovers = new Set<string>();
 
 export function markAlbumCoverDirty(albumTitle: string | null | undefined) {
-    if (!albumTitle) return;
+    if (!albumTitle) {return;}
     dirtyAlbumCovers.add(albumTitle);
 }
 
@@ -54,9 +54,9 @@ export function useAlbumVideos(albumTitle: string | null) {
     });
 
     const fetchVideos = useCallback(async (refresh = false) => {
-        if (!albumTitle) return;
-        if (!refresh && !pageInfo.has_next_page) return;
-        if (loading || loadingMore) return; // Prevent duplicate fetches
+        if (!albumTitle) {return;}
+        if (!refresh && !pageInfo.has_next_page) {return;}
+        if (loading || loadingMore) {return;} // Prevent duplicate fetches
 
         if (refresh) {
             setLoading(true);
@@ -107,7 +107,7 @@ export function useAlbumVideos(albumTitle: string | null) {
     }, [albumTitle, pageInfo.end_cursor, pageInfo.has_next_page, loading, loadingMore]);
 
     useEffect(() => {
-        if (!albumTitle) return;
+        if (!albumTitle) {return;}
         const cached = albumVideosCache.get(albumTitle);
         if (cached) {
             setVideos(cached.videos);
@@ -135,7 +135,7 @@ export function useAlbumVideos(albumTitle: string | null) {
                 MediaService.invalidateVideosCache(albumTitle);
             }
             return fetchVideos(true);
-        }
+        },
     };
 }
 // ... existing code
@@ -159,7 +159,7 @@ export function useAlbumCover(albumTitle: string, refreshKey: number = 0) {
                         modifiedDate: edge.timestamp,
                         duration: edge.duration * 1000,
                         album: albumTitle,
-                        isDirectory: false
+                        isDirectory: false,
                     });
                 } else if (isMounted) {
                     // Album may be empty after deletes; clear stale cover.

@@ -86,13 +86,13 @@ export class ContextAnalyzer {
             roughness: 0.0,
             sharpness: 0.5,
             sentimentScore: sentimentResult.score,
-            modifiers: adjectives
+            modifiers: adjectives,
         };
 
         // Apply Modifiers (Adjectives)
         adjectives.forEach((adj: string) => {
             const mapped = this.MODIFIER_MAP[adj];
-            if (mapped) this.applyToContext(context, mapped);
+            if (mapped) {this.applyToContext(context, mapped);}
         });
 
         // Apply Verbs (Dynamics)
@@ -101,7 +101,7 @@ export class ContextAnalyzer {
             const normalizedVerb = v.toLowerCase();
             const mapped = this.VERB_MAP[normalizedVerb] ||
                 this.VERB_MAP[nlp(normalizedVerb).verbs().toInfinitive().out('text')];
-            if (mapped) this.applyToContext(context, mapped);
+            if (mapped) {this.applyToContext(context, mapped);}
         });
 
         // Apply Spatial Clues (Proximity)
@@ -119,19 +119,21 @@ export class ContextAnalyzer {
 
         // 6. Debug Log (Verification)
         if (__DEV__) {
-            console.log(`[HapticAI] 🧠 Analyzing "${text}"`);
-            console.log(`   └─ Sentiment: ${sentimentResult.score}`);
-            console.log(`   └─ Verbs: [${verbs.join(', ')}]`);
-            console.log(`   └─ Params: Intensity x${context.intensityMultiplier.toFixed(2)}, Speed x${context.speedMultiplier.toFixed(2)}, Texture: ${context.roughness.toFixed(2)}`);
+            if (__DEV__) {console.log(`[HapticAI] 🧠 Analyzing "${text}"`);}
+            if (__DEV__) {console.log(`   └─ Sentiment: ${sentimentResult.score}`);}
+            if (__DEV__) {console.log(`   └─ Verbs: [${verbs.join(', ')}]`);}
+            if (__DEV__) {console.log(`   └─ Params: Intensity x${context.intensityMultiplier.toFixed(2)}, Speed x${context.speedMultiplier.toFixed(2)}, Texture: ${context.roughness.toFixed(2)}`);}
         }
 
         return context;
     }
 
     private static applyToContext(context: HapticContext, mapped: Partial<HapticContext>) {
-        if (mapped.intensityMultiplier) context.intensityMultiplier *= mapped.intensityMultiplier;
-        if (mapped.speedMultiplier) context.speedMultiplier *= mapped.speedMultiplier;
-        if (mapped.roughness !== undefined) context.roughness = Math.max(context.roughness, mapped.roughness);
-        if (mapped.sharpness !== undefined) context.sharpness = mapped.sharpness;
+        if (mapped.intensityMultiplier) {context.intensityMultiplier *= mapped.intensityMultiplier;}
+        if (mapped.speedMultiplier) {context.speedMultiplier *= mapped.speedMultiplier;}
+        if (mapped.roughness !== undefined) {context.roughness = Math.max(context.roughness, mapped.roughness);}
+        if (mapped.sharpness !== undefined) {context.sharpness = mapped.sharpness;}
     }
 }
+
+

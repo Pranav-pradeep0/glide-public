@@ -10,11 +10,17 @@ interface PrivacyIconProps {
 
 const W = 200;
 const H = 220;
+const FRAME_W = 340;
+const FRAME_H = 200;
+const SCALE = Math.min(FRAME_W / W, FRAME_H / H);
+const OFFSET_X = (FRAME_W - W * SCALE) / 2;
+const OFFSET_Y = (FRAME_H - H * SCALE) / 2;
 
 export default function PrivacyIcon({ color }: PrivacyIconProps) {
     return (
         <View style={styles.container}>
-            <Svg width={W} height={H} viewBox={`0 0 ${W} ${H}`}>
+            <Svg width={FRAME_W} height={FRAME_H} viewBox={`0 0 ${FRAME_W} ${FRAME_H}`}>
+                <G transform={`translate(${OFFSET_X} ${OFFSET_Y}) scale(${SCALE})`}>
 
                 {/* ── Shield ── */}
                 <Path
@@ -54,6 +60,7 @@ export default function PrivacyIcon({ color }: PrivacyIconProps) {
                         strokeLinejoin="round"
                     />
                 </G>
+                </G>
 
             </Svg>
         </View>
@@ -64,5 +71,7 @@ const styles = StyleSheet.create({
     container: {
         alignItems: 'center',
         justifyContent: 'center',
+        width: FRAME_W,
+        height: FRAME_H,
     },
 });

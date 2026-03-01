@@ -14,7 +14,7 @@ export class NavigationService {
 
     /**
      * Handles navigation to the video player or details screen based on content type.
-     * 
+     *
      * @param navigation The navigation object from useNavigation
      * @param videoPath The absolute path to the video file
      * @param extraParams Optional extra parameters to pass to the screens (e.g. videoName, isExternalOpen)
@@ -31,19 +31,19 @@ export class NavigationService {
 
         // For network streams, always go directly to VideoPlayer (skip PlayerDetail)
         if (this.isNetworkStream(videoPath)) {
-            console.log('[NavigationService] Network stream detected, skipping PlayerDetail');
+            if (__DEV__) {console.log('[NavigationService] Network stream detected, skipping PlayerDetail');}
             navigation.navigate('VideoPlayer', {
                 videoPath,
                 videoName: extraParams.videoName || 'Stream',
                 playMode: 'normal', // No haptics for streams
-                ...extraParams
+                ...extraParams,
             });
             return;
         }
 
         // Use synchronous classification for immediate UI response
         const classification = ContentDetector.classifySync(videoPath);
-        console.log('[NavigationService] Classified video:', { path: videoPath, classification });
+        if (__DEV__) {console.log('[NavigationService] Classified video:', { path: videoPath, classification });}
 
         const isProfessionalContent =
             classification.contentType === 'movie' ||
@@ -54,15 +54,17 @@ export class NavigationService {
             navigation.navigate('PlayerDetail', {
                 videoPath,
                 videoName: extraParams.videoName,
-                ...extraParams
+                ...extraParams,
             });
         } else {
             // It's a Home Video / Unknown -> Play Directly
             navigation.navigate('VideoPlayer', {
                 videoPath,
                 videoName: extraParams.videoName,
-                ...extraParams
+                ...extraParams,
             });
         }
     }
 }
+
+

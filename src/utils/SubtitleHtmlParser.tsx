@@ -147,7 +147,7 @@ export class SubtitleHtmlParser {
      * Supports: hex (#FFF, #FFFFFF), named colors, rgb/rgba
      */
     private static normalizeColor(color: string): string {
-        if (!color) return '';
+        if (!color) {return '';}
 
         const trimmed = color.trim().toLowerCase();
 

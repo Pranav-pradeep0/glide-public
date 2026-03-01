@@ -24,21 +24,21 @@ export class SubtitleCacheService {
      * Initialize cache - load index from disk
      */
     static async init(): Promise<void> {
-        if (this.initialized) return;
+        if (this.initialized) {return;}
 
         try {
             // Ensure cache directory exists
             const dirExists = await RNFS.exists(CACHE_DIR);
             if (!dirExists) {
                 await RNFS.mkdir(CACHE_DIR);
-                console.log(`${LOG_PREFIX} Created cache directory`);
+                if (__DEV__) {console.log(`${LOG_PREFIX} Created cache directory`);}
             }
 
             // Load existing index
             if (await RNFS.exists(CACHE_INDEX_FILE)) {
                 const indexContent = await RNFS.readFile(CACHE_INDEX_FILE, 'utf8');
                 this.cacheIndex = JSON.parse(indexContent);
-                console.log(`${LOG_PREFIX} Loaded cache index with ${Object.keys(this.cacheIndex).length} entries`);
+                if (__DEV__) {console.log(`${LOG_PREFIX} Loaded cache index with ${Object.keys(this.cacheIndex).length} entries`);}
 
                 // Clean expired entries
                 await this.cleanExpired();
@@ -60,18 +60,18 @@ export class SubtitleCacheService {
 
         const entry = this.cacheIndex[imdbId];
         if (!entry) {
-            console.log(`${LOG_PREFIX} No cache for:`, imdbId);
+            if (__DEV__) {console.log(`${LOG_PREFIX} No cache for:`, imdbId);}
             return null;
         }
 
         // Check if cache is still fresh
         if (Date.now() - entry.fetchedAt > CACHE_MAX_AGE_MS) {
-            console.log(`${LOG_PREFIX} Cache expired for:`, imdbId);
+            if (__DEV__) {console.log(`${LOG_PREFIX} Cache expired for:`, imdbId);}
             await this.remove(imdbId);
             return null;
         }
 
-        console.log(`${LOG_PREFIX} Cache hit for:`, imdbId, `(${entry.subtitles.length} subs)`);
+        if (__DEV__) {console.log(`${LOG_PREFIX} Cache hit for:`, imdbId, `(${entry.subtitles.length} subs)`);}
         return entry;
     }
 
@@ -86,7 +86,7 @@ export class SubtitleCacheService {
     ): Promise<void> {
         await this.init();
 
-        console.log(`${LOG_PREFIX} Caching ${subtitles.length} subtitles for:`, imdbId);
+        if (__DEV__) {console.log(`${LOG_PREFIX} Caching ${subtitles.length} subtitles for:`, imdbId);}
 
         this.cacheIndex[imdbId] = {
             imdbId,
@@ -137,7 +137,7 @@ export class SubtitleCacheService {
         if (entry) {
             entry.downloadedPaths[subtitleId] = filePath;
             await this.saveIndex();
-            console.log(`${LOG_PREFIX} Stored download path for:`, subtitleId);
+            if (__DEV__) {console.log(`${LOG_PREFIX} Stored download path for:`, subtitleId);}
         }
     }
 
@@ -174,9 +174,9 @@ export class SubtitleCacheService {
      */
     static async remove(imdbId: string): Promise<void> {
         const entry = this.cacheIndex[imdbId];
-        if (!entry) return;
+        if (!entry) {return;}
 
-        console.log(`${LOG_PREFIX} Removing cache for:`, imdbId);
+        if (__DEV__) {console.log(`${LOG_PREFIX} Removing cache for:`, imdbId);}
 
         // Delete downloaded files
         for (const filePath of Object.values(entry.downloadedPaths)) {
@@ -207,7 +207,7 @@ export class SubtitleCacheService {
             .map(([id]) => id);
 
         if (expiredIds.length > 0) {
-            console.log(`${LOG_PREFIX} Cleaning ${expiredIds.length} expired entries`);
+            if (__DEV__) {console.log(`${LOG_PREFIX} Cleaning ${expiredIds.length} expired entries`);}
             for (const id of expiredIds) {
                 await this.remove(id);
             }
@@ -230,7 +230,7 @@ export class SubtitleCacheService {
      * Clear all cache
      */
     static async clearAll(): Promise<void> {
-        console.log(`${LOG_PREFIX} Clearing all cache`);
+        if (__DEV__) {console.log(`${LOG_PREFIX} Clearing all cache`);}
         try {
             if (await RNFS.exists(CACHE_DIR)) {
                 await RNFS.unlink(CACHE_DIR);
@@ -268,3 +268,5 @@ export class SubtitleCacheService {
         };
     }
 }
+
+

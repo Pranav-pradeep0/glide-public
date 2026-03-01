@@ -1,9 +1,9 @@
-const { withAppBuildGradle } = require("@expo/config-plugins");
-const generateCode = require("@expo/config-plugins/build/utils/generateCode");
+const { withAppBuildGradle } = require('@expo/config-plugins');
+const generateCode = require('@expo/config-plugins/build/utils/generateCode');
 
 const resolveAppGradleString = (options) => {
     // for React Native 0.71, the file value now contains "jetified-react-android" instead of "jetified-react-native"
-    const rnJetifierName = options?.android?.legacyJetifier ? "jetified-react-native" : "jetified-react-android";
+    const rnJetifierName = options?.android?.legacyJetifier ? 'jetified-react-native' : 'jetified-react-android';
 
     const gradleString = `tasks.whenTaskAdded((tas -> {
         // when task is 'mergeLocalDebugNativeLibs' or 'mergeLocalReleaseNativeLibs'
@@ -36,12 +36,12 @@ const withGradleTasks = (config, options) => {
     }
     return withAppBuildGradle(config, (config) => {
         const newCode = generateCode.mergeContents({
-            tag: "withVlcMediaPlayer",
+            tag: 'withVlcMediaPlayer',
             src: config.modResults.contents,
             newSrc: resolveAppGradleString(options),
             anchor: /applyNativeModulesAppBuildGradle\(project\)/i,
             offset: 2,
-            comment: "//",
+            comment: '//',
         });
 
         config.modResults.contents = newCode.contents;

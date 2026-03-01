@@ -1,6 +1,6 @@
 /**
  * useAudioEqualizer Hook
- * 
+ *
  * Manages audio equalizer state including presets, custom bands, and enabled status.
  */
 
@@ -40,7 +40,7 @@ export function useAudioEqualizer(): UseAudioEqualizerReturn {
     // If disabled, return undefined (let player handle it or send null/empty)
     // If enabled, return the bands based on current preset or custom values
     const effectiveBands = useMemo(() => {
-        if (!enabled) return undefined;
+        if (!enabled) {return undefined;}
 
         if (activePresetId === 'custom') {
             return customBands;
@@ -63,7 +63,7 @@ export function useAudioEqualizer(): UseAudioEqualizerReturn {
             setEnabled(true);
         }
 
-        // If selecting a real preset, we might want to sync customBands to it 
+        // If selecting a real preset, we might want to sync customBands to it
         // so if they start editing, they start from that preset
         if (presetId !== 'custom') {
             const preset = EQUALIZER_PRESETS.find(p => p.id === presetId);

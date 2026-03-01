@@ -1,6 +1,6 @@
 /**
  * VerticalSlider Component
- * 
+ *
  * A custom vertical slider built with Reanimated and Gesture Handler.
  * Features:
  * - Smooth gesture handling
@@ -155,7 +155,7 @@ export const VerticalSlider: React.FC<VerticalSliderProps> = React.memo(({
         return {
             transform: [
                 { translateY },
-                { scale: withSpring(isTouching.value ? 1.15 : 1) }
+                { scale: withSpring(isTouching.value ? 1.15 : 1) },
             ],
             backgroundColor: thumbColor,
         };
@@ -179,7 +179,7 @@ export const VerticalSlider: React.FC<VerticalSliderProps> = React.memo(({
         return {
             transform: [
                 { translateX: -30 },
-                { translateY }
+                { translateY },
             ],
             opacity: withTiming(isTouching.value ? 1 : 0, { duration: 150 }),
         };
@@ -254,7 +254,7 @@ const styles = StyleSheet.create({
         borderRadius: 4,
         top: 0,
         left: (60 - THUMB_WIDTH) / 2,
-        shadowColor: "#000",
+        shadowColor: '#000',
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.2,
         shadowRadius: 2,
@@ -281,5 +281,5 @@ const styles = StyleSheet.create({
         padding: 0,
         margin: 0,
         textAlign: 'center',
-    }
+    },
 });

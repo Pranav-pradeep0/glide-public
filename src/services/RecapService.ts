@@ -13,23 +13,22 @@ export class RecapService {
         videoPath: string,
         tracks: SubtitleTrack[],
         existingCues: SubtitleCue[],
-        resumePosition: number,
-        videoTitle?: string
+        resumePosition: number
     ): Promise<string | null> {
         let cues = existingCues;
 
         // If no cues currently enabled, find the best track and extract
         if (!cues || cues.length === 0) {
-            if (__DEV__) console.log('[RecapService] No active cues, searching for best track...');
+            if (__DEV__) { console.log('[RecapService] No active cues, searching for best track...'); }
             const result = await SubtitleCueStore.getBestTrackCues(videoPath, tracks);
             if (result) {
-                if (__DEV__) console.log('[RecapService] Using track:', result.trackIndex);
+                if (__DEV__) { console.log('[RecapService] Using track:', result.trackIndex); }
                 cues = result.cues;
             }
         }
 
         if (!cues || cues.length === 0) {
-            if (__DEV__) console.warn('[RecapService] No subtitles available for recap');
+            if (__DEV__) { console.warn('[RecapService] No subtitles available for recap'); }
             return null;
         }
 
@@ -46,7 +45,7 @@ export class RecapService {
             cue => cue.startTime >= startTime && cue.startTime <= resumePosition
         );
 
-        if (relevantCues.length === 0) return '';
+        if (relevantCues.length === 0) { return ''; }
 
         // Clean and prepare dialogue
         const processedCues = relevantCues
@@ -106,12 +105,12 @@ GUIDELINES:
 - Length: Concise, exactly 2-3 sentences.
 - Focus: Highlight major plot beats, emotional shifts, or impending conflicts. 
 - Sparse Scenes: If the dialogue is generic, summarize the vibe or situation (e.g., "Tensions rise as the group faces an uncertain future").
-- No Meta: Do not mention being an AI or say "Based on the dialogue."`
+- No Meta: Do not mention being an AI or say "Based on the dialogue."`,
                         },
                         {
                             role: 'user',
-                            content: `${contextInput}Dialogue from the last few minutes:\n"${dialogue}"`
-                        }
+                            content: `${contextInput}Dialogue from the last few minutes:\n"${dialogue}"`,
+                        },
                     ],
                     temperature: 0.7,
                     max_tokens: 150,
@@ -146,3 +145,4 @@ GUIDELINES:
         }
     }
 }
+

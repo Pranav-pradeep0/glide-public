@@ -425,7 +425,7 @@ export interface VideoPlayerProps {
  * Format seconds to MM:SS or H:MM:SS string
  */
 export const formatTime = (seconds: number): string => {
-    if (!isFinite(seconds) || seconds < 0) return '00:00';
+    if (!isFinite(seconds) || seconds < 0) {return '00:00';}
     const hrs = Math.floor(seconds / 3600);
     const mins = Math.floor((seconds % 3600) / 60);
     const secs = Math.floor(seconds % 60);
@@ -442,7 +442,7 @@ export const rafThrottle = <T extends (...args: any[]) => void>(fn: T) => {
     let lastArgs: any[] | null = null;
     return (...args: Parameters<T>) => {
         lastArgs = args;
-        if (rafId !== null) return;
+        if (rafId !== null) {return;}
         rafId = requestAnimationFrame(() => {
             rafId = null;
             if (lastArgs) {
@@ -462,7 +462,7 @@ export const createDebounce = <T extends (...args: any[]) => void>(
 ) => {
     let timeoutId: NodeJS.Timeout | null = null;
     const debounced = (...args: Parameters<T>) => {
-        if (timeoutId) clearTimeout(timeoutId);
+        if (timeoutId) {clearTimeout(timeoutId);}
         timeoutId = setTimeout(() => {
             fn(...args);
             timeoutId = null;

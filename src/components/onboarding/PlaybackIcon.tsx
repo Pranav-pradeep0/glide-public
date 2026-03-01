@@ -23,15 +23,15 @@ const AnimatedRect = Animated.createAnimatedComponent(Rect);
 const AnimatedG = Animated.createAnimatedComponent(G);
 
 // ─── Dimensions ────────────────────────────────
-const W = 280;
-const H = 180;
+const FRAME_W = 340;
+const FRAME_H = 200;
 
 // Phone rectangle (landscape)
-const PHONE_X = 30;
-const PHONE_Y = 20;
-const PHONE_W = 220;
-const PHONE_H = 130;
-const PHONE_R = 10;
+const PHONE_X = 20;
+const PHONE_Y = 10;
+const PHONE_W = 300;
+const PHONE_H = 160;
+const PHONE_R = 14;
 const PHONE_CX = PHONE_X + PHONE_W / 2;
 const PHONE_CY = PHONE_Y + PHONE_H / 2;
 
@@ -349,7 +349,7 @@ export default function PlaybackIcon({
 
     return (
         <View style={styles.container}>
-            <Svg width={W} height={H} viewBox={`0 0 ${W} ${H}`}>
+            <Svg width={FRAME_W} height={FRAME_H} viewBox={`0 0 ${FRAME_W} ${FRAME_H}`}>
                 {/* ── Phone rectangle (static) ── */}
                 <Rect
                     x={PHONE_X}
@@ -476,5 +476,7 @@ const styles = StyleSheet.create({
     container: {
         alignItems: 'center',
         justifyContent: 'center',
+        width: FRAME_W,
+        height: FRAME_H,
     },
 });

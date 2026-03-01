@@ -13,7 +13,7 @@ export class HapticIntensityCalculator {
     /**
      * Calculates the final intensity for a haptic pattern.
      * Maps the base intensity to the user's desired intensity range.
-     * 
+     *
      * @param baseIntensity - The base intensity for the haptic category (designed for 0-30 range)
      * @param hapticSettings - User's haptic settings from store
      * @returns Final calculated intensity (1-255)
@@ -38,7 +38,7 @@ export class HapticIntensityCalculator {
     /**
      * Scales an entire waveform's amplitudes based on user's intensity setting.
      * The user's intensity value becomes the target max amplitude.
-     * 
+     *
      * @param amplitudes - Original amplitude array (designed for 0-30 range)
      * @param hapticSettings - User's haptic settings
      * @returns Scaled amplitude array (targeting user's intensity as max)

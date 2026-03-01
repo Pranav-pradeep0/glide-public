@@ -189,7 +189,7 @@ export default function AlbumVideosScreen() {
     const historyByVideoId = useMemo(() => {
         const map = new Map<string, VideoHistoryEntry>();
         for (const entry of history.values()) {
-            if (entry.videoId) map.set(entry.videoId, entry);
+            if (entry.videoId) {map.set(entry.videoId, entry);}
         }
         return map;
     }, [history]);
@@ -241,11 +241,11 @@ export default function AlbumVideosScreen() {
         const videoPath = video.path;
         const videoUri = video.uri; // Original content:// URI for CameraRoll.deletePhotos
 
-        console.log('[AlbumVideosScreen] handleDelete started:', {
+        if (__DEV__) {console.log('[AlbumVideosScreen] handleDelete started:', {
             videoPath,
             videoUri,
             videoName: video.name,
-        });
+        });}
 
         if (!videoUri) {
             console.error('[AlbumVideosScreen] handleDelete: No URI available for deletion');
@@ -255,9 +255,9 @@ export default function AlbumVideosScreen() {
 
         try {
             // Use CameraRoll.deletePhotos to properly delete from MediaStore
-            console.log('[AlbumVideosScreen] Attempting CameraRoll.deletePhotos with URI:', videoUri);
+            if (__DEV__) {console.log('[AlbumVideosScreen] Attempting CameraRoll.deletePhotos with URI:', videoUri);}
             await CameraRoll.deletePhotos([videoUri]);
-            console.log('[AlbumVideosScreen] File deleted successfully via CameraRoll:', videoUri);
+            if (__DEV__) {console.log('[AlbumVideosScreen] File deleted successfully via CameraRoll:', videoUri);}
             clearHistoryForPath(videoPath);
             markAlbumCoverDirty(albumTitle);
             refetch();
@@ -275,7 +275,7 @@ export default function AlbumVideosScreen() {
 
     const handleShare = async () => {
         const video = selectedVideoRef.current;
-        if (!video) return;
+        if (!video) {return;}
         try {
             await Share.open({
                 url: `file://${video.path}`,
@@ -283,7 +283,7 @@ export default function AlbumVideosScreen() {
                 failOnCancel: false,
             });
         } catch (error) {
-            console.log('Share dismissed or failed', error);
+            if (__DEV__) {console.log('Share dismissed or failed', error);}
         }
     };
 
@@ -368,7 +368,7 @@ export default function AlbumVideosScreen() {
     ), [albumTitle, videos.length, navigation, theme, viewMode, toggleViewMode]);
 
     const renderFooter = useCallback(() => {
-        if (!loadingMore) return <View style={{ height: 20 }} />;
+        if (!loadingMore) {return <View style={{ height: 20 }} />;}
         return (
             <View style={{ paddingVertical: 20 }}>
                 <ActivityIndicator color={theme.colors.primary} />
@@ -408,7 +408,7 @@ export default function AlbumVideosScreen() {
                         ListFooterComponent={renderFooter}
                         onEndReachedThreshold={0.5}
                         onEndReached={() => {
-                            if (hasMore) loadMore();
+                            if (hasMore) {loadMore();}
                         }}
                         keyExtractor={(item: VideoFile) => item.path}
                         numColumns={viewMode === 'grid' ? 2 : 1}
@@ -642,3 +642,5 @@ const styles = StyleSheet.create({
         height: '100%',
     },
 });
+
+

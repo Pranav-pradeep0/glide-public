@@ -1,9 +1,9 @@
 import { Resolution } from './resolution.js';
 import { Source } from './source.js';
 export declare enum QualityModifier {
-    REMUX = "REMUX",
-    BRDISK = "BRDISK",
-    RAWHD = "RAWHD"
+    REMUX = 'REMUX',
+    BRDISK = 'BRDISK',
+    RAWHD = 'RAWHD'
 }
 export interface QualityModel {
     sources: Source[];
