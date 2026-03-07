@@ -135,7 +135,6 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
 
         // Simple onPlaying handler - no more manual seeking needed!
         const handlePlaying = useCallback(() => {
-            if (__DEV__) {console.log('[DEBUG RACE] AnimatedVideoView forwarding onPlaying to parent');}
             onPlaying();
         }, [onPlaying]);
 

@@ -193,6 +193,8 @@ export default function VideoPlayerScreen({ route }: Props) {
 
     const [orientationLocked, setOrientationLocked] = React.useState(false);
     const [syncPanelType, setSyncPanelType] = React.useState<'audio' | 'subtitle' | null>(null);
+    const [basePlaybackRate, setBasePlaybackRate] = React.useState(1.0);
+    const [temporaryHoldRate, setTemporaryHoldRate] = React.useState<number | null>(null);
 
     // AI Recap State
     const [recapVisible, setRecapVisible] = React.useState(false);
@@ -229,6 +231,11 @@ export default function VideoPlayerScreen({ route }: Props) {
 
     // Haptics State (User toggle)
     const [hapticsEnabled, setHapticsEnabled] = React.useState(true);
+
+    const effectivePlaybackRate = useMemo(
+        () => temporaryHoldRate ?? basePlaybackRate,
+        [temporaryHoldRate, basePlaybackRate]
+    );
 
     // ========================================================================
     // HISTORY HELPERS
@@ -324,7 +331,7 @@ export default function VideoPlayerScreen({ route }: Props) {
             (tracksHook as any).setAudioTracksFromVLC?.(tracks);
         },
         initialPaused: false,
-        playbackRate: hud.state.speed.rate,
+        playbackRate: effectivePlaybackRate,
     });
 
     // PIP Mode State from native listener
@@ -357,6 +364,8 @@ export default function VideoPlayerScreen({ route }: Props) {
         player,
         ui,
         hud,
+        basePlaybackRate,
+        onTemporarySpeedChange: setTemporaryHoldRate,
         initialBrightness: startBrightness,
         onBrightnessChange: (val) => {
             brightnessRef.current = val;
@@ -698,8 +707,21 @@ export default function VideoPlayerScreen({ route }: Props) {
     const handleToggleSpeed = useCallback(() => {
         // Cycle speed: 1.0 -> 1.5 -> 2.0 -> 2.5 -> 3.0 -> 0.5 -> 1.0
         const rates = [1.0, 1.5, 2.0, 2.5, 3.0, 0.5];
-        const nextIndex = (rates.indexOf(hud.state.speed.rate) + 1) % rates.length;
-        hud.showSpeedHUD(rates[nextIndex]);
+        const currentRate = basePlaybackRate;
+        const currentIndex = rates.indexOf(currentRate);
+        const nextIndex = ((currentIndex >= 0 ? currentIndex : 0) + 1) % rates.length;
+        const nextRate = rates[nextIndex];
+        setTemporaryHoldRate(null);
+        setBasePlaybackRate(nextRate);
+        hud.showSpeedHUD(nextRate, false);
+        ui.showControls();
+        ui.scheduleAutoHide();
+    }, [basePlaybackRate, hud, ui]);
+
+    const handlePlaybackRateChange = useCallback((rate: number) => {
+        setTemporaryHoldRate(null);
+        setBasePlaybackRate(rate);
+        hud.showSpeedHUD(rate, false);
         ui.showControls();
         ui.scheduleAutoHide();
     }, [hud, ui]);
@@ -1046,7 +1068,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                         playerKey={settingsHook.settings.playerKey}
                         decoder={settingsHook.settings.decoder}
                         paused={player.state.paused || resumeModalVisible || recapVisible}
-                        rate={hud.state.speed.rate}
+                        rate={effectivePlaybackRate}
                         muted={settingsHook.settings.muted || resumeModalVisible}
                         repeat={settingsHook.settings.repeat}
                         resizeMode={settingsHook.settings.resizeMode}
@@ -1117,7 +1139,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                     showVolumeHUD={hud.state.volume.show}
                     volumeHUD={gestures.sharedValues.currentVolume}
                     showSpeedHUD={hud.state.speed.show}
-                    playbackRate={hud.state.speed.rate}
+                    playbackRate={effectivePlaybackRate}
                     zoomActive={gestures.sharedValues.zoomActive.value}
                     zoomHUDScale={hud.state.zoom.scale}
                     shouldShowBuffer={shouldShowBuffer}
@@ -1172,7 +1194,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                     onToggleNightMode={toggleNightMode}
                     nightModeActive={nightMode}
                     playMode={playMode}
-                    playbackRate={hud.state.speed.rate}
+                    playbackRate={basePlaybackRate}
                     onToggleSpeed={handleToggleSpeed}
                     onToggleHaptics={handleToggleHaptics}
                     hapticsEnabled={hapticsEnabled}
@@ -1199,8 +1221,8 @@ export default function VideoPlayerScreen({ route }: Props) {
             {ui.state.quickSettingsOpen && (
                 <QuickSettingsPanel
                     onClose={handleQSClose}
-                    playbackRate={hud.state.speed.rate}
-                    onPlaybackRateChange={hud.showSpeedHUD}
+                    playbackRate={basePlaybackRate}
+                    onPlaybackRateChange={handlePlaybackRateChange}
                     muted={settingsHook.settings.muted}
                     onToggleMute={settingsHook.toggleMute}
                     repeat={settingsHook.settings.repeat}

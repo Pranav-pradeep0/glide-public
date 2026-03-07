@@ -211,6 +211,7 @@ class ReactVlcPlayerView extends TextureView implements
     // Cached equalizer instance — reused rather than re-allocated on every call
     private MediaPlayer.Equalizer mEqualizer = null;
     private float[] mEqualizerBands = null;
+    private float mLastAppliedRate = Float.NaN;
 
     // Guard against concurrent createPlayer() calls
     private volatile boolean mCreatingPlayer = false;
@@ -1419,6 +1420,7 @@ class ReactVlcPlayerView extends TextureView implements
         mBestFitUsingCover = null;
         mPlayAfterBufferComplete = false;
         mLastSeekPlayTimestampMs = -1L;
+        mLastAppliedRate = Float.NaN;
         // mEqualizer intentionally not nulled — it can be reused by the next player.
     }
 
@@ -1651,7 +1653,11 @@ class ReactVlcPlayerView extends TextureView implements
     public void setRateModifier(float rateModifier) {
         Log.d(TAG, "[RATE] setRate=" + rateModifier);
         if (mMediaPlayer != null) {
+            if (!Float.isNaN(mLastAppliedRate) && Math.abs(mLastAppliedRate - rateModifier) < 0.01f) {
+                return;
+            }
             mMediaPlayer.setRate(rateModifier);
+            mLastAppliedRate = rateModifier;
             updatePlayPauseState(mMediaPlayer.isPlaying()
                     ? PlaybackStateCompat.STATE_PLAYING
                     : PlaybackStateCompat.STATE_PAUSED);
@@ -2426,6 +2432,7 @@ class ReactVlcPlayerView extends TextureView implements
         // 4. Rate
         if (snapshot.rate != 1.0f) {
             mMediaPlayer.setRate(snapshot.rate);
+            mLastAppliedRate = snapshot.rate;
         }
 
         // 5. Track selections

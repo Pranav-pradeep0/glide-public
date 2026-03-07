@@ -489,7 +489,6 @@ export const getOptimizedInitOptions = (
     const baseOptions = [
         '--no-video-title-show',
         '--no-sub-autodetect-file',
-        '--audio-filter=scaletempo',  // Essential for speed control
     ];
 
     // Only use fast-seek for local files

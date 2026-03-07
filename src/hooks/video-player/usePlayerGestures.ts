@@ -37,6 +37,8 @@ interface UsePlayerGesturesOptions {
     player: UsePlayerCoreReturn;
     ui: UsePlayerUIReturn;
     hud: UsePlayerHUDReturn;
+    basePlaybackRate?: number;
+    onTemporarySpeedChange?: (rate: number | null) => void;
 
     // Optional callbacks
     onSeekUpdate?: (time: number, show: boolean) => void;
@@ -88,7 +90,17 @@ import { useAudioController } from './useAudioController';
 // ...
 
 export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerGesturesReturn {
-    const { player, ui, hud, onSeekUpdate, initialBrightness, onBrightnessChange, onBrightnessSave } = options;
+    const {
+        player,
+        ui,
+        hud,
+        basePlaybackRate = 1.0,
+        onTemporarySpeedChange,
+        onSeekUpdate,
+        initialBrightness,
+        onBrightnessChange,
+        onBrightnessSave,
+    } = options;
 
     const { width, height } = useWindowDimensions();
 
@@ -273,14 +285,14 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
 
     // Speed
     const handleSpeedChange = useCallback((rate: number, isGestureActive?: boolean) => {
+        onTemporarySpeedChange?.(rate);
         hud.showSpeedHUD(rate, isGestureActive);
-    }, [hud]);
+    }, [hud, onTemporarySpeedChange]);
 
     const handleSpeedReset = useCallback(() => {
-        // hud.resetSpeed() hides immediately.
-        // We want to show "1.00x" and let it auto-hide naturally.
-        hud.showSpeedHUD(1.0, false);
-    }, [hud]);
+        onTemporarySpeedChange?.(null);
+        hud.showSpeedHUD(basePlaybackRate, false);
+    }, [basePlaybackRate, hud, onTemporarySpeedChange]);
 
     // Zoom
     const handleZoomStart = useCallback(() => {
