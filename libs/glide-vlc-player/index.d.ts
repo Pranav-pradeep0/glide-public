@@ -275,6 +275,12 @@ export type VLCPlayerProps = VLCPlayerCallbackProps & {
   muted?: boolean;
 
   /**
+   * Set to `true` or `false` to enable or disable video enhancement (adjust filter)
+   * @default false
+   */
+  videoEnhancement?: boolean;
+
+  /**
    * Set audioTrack id (number) (see onLoad callback VideoInfo.audioTracks)
    */
   audioTrack?: number;
@@ -428,4 +434,3 @@ declare class VLCPlayer extends PlaybackMethods<VLCPlayerProps> { }
  * features like fullscreen, controls, etc.
  */
 declare class VlCPlayerView extends PlaybackMethods<any> { }
-

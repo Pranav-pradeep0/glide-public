@@ -153,10 +153,11 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
             return {
                 ...source,
                 initType: 2 as 1 | 2,
-                initOptions: getOptimizedInitOptions(source.uri, decoder, videoEnhancement),
+                initOptions: getOptimizedInitOptions(source.uri, decoder),
+                decoderMode: decoder,
                 mediaOptions: mediaOpts,
             };
-        }, [source, decoder, videoEnhancement, repeat, resumeTimeSeconds]);
+        }, [source, decoder, repeat, resumeTimeSeconds]);
 
         if (playerKey > 0) {
             if (__DEV__) {console.log('[AnimatedVideoView] Init Options:', vlcSource.initOptions);}
@@ -182,6 +183,7 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
                     artist={artist}
                     audioEqualizer={audioEqualizer}
                     audioDelay={audioDelay}
+                    videoEnhancement={videoEnhancement}
                     onLoad={onLoad}
                     onProgress={onProgress}
                     onEnd={onEnd}

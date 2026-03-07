@@ -100,6 +100,11 @@ public class ReactVlcPlayerViewManager extends SimpleViewManager<ReactVlcPlayerV
         videoView.setRepeatModifier(repeat);
     }
 
+    @ReactProp(name = "videoEnhancement", defaultBoolean = false)
+    public void setVideoEnhancement(final ReactVlcPlayerView videoView, final boolean enabled) {
+        videoView.setVideoEnhancement(enabled);
+    }
+
     @ReactProp(name = PROP_PROGRESS_UPDATE_INTERVAL, defaultFloat = 0f)
     public void setInterval(final ReactVlcPlayerView videoView, final float interval) {
         videoView.setmProgressUpdateInterval((long) interval);

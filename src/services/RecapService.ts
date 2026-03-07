@@ -13,7 +13,8 @@ export class RecapService {
         videoPath: string,
         tracks: SubtitleTrack[],
         existingCues: SubtitleCue[],
-        resumePosition: number
+        resumePosition: number,
+        _videoTitle?: string
     ): Promise<string | null> {
         let cues = existingCues;
 

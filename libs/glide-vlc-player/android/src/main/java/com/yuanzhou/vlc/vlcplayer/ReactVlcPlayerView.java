@@ -218,12 +218,69 @@ class ReactVlcPlayerView extends TextureView implements
     // Guard against double cleanUpResources()
     private boolean mCleaned = false;
 
+    // When non-null, createPlayer uses these instead of reading initOptions from srcMap.
+    // Set temporarily by applyEnhancementWithRecreate().
+    private ArrayList<String> mEffectiveInitOptionsOverride = null;
+
     // ─── MEDIA SESSION ───────────────────────────────────────────────────────
 
     private MediaSessionCompat mMediaSession;
     private NotificationManagerCompat mNotificationManager;
     private String mVideoTitle = "Video";
     private String mVideoArtist = "Glide";
+
+    // ─── VIDEO ENHANCEMENT ──────────────────────────────────────────────────
+
+    /**
+     * Reason for a player recreate — isolates enhancement changes from other
+     * recreate triggers so they cannot interfere with each other's state.
+     */
+    private enum RecreateReason { SOURCE_CHANGE, DECODER_CHANGE, ENHANCEMENT_CHANGE }
+
+    private boolean  mRequestedEnhancement = false;   // What React wants
+    private boolean  mAppliedEnhancement = false;      // What's actually applied
+    private boolean  mEnhancementCompatiblePipeline = false;
+    private long     mEnhancementGeneration = 0;       // Gates all callbacks + restore
+    private boolean  mEnhancementRecreateInFlight = false;
+    private Runnable mPendingEnhancementRunnable = null;
+    private boolean  mEnhancementRestoreCompleted = false; // Idempotent restore guard
+    private PlaybackSnapshot mPendingEnhancementSnapshot = null;
+    private boolean  mPendingEnhancementTarget = false;
+
+    private static final long ENHANCEMENT_DEBOUNCE_MS = 75L;
+    private final Handler mEnhancementHandler = new Handler(Looper.getMainLooper());
+
+    /**
+     * Captured playback state before an enhancement recreate.
+     * Used to restore all player state after the recreate completes.
+     */
+    private static class PlaybackSnapshot {
+        final long    timeMs;
+        final boolean userPausedIntent;     // isPaused (user intent, distinct from native isPlaying)
+        final boolean nativeWasPlaying;
+        final float   rate;
+        final int     audioTrack;
+        final int     textTrack;            // -1 = disabled
+        final long    audioDelayMs;
+        final String  subtitleUri;          // null if none
+        final boolean externalSubAttached;  // if external subtitle slave was added
+        final boolean muted;
+
+        PlaybackSnapshot(long timeMs, boolean userPausedIntent, boolean nativeWasPlaying,
+                         float rate, int audioTrack, int textTrack, long audioDelayMs,
+                         String subtitleUri, boolean externalSubAttached, boolean muted) {
+            this.timeMs = timeMs;
+            this.userPausedIntent = userPausedIntent;
+            this.nativeWasPlaying = nativeWasPlaying;
+            this.rate = rate;
+            this.audioTrack = audioTrack;
+            this.textTrack = textTrack;
+            this.audioDelayMs = audioDelayMs;
+            this.subtitleUri = subtitleUri;
+            this.externalSubAttached = externalSubAttached;
+            this.muted = muted;
+        }
+    }
 
     // =========================================================================
     // Constructor
@@ -673,6 +730,60 @@ class ReactVlcPlayerView extends TextureView implements
         eventEmitter.sendEvent(eventMap, VideoEventEmitter.EVENT_ON_IS_PLAYING);
     }
 
+    private String mDecoderMode = "hardware";
+
+    private void maybeMarkEnhancementAppliedFromNormalCreate() {
+        if (!mEnhancementRecreateInFlight && mAppliedEnhancement != mRequestedEnhancement) {
+            mAppliedEnhancement = mRequestedEnhancement;
+        }
+    }
+
+    private void maybeRestorePendingEnhancementSnapshot() {
+        if (!mEnhancementRecreateInFlight || mPendingEnhancementSnapshot == null || mEnhancementRestoreCompleted) {
+            return;
+        }
+        restorePlaybackSnapshot(mPendingEnhancementSnapshot, mEnhancementGeneration, mPendingEnhancementTarget);
+    }
+
+    private boolean shouldUseEnhancementCompatiblePipeline(boolean targetEnhancement) {
+        return "hardware".equals(mDecoderMode) && (targetEnhancement || mEnhancementCompatiblePipeline);
+    }
+
+    private boolean supportsVisibleLiveEnhancement(boolean targetEnhancement) {
+        if ("software".equals(mDecoderMode) || "hardware_plus".equals(mDecoderMode)) {
+            return true;
+        }
+        return mEnhancementCompatiblePipeline;
+    }
+
+    private boolean applyVideoEnhancementLive(boolean enabled) {
+        if (mMediaPlayer == null) {
+            return false;
+        }
+        if (!supportsVisibleLiveEnhancement(enabled)) {
+            return false;
+        }
+        if (!VlcAdjustBridge.isAvailable()) {
+            return false;
+        }
+
+        try {
+            long mediaPlayerHandle = mMediaPlayer.getInstance();
+            if (mediaPlayerHandle == 0L) {
+                return false;
+            }
+
+            boolean applied = VlcAdjustBridge.applyEnhancement(mediaPlayerHandle, enabled);
+            if (applied) {
+                mAppliedEnhancement = enabled;
+            }
+            return applied;
+        } catch (Exception e) {
+            Log.w(TAG, "[ENHANCE] live apply failed: " + e.getMessage());
+            return false;
+        }
+    }
+
     // =========================================================================
     // VLC Media Player listener
     // =========================================================================
@@ -753,6 +864,8 @@ class ReactVlcPlayerView extends TextureView implements
                     WritableMap map = createEventMap();
                     if (map == null)
                         return;
+                    maybeRestorePendingEnhancementSnapshot();
+                    maybeMarkEnhancementAppliedFromNormalCreate();
                     emitPlayingEvent(map);
                     updateVideoInfo();
                     updateMediaMetadata();
@@ -1035,12 +1148,14 @@ class ReactVlcPlayerView extends TextureView implements
                 Log.w(TAG, "[CREATE_PLAYER] URI is empty, aborting");
                 return;
             }
+            if (srcMap.hasKey("decoderMode") && !srcMap.isNull("decoderMode")) {
+                mDecoderMode = srcMap.getString("decoderMode");
+            }
 
             boolean isNetwork = srcMap.hasKey("isNetwork") && srcMap.getBoolean("isNetwork");
             boolean autoplay = !srcMap.hasKey("autoplay") || srcMap.getBoolean("autoplay");
             int initType = srcMap.hasKey("initType") ? srcMap.getInt("initType") : 1;
             ReadableArray mediaOptions = srcMap.hasKey("mediaOptions") ? srcMap.getArray("mediaOptions") : null;
-            ReadableArray initOptions = srcMap.hasKey("initOptions") ? srcMap.getArray("initOptions") : null;
             int hwDecoderEnabled = srcMap.hasKey("hwDecoderEnabled") ? srcMap.getInt("hwDecoderEnabled") : 1;
             int hwDecoderForced = srcMap.hasKey("hwDecoderForced") ? srcMap.getInt("hwDecoderForced") : 0;
 
@@ -1049,21 +1164,15 @@ class ReactVlcPlayerView extends TextureView implements
                     + " initType=" + initType + " hw=" + hwDecoderEnabled + "/" + hwDecoderForced
                     + " savedPos=" + mSavedPosition);
 
-            if (initOptions != null) {
-                ArrayList options = initOptions.toArrayList();
-                for (Object option : options)
-                    cOptions.add((String) option);
+            // Enhancement is always composed natively. Explicit overrides are only
+            // used for a specific in-flight enhancement recreate target.
+            if (mEffectiveInitOptionsOverride != null) {
+                cOptions.addAll(mEffectiveInitOptionsOverride);
+                Log.i(TAG, "[CREATE_PLAYER] using enhancement init options override (" + cOptions.size() + " options)");
             } else {
-                cOptions.add("--network-caching=600");
-                cOptions.add("--file-caching=600");
-                cOptions.add("--live-caching=600");
+                cOptions.addAll(buildEffectiveInitOptions(mRequestedEnhancement));
             }
-
-            cOptions.add("--audio-time-stretch");
-            cOptions.add("--audio-filter=scaletempo");
-            cOptions.add("--scaletempo-overlap=0.30");
-            cOptions.add("--scaletempo-search=15");
-            cOptions.add("--audio-desync=100");
+            mEnhancementCompatiblePipeline = shouldUseEnhancementCompatiblePipeline(mRequestedEnhancement);
 
             libvlc = (initType == 1) ? new LibVLC(getContext()) : new LibVLC(getContext(), cOptions);
             mMediaPlayer = new MediaPlayer(libvlc);
@@ -1171,6 +1280,8 @@ class ReactVlcPlayerView extends TextureView implements
             mMediaPlayer.setMedia(m);
             m.release();
             mMediaPlayer.setScale(0);
+
+            applyVideoEnhancementLive(mRequestedEnhancement);
 
             if (_subtitleUri != null) {
                 mMediaPlayer.addSlave(Media.Slave.Type.Subtitle, _subtitleUri, true);
@@ -1502,6 +1613,11 @@ class ReactVlcPlayerView extends TextureView implements
     }
 
     public void setSrc(String uri, boolean isNetStr, boolean autoplay) {
+        // Cancel any pending enhancement work for the old source
+        cancelPendingEnhancement();
+        mAppliedEnhancement = false;
+        mEnhancementCompatiblePipeline = false;
+
         this.src = uri;
         releasePlayer();
         mSavedPosition = 0f;
@@ -1518,6 +1634,11 @@ class ReactVlcPlayerView extends TextureView implements
             this.srcMap = src;
             return;
         }
+
+        // Cancel any pending enhancement work for the old source
+        cancelPendingEnhancement();
+        mAppliedEnhancement = false;
+        mEnhancementCompatiblePipeline = false;
 
         Log.i(TAG, "[SET_SRC] new URI: " + newUri);
         this.src = newUri;
@@ -2039,6 +2160,331 @@ class ReactVlcPlayerView extends TextureView implements
     }
 
     // =========================================================================
+    // Video Enhancement Lifecycle
+    // =========================================================================
+
+    /**
+     * Build effective init options from srcMap + explicit target enhancement state.
+     * NEVER reads mRequestedEnhancement — each recreate is bound to the target it
+     * was started for (avoids TOCTOU if mRequestedEnhancement changes mid-flight).
+     * srcMap is NOT mutated.
+     */
+    private ArrayList<String> buildEffectiveInitOptions(boolean targetEnhancement) {
+        ArrayList<String> options = new ArrayList<>();
+        final boolean useEnhancementCompatiblePipeline = shouldUseEnhancementCompatiblePipeline(targetEnhancement);
+
+        // Pull base initOptions from srcMap if present
+        if (srcMap != null && srcMap.hasKey("initOptions")) {
+            ReadableArray initOptions = srcMap.getArray("initOptions");
+            if (initOptions != null) {
+                ArrayList srcOptions = initOptions.toArrayList();
+                for (Object opt : srcOptions) {
+                    String optStr = (String) opt;
+                    // Filter out any enhancement-related options that JS may still send
+                    if (optStr.startsWith("--video-filter=adjust")
+                            || optStr.startsWith("--brightness=")
+                            || optStr.startsWith("--contrast=")
+                            || optStr.startsWith("--saturation=")
+                            || optStr.startsWith("--gamma=")
+                            || optStr.equals("--no-mediacodec-dr")
+                            || optStr.equals("--no-omxil-dr")) {
+                        continue; // Skip — managed by native enhancement state
+                    }
+                    options.add(optStr);
+                }
+            }
+        }
+
+        // Add fallback options if srcMap had no initOptions
+        if (options.isEmpty()) {
+            options.add("--network-caching=600");
+            options.add("--file-caching=600");
+            options.add("--live-caching=600");
+        }
+
+        // Always add audio time-stretch
+        options.add("--audio-time-stretch");
+        options.add("--audio-filter=scaletempo");
+        options.add("--scaletempo-overlap=0.30");
+        options.add("--scaletempo-search=15");
+        options.add("--audio-desync=100");
+
+        // Enhancement-specific options
+        if (targetEnhancement) {
+            options.add("--video-filter=adjust");
+            options.add("--brightness=1.03");
+            options.add("--contrast=1.08");
+            options.add("--saturation=1.30");
+            options.add("--gamma=0.95");
+        }
+
+        if (useEnhancementCompatiblePipeline) {
+            options.add("--no-mediacodec-dr");
+            options.add("--no-omxil-dr");
+        }
+
+        return options;
+    }
+
+    /**
+     * Capture a snapshot of all current playback state.
+     * Returns null if no valid player/media is loaded.
+     */
+    private PlaybackSnapshot capturePlaybackSnapshot() {
+        if (mMediaPlayer == null) {
+            Log.w(TAG, "[ENHANCE] capturePlaybackSnapshot: no player loaded");
+            return null;
+        }
+
+        long timeMs;
+        boolean nativePlaying;
+        float rate;
+        try {
+            timeMs = mMediaPlayer.getTime();
+            nativePlaying = mMediaPlayer.isPlaying();
+            rate = mMediaPlayer.getRate();
+        } catch (Exception e) {
+            Log.w(TAG, "[ENHANCE] capturePlaybackSnapshot: error reading state: " + e.getMessage());
+            return null;
+        }
+
+        PlaybackSnapshot snapshot = new PlaybackSnapshot(
+                timeMs,
+                isPaused,          // user intent
+                nativePlaying,
+                rate,
+                _audioTrack,
+                _textTrack,
+                mAudioDelay,
+                _subtitleUri,
+                _subtitleUri != null && !_subtitleUri.isEmpty(),
+                mMuted
+        );
+
+        return snapshot;
+    }
+
+    /**
+     * Entry point from React prop. Coalesces rapid toggles via debounce.
+     */
+    public void setVideoEnhancement(boolean enabled) {
+        mRequestedEnhancement = enabled;
+
+        // Prefer the live LibVLC adjust path to avoid player recreation and the
+        // black-frame gap. Recreate remains as a fallback if the bridge is unavailable.
+        if (!mEnhancementRecreateInFlight && applyVideoEnhancementLive(enabled)) {
+            clearPendingEnhancementRunnable();
+            invalidatePendingEnhancementCallbacks();
+            mAppliedEnhancement = enabled;
+            return;
+        }
+
+        // If a recreate is already in flight, let it finish and reconcile against
+        // the latest requested state rather than invalidating its generation.
+        if (mEnhancementRecreateInFlight) {
+            clearPendingEnhancementRunnable();
+            return;
+        }
+
+        // No-op if already applied
+        if (mRequestedEnhancement == mAppliedEnhancement) {
+            clearPendingEnhancementRunnable();
+            return;
+        }
+
+        clearPendingEnhancementRunnable();
+
+        // Increment generation (invalidates any stale callbacks from previous attempts)
+        mEnhancementGeneration++;
+        final long generation = mEnhancementGeneration;
+
+        // Debounce: coalesce to final requested state
+        mPendingEnhancementRunnable = () -> {
+            mPendingEnhancementRunnable = null;
+            scheduleEnhancementApply(generation);
+        };
+        mEnhancementHandler.postDelayed(mPendingEnhancementRunnable, ENHANCEMENT_DEBOUNCE_MS);
+    }
+
+    /**
+     * Called after debounce settles. Performs the actual enhancement recreate.
+     */
+    private void scheduleEnhancementApply(long generation) {
+        // Stale generation check
+        if (generation != mEnhancementGeneration) {
+            return;
+        }
+
+        if (mEnhancementRecreateInFlight) {
+            return;
+        }
+
+        // Re-check if still needed
+        if (mRequestedEnhancement == mAppliedEnhancement) {
+            return;
+        }
+
+        // Capture current state
+        PlaybackSnapshot snapshot = capturePlaybackSnapshot();
+
+        if (snapshot == null) {
+            // No player loaded — enhancement will be applied on next createPlayer
+            return;
+        }
+
+        // Mark in-flight
+        mEnhancementRecreateInFlight = true;
+        mEnhancementRestoreCompleted = false;
+        mPendingEnhancementSnapshot = snapshot;
+        mPendingEnhancementTarget = mRequestedEnhancement;
+
+        applyEnhancementWithRecreate(mRequestedEnhancement, generation, snapshot);
+    }
+
+    /**
+     * Perform the enhancement recreate with a specific target state and generation.
+     */
+    private void applyEnhancementWithRecreate(boolean targetEnhancement, long generation,
+                                               PlaybackSnapshot snapshot) {
+        // Build new init options with explicit target (not mRequestedEnhancement)
+        ArrayList<String> effectiveOptions = buildEffectiveInitOptions(targetEnhancement);
+
+        // Save position for createPlayer's built-in restore
+        if (snapshot.timeMs > 0 && mMediaPlayer != null) {
+            try {
+                long lengthMs = mMediaPlayer.getLength();
+                if (lengthMs > 0) {
+                    mSavedPosition = (float) snapshot.timeMs / lengthMs;
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "[ENHANCE] error calculating position: " + e.getMessage());
+            }
+        }
+
+        // Set paused intent before recreate so createPlayer respects it
+        isPaused = snapshot.userPausedIntent;
+
+        // Release and recreate with new options
+        // We override the init options by temporarily adjusting how createPlayer reads them
+        releasePlayer();
+
+        // Create player with effective options — we override the initOptions that
+        // createPlayer normally reads from srcMap by using a wrapper approach.
+        // Since createPlayer reads initOptions from srcMap, we need to build cOptions
+        // with our effective options. We achieve this by storing them and using them
+        // in createPlayer when it checks initOptions.
+        mEffectiveInitOptionsOverride = effectiveOptions;
+        createPlayer(!snapshot.userPausedIntent, true);
+        mEffectiveInitOptionsOverride = null;
+
+        // Safety timer fallback
+        final long restoreGeneration = generation;
+        mEnhancementHandler.postDelayed(() -> {
+            if (mEnhancementGeneration == restoreGeneration && !mEnhancementRestoreCompleted) {
+                restorePlaybackSnapshot(snapshot, restoreGeneration, targetEnhancement);
+            }
+        }, 500);
+    }
+
+    /**
+     * Restore playback state after enhancement recreate.
+     * Idempotent via mEnhancementRestoreCompleted — will only run once per generation.
+     * Restore order: mute → subtitle → delay → rate → tracks → seek → play/pause intent
+     */
+    private void restorePlaybackSnapshot(PlaybackSnapshot snapshot, long generation,
+                                          boolean targetEnhancement) {
+        // Stale generation check
+        if (generation != mEnhancementGeneration) {
+            return;
+        }
+
+        // Idempotent guard
+        if (mEnhancementRestoreCompleted) {
+            return;
+        }
+
+        if (mMediaPlayer == null) {
+            Log.w(TAG, "[ENHANCE] restorePlaybackSnapshot: no player, skipping");
+            return;
+        }
+
+        mEnhancementRestoreCompleted = true;
+
+        // 1. Mute state
+        setMutedModifier(snapshot.muted);
+
+        // 2. External subtitle slave attachment
+        if (snapshot.externalSubAttached && snapshot.subtitleUri != null) {
+            mMediaPlayer.addSlave(Media.Slave.Type.Subtitle, snapshot.subtitleUri, true);
+        }
+
+        // 3. Audio delay
+        if (snapshot.audioDelayMs != 0) {
+            mMediaPlayer.setAudioDelay(snapshot.audioDelayMs * 1000);
+        }
+
+        // 4. Rate
+        if (snapshot.rate != 1.0f) {
+            mMediaPlayer.setRate(snapshot.rate);
+        }
+
+        // 5. Track selections
+        if (snapshot.audioTrack != -1) {
+            mMediaPlayer.setAudioTrack(snapshot.audioTrack);
+        }
+        if (snapshot.textTrack != -1) {
+            mMediaPlayer.setSpuTrack(snapshot.textTrack);
+        } else {
+            // Explicitly disable subtitles
+            if (mMediaPlayer.getSpuTracksCount() > 0) {
+                mMediaPlayer.setSpuTrack(-1);
+            }
+        }
+
+        // 6. Position seek (handled by createPlayer's mSavedPosition mechanism)
+        // Already applied via mSavedPosition before createPlayer was called
+
+        // 7. Last: paused/playing intent
+        // Already set via isPaused before createPlayer, and createPlayer respects it
+
+        // Mark enhancement as applied
+        mAppliedEnhancement = targetEnhancement;
+        mEnhancementRecreateInFlight = false;
+        mPendingEnhancementSnapshot = null;
+
+        // Reconcile: if mRequestedEnhancement changed again during recreate
+        if (mRequestedEnhancement != mAppliedEnhancement) {
+            // Re-trigger with new request
+            mEnhancementGeneration++;
+            final long newGen = mEnhancementGeneration;
+            mEnhancementHandler.post(() -> scheduleEnhancementApply(newGen));
+        }
+    }
+
+    /**
+     * Cancel any pending enhancement work. Called from cleanup, setSrc, releasePlayer.
+     */
+    private void cancelPendingEnhancement() {
+        clearPendingEnhancementRunnable();
+        invalidatePendingEnhancementCallbacks();
+    }
+
+    private void clearPendingEnhancementRunnable() {
+        if (mPendingEnhancementRunnable != null) {
+            mEnhancementHandler.removeCallbacks(mPendingEnhancementRunnable);
+            mPendingEnhancementRunnable = null;
+        }
+    }
+
+    private void invalidatePendingEnhancementCallbacks() {
+        mEnhancementGeneration++;
+        mEnhancementRecreateInFlight = false;
+        mEnhancementRestoreCompleted = false;
+        mPendingEnhancementSnapshot = null;
+        mPendingEnhancementTarget = mRequestedEnhancement;
+    }
+
+    // =========================================================================
     // Cleanup
     // =========================================================================
 
@@ -2048,6 +2494,9 @@ class ReactVlcPlayerView extends TextureView implements
         if (mCleaned)
             return;
         mCleaned = true;
+
+        // Cancel pending enhancement work
+        cancelPendingEnhancement();
 
         clearPendingResizeRequest();
         cancelPendingSeek();
@@ -2172,6 +2621,9 @@ class ReactVlcPlayerView extends TextureView implements
             Log.d(TAG, "[VIDEO_INFO] skipping — junk duration=" + duration);
             return;
         }
+
+        maybeRestorePendingEnhancementSnapshot();
+        maybeMarkEnhancementAppliedFromNormalCreate();
 
         WritableMap info = Arguments.createMap();
         info.putDouble("duration", duration);

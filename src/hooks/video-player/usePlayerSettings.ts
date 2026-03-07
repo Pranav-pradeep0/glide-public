@@ -127,7 +127,7 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
 
     const setDecoder = useCallback((decoder: 'hardware' | 'software' | 'hardware_plus') => {
         setSettings(prev => {
-            if (prev.decoder === decoder) {return prev;}
+            if (prev.decoder === decoder) { return prev; }
 
             return {
                 ...prev,
@@ -187,7 +187,7 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
         if (minutes !== null && minutes > 0) {
             // Set actual timer
             sleepTimerRef.current = setTimeout(() => {
-                if (__DEV__) {console.log('[usePlayerSettings] Sleep timer triggered');}
+                if (__DEV__) { console.log('[usePlayerSettings] Sleep timer triggered'); }
                 onSleepTimerEnd?.();
             }, minutes * 60 * 1000);
 
@@ -231,10 +231,6 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
             return {
                 ...prev,
                 videoEnhancement: newValue,
-                // playerKey: prev.playerKey + 1, // Force remount if needed, but maybe not for just video filter?
-                // Actually video filters often require restart or dynamic update.
-                // Let's keep existing behavior if it works.
-                playerKey: prev.playerKey + 1,
             };
         });
     }, [showToast]);
@@ -310,7 +306,7 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
 
     // Compute effective bands for VLC
     const audioEqualizer = useMemo(() => {
-        if (!settings.equalizerEnabled) {return undefined;}
+        if (!settings.equalizerEnabled) { return undefined; }
 
         if (settings.equalizerPreset === 'custom') {
             return settings.customEqualizerBands;

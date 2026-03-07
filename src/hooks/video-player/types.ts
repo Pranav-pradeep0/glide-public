@@ -425,7 +425,7 @@ export interface VideoPlayerProps {
  * Format seconds to MM:SS or H:MM:SS string
  */
 export const formatTime = (seconds: number): string => {
-    if (!isFinite(seconds) || seconds < 0) {return '00:00';}
+    if (!isFinite(seconds) || seconds < 0) { return '00:00'; }
     const hrs = Math.floor(seconds / 3600);
     const mins = Math.floor((seconds % 3600) / 60);
     const secs = Math.floor(seconds % 60);
@@ -442,7 +442,7 @@ export const rafThrottle = <T extends (...args: any[]) => void>(fn: T) => {
     let lastArgs: any[] | null = null;
     return (...args: Parameters<T>) => {
         lastArgs = args;
-        if (rafId !== null) {return;}
+        if (rafId !== null) { return; }
         rafId = requestAnimationFrame(() => {
             rafId = null;
             if (lastArgs) {
@@ -462,7 +462,7 @@ export const createDebounce = <T extends (...args: any[]) => void>(
 ) => {
     let timeoutId: NodeJS.Timeout | null = null;
     const debounced = (...args: Parameters<T>) => {
-        if (timeoutId) {clearTimeout(timeoutId);}
+        if (timeoutId) { clearTimeout(timeoutId); }
         timeoutId = setTimeout(() => {
             fn(...args);
             timeoutId = null;
@@ -478,21 +478,18 @@ export const createDebounce = <T extends (...args: any[]) => void>(
 };
 
 /**
- * Generate optimized VLC init options based on source and decoder
+ * Generate optimized VLC init options based on source and decoder.
  */
 export const getOptimizedInitOptions = (
     uri: string,
     decoder: 'hardware' | 'software' | 'hardware_plus',
-    enableEnhancement: boolean = false
 ): string[] => {
     const isNetworkStream = uri.startsWith('http') || uri.startsWith('rtsp');
 
     const baseOptions = [
         '--no-video-title-show',
         '--no-sub-autodetect-file',
-        // Removed --stats to save CPU cycles
         '--audio-filter=scaletempo',  // Essential for speed control
-        // Removed heavy scaletempo search/overlap overrides (return to VLC defaults)
     ];
 
     // Only use fast-seek for local files
@@ -500,29 +497,11 @@ export const getOptimizedInitOptions = (
         baseOptions.push('--input-fast-seek');
     }
 
-    // Video Enhancement Options ("Vivid Mode")
-    if (enableEnhancement) {
-        baseOptions.push(
-            '--video-filter=adjust',
-            '--brightness=1.03',
-            '--contrast=1.08',
-            '--saturation=1.30',
-            '--gamma=0.95'
-        );
-    }
-
     // Decoder Options
     if (decoder === 'software') {
         baseOptions.push('--codec=avcodec');
     } else {
         // Hardware decoders
-        if (enableEnhancement) {
-            baseOptions.push(
-                '--no-mediacodec-dr',
-                '--no-omxil-dr'
-            );
-        }
-
         baseOptions.push(
             '--avcodec-fast',             // Standard speed optimization
             '--avcodec-skiploopfilter=1', // Safe quality compromise (skips only non-ref frames)
@@ -541,7 +520,7 @@ export const getOptimizedInitOptions = (
     } else {
         return [
             ...baseOptions,
-            '--file-caching=600', // Slight buffer increase (600ms) to smooth out speed changes
+            '--file-caching=600', // Slight buffer (600ms) to smooth out speed changes
         ];
     }
 };

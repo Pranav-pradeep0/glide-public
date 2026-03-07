@@ -80,22 +80,22 @@ interface SlideData {
 const SLIDES: SlideData[] = [
     {
         id: '1',
-        title: 'Just the Usuals',
-        tagline: 'Use it like every other player. Nothing fancy.',
+        title: 'Simple & Fast',
+        tagline: 'Easy controls and quick settings.',
         bullets: [
             'Smooth gesture controls',
-            'Fully customizable subtitles',
-            'Everything fast.. very.',
+            'Customizable subtitles',
+            'Fast and responsive',
         ],
     },
     {
         id: '2',
-        title: 'Things You Might Like',
-        tagline: 'Experimental features. Which will elevate your viewing experience.',
+        title: 'Watch Better.',
+        tagline: 'Experimental features for a better viewing experience.',
         bullets: [
             'Color enhancement',
-            'Sync your subtitles in a better way. No more millisecond headaches.',
             'Haptic enabled movie playback.',
+            'Assisted Subtitle Sync',
         ],
     },
     {
@@ -105,7 +105,7 @@ const SLIDES: SlideData[] = [
         bullets: [
             'Zero data collection',
             'Free forever, no ads',
-            'Anything feels slow ? Clone it, optimize it.',
+            'Found a bug? Open an issue or send a PR',
         ],
     },
 ];
@@ -310,7 +310,7 @@ const MergingCTA = React.memo<MergingCTAProps>(({
 
     const skipStyle = useAnimatedStyle(() => {
         const cw = containerWsv.value;
-        if (!cw) {return { opacity: 0 };}
+        if (!cw) { return { opacity: 0 }; }
 
         const bw = (cw - GAP) / 2;
         const t = easeInOut(phaseT(progress.value, 0, 0.55));
@@ -324,7 +324,7 @@ const MergingCTA = React.memo<MergingCTAProps>(({
 
     const nextStyle = useAnimatedStyle(() => {
         const cw = containerWsv.value;
-        if (!cw) {return { opacity: 0 };}
+        if (!cw) { return { opacity: 0 }; }
 
         const bw = (cw - GAP) / 2;
         const t = easeInOut(phaseT(progress.value, 0, 0.55));
@@ -338,7 +338,7 @@ const MergingCTA = React.memo<MergingCTAProps>(({
 
     const pillStyle = useAnimatedStyle(() => {
         const cw = containerWsv.value;
-        if (!cw) {return { opacity: 0 };}
+        if (!cw) { return { opacity: 0 }; }
 
         const bw = (cw - GAP) / 2;
         const expand = easeOutQuart(phaseT(progress.value, 0.32, 0.82));
@@ -496,7 +496,7 @@ export default function OnboardingScreen() {
 
     const handleNext = useCallback(() => {
         // Block if a programmatic scroll is already in progress.
-        if (isScrollingRef.current) {return;}
+        if (isScrollingRef.current) { return; }
 
         // Read the latest index directly from the ref — never from a potentially
         // stale closure over `currentIndex` state.

@@ -36,6 +36,7 @@ interface RCTVLCPlayerNativeProps {
     audioDelay?: number;
     title?: string;
     artist?: string;
+    videoEnhancement?: boolean;
     onVideoLoadStart?: (event: any) => void;
     onVideoOpen?: (event: any) => void;
     onVideoError?: (event: any) => void;
@@ -98,6 +99,7 @@ export interface VLCPlayerProps extends ViewProps {
     audioDelay?: number;
     title?: string;
     artist?: string;
+    videoEnhancement?: boolean;
 
     /* Callbacks */
     onVideoLoadStart?: (event: any) => void;
