@@ -837,7 +837,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                 setRecapVisible(false);
                 setIsGeneratingRecap(false);
                 setRecapLoadingMessage(undefined);
-                bookmarksHook.showToastWithMessage('Not enough dialogue for a recap', 'info');
+                bookmarksHook.showToastWithMessage('Not enough dialogue for a recap', 'recap');
                 return;
             }
 

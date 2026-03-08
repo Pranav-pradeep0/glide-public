@@ -110,7 +110,7 @@ export function usePlayerBookmarks(options: UsePlayerBookmarksOptions): UsePlaye
      */
     const deleteBookmark = useCallback((bookmarkId: string) => {
         storeRemoveBookmark(videoPath, bookmarkId);
-        showToastWithMessage('Bookmark deleted');
+        showToastWithMessage('Bookmark deleted', 'bookmark-remove');
 
         if (__DEV__) {
             if (__DEV__) {console.log('[usePlayerBookmarks] Bookmark deleted:', bookmarkId);}

@@ -78,6 +78,7 @@ const Scrubber: React.FC<ScrubberProps> = ({
 }) => {
     const trackWidth = useSharedValue(0);
     const scrubGestureStarted = useSharedValue(false);
+    const lastSeekDispatchAt = useSharedValue(0);
 
     const progress = useDerivedValue(() => {
         const d = duration.value || 1;
@@ -133,6 +134,7 @@ const Scrubber: React.FC<ScrubberProps> = ({
             const newProgress = Math.max(0, Math.min(1, e.x / trackWidth.value));
             const targetTime = newProgress * duration.value;
             seekPreviewTime.value = targetTime;
+            lastSeekDispatchAt.value = Date.now();
             runOnJS(onSeekStart)();
             // Ensure HUD and other listeners are updated immediately
             runOnJS(onSeek)(targetTime);
@@ -144,7 +146,11 @@ const Scrubber: React.FC<ScrubberProps> = ({
             const newProgress = Math.max(0, Math.min(1, e.x / trackWidth.value));
             const targetTime = newProgress * (duration.value || 0);
             seekPreviewTime.value = targetTime;
-            runOnJS(onSeek)(targetTime);
+            const now = Date.now();
+            if (now - lastSeekDispatchAt.value >= 33) {
+                lastSeekDispatchAt.value = now;
+                runOnJS(onSeek)(targetTime);
+            }
         })
         .onFinalize(() => {
             'worklet';

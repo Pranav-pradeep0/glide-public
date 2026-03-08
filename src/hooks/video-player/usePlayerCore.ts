@@ -20,7 +20,9 @@ import {
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 
 /** Minimum ms between live preview seeks while scrubbing. */
-const LIVE_PREVIEW_THROTTLE_MS = 80;
+const LIVE_PREVIEW_THROTTLE_MS = 40;
+const SEEK_SETTLE_WINDOW_MS = 700;
+const SEEK_CONFIRM_EPSILON_SEC = 0.35;
 
 // ─── INITIAL STATE ────────────────────────────────────────────────────────────
 
@@ -84,6 +86,7 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
 
     // Seek settling
     const seekSettledUntilRef = useRef<number>(0);
+    const pendingCommittedSeekRef = useRef<number | null>(null);
 
     // Player stopped flag
     const playerStoppedRef = useRef<boolean>(false);
@@ -136,7 +139,7 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
      * applySeekToVLC — the single exit point for all seeks to native.
      * Simplified: no JS-side dedup (native bridge handles dedup).
      */
-    const applySeekToVLC = useCallback((timeInSeconds: number) => {
+    const applySeekToVLC = useCallback((timeInSeconds: number, isPreview: boolean = false) => {
         if (!state.isVideoLoaded || !state.duration || state.duration === 0) {
             if (__DEV__) {console.log('[SEEK] applySeekToVLC skipped — not loaded or no duration');}
             return;
@@ -148,11 +151,13 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
         const player = videoRef.current;
         if (player && typeof player.seek === 'function') {
             if (__DEV__) {console.log('[SEEK] applySeekToVLC fraction=' + fraction.toFixed(4)
-                + ' time=' + clamped.toFixed(2) + 's');}
-            player.seek(fraction);
-            // Reset the native seek prop to -1 immediately so React re-renders
-            // don't re-send the same value (which causes SEEK_FILTER log spam).
-            player.seek(-1);
+                + ' time=' + clamped.toFixed(2) + 's'
+                + ' preview=' + isPreview);}
+            if (isPreview && typeof player.previewSeek === 'function') {
+                player.previewSeek(fraction);
+            } else {
+                player.seek(fraction);
+            }
         } else if (__DEV__) {
             console.warn('[SEEK] applySeekToVLC — no player instance');
         }
@@ -175,7 +180,7 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
 
         if (sinceLast >= LIVE_PREVIEW_THROTTLE_MS) {
             if (__DEV__) {console.log('[SEEK] previewSeek immediate t=' + clamped.toFixed(2) + 's');}
-            applySeekToVLC(clamped);
+            applySeekToVLC(clamped, true);
             lastLivePreviewAtRef.current = now;
             if (livePreviewTimerRef.current) {
                 clearTimeout(livePreviewTimerRef.current);
@@ -188,7 +193,7 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
             livePreviewTimerRef.current = setTimeout(() => {
                 livePreviewTimerRef.current = null;
                 lastLivePreviewAtRef.current = Date.now();
-                applySeekToVLC(clamped);
+                applySeekToVLC(clamped, true);
             }, wait);
         }
     }, [state.duration, currentTimeShared, lastSyncPosition, lastSyncTimestamp, applySeekToVLC]);
@@ -217,7 +222,8 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
 
         applySeekToVLC(clamped);
 
-        seekSettledUntilRef.current = Date.now() + 500;
+        pendingCommittedSeekRef.current = clamped;
+        seekSettledUntilRef.current = Date.now() + SEEK_SETTLE_WINDOW_MS;
 
         setState(prev => ({
             ...prev,
@@ -372,7 +378,6 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
                 const fraction = resumeTime / durationSec;
                 if (__DEV__) {console.log('[SEEK] resume seek fraction=' + fraction.toFixed(4));}
                 videoRef.current?.seek(fraction);
-                videoRef.current?.seek(-1); // Reset to prevent re-render spam
             }, 100);
         }
     }, [onAudioTracksLoaded, durationShared, currentTimeShared, lastSyncPosition,
@@ -394,18 +399,17 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
 
         const now = Date.now();
 
-        if (now < seekSettledUntilRef.current) {
-            // Still in seek settlement window — update display state but
-            // do NOT overwrite lastSyncPosition (which holds the committed seek target)
-            const shouldUpdate = (now - lastDisplayUpdateRef.current) > PLAYER_CONSTANTS.DISPLAY_TIME_UPDATE_INTERVAL;
-            if (shouldUpdate) {
-                lastDisplayUpdateRef.current = now;
-                setState(prev => {
-                    const timeChanged = Math.abs(timeSec - prev.currentTime) > 0.1;
-                    if (!timeChanged) {return prev;}
-                    return { ...prev, currentTime: timeSec };
-                });
+        const pendingCommittedSeek = pendingCommittedSeekRef.current;
+        if (pendingCommittedSeek !== null) {
+            const delta = Math.abs(timeSec - pendingCommittedSeek);
+            if (delta <= SEEK_CONFIRM_EPSILON_SEC) {
+                pendingCommittedSeekRef.current = null;
+            } else if (now < seekSettledUntilRef.current) {
+                return;
+            } else {
+                pendingCommittedSeekRef.current = null;
             }
+        } else if (now < seekSettledUntilRef.current) {
             return;
         }
 
@@ -593,17 +597,28 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
 
         if (durSec <= 1) {return;}
 
+        const now = Date.now();
+        const pendingCommittedSeek = pendingCommittedSeekRef.current;
+        if (pendingCommittedSeek !== null) {
+            const delta = Math.abs(timeSec - pendingCommittedSeek);
+            if (delta <= SEEK_CONFIRM_EPSILON_SEC) {
+                pendingCommittedSeekRef.current = null;
+            } else if (now < seekSettledUntilRef.current) {
+                return;
+            } else {
+                pendingCommittedSeekRef.current = null;
+            }
+        }
+
         if (__DEV__) {console.log('[SEEK] handleSeek (native) t=' + timeSec.toFixed(2) + 's');}
 
         currentTimeRef.current = timeSec;
         currentTimeShared.value = timeSec;
         lastSyncPosition.value = timeSec;
-        lastSyncTimestamp.value = Date.now();
+        lastSyncTimestamp.value = now;
 
         setState(prev => ({ ...prev, currentTime: timeSec, duration: durSec }));
-
-        onProgressSave?.();
-    }, [currentTimeShared, onProgressSave, lastSyncPosition, lastSyncTimestamp, isScrubbingShared]);
+    }, [currentTimeShared, lastSyncPosition, lastSyncTimestamp, isScrubbingShared]);
 
     // ── CLEANUP ───────────────────────────────────────────────────────────────
 

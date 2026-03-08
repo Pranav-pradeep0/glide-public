@@ -153,9 +153,11 @@ class ReactVlcPlayerView extends TextureView implements
 
     // Bridge-level duplicate filter (only reset on full player recreation)
     private float mLastBridgeSeekValue = Float.NaN;
+    private float mLastBridgePreviewSeekValue = Float.NaN;
 
     // Native-level duplicate filter (ms-based)
     private long mLastSeekTargetMs = -1L;
+    private long mLastPreviewSeekTargetMs = -1L;
 
     // Pending seek play: non-null acts as a sentinel to suppress spurious
     // VLC Paused events during the codec-flush cycle.
@@ -1421,6 +1423,8 @@ class ReactVlcPlayerView extends TextureView implements
         mPlayAfterBufferComplete = false;
         mLastSeekPlayTimestampMs = -1L;
         mLastAppliedRate = Float.NaN;
+        mLastPreviewSeekTargetMs = -1L;
+        mLastBridgePreviewSeekValue = Float.NaN;
         // mEqualizer intentionally not nulled — it can be reused by the next player.
     }
 
@@ -1454,6 +1458,17 @@ class ReactVlcPlayerView extends TextureView implements
             return true;
         }
         mLastBridgeSeekValue = seek;
+        return false;
+    }
+
+    public boolean shouldSkipPreviewSeek(float seek) {
+        if (seek < 0) {
+            return true;
+        }
+        if (seek == mLastBridgePreviewSeekValue) {
+            return true;
+        }
+        mLastBridgePreviewSeekValue = seek;
         return false;
     }
 
@@ -1662,6 +1677,47 @@ class ReactVlcPlayerView extends TextureView implements
                     ? PlaybackStateCompat.STATE_PLAYING
                     : PlaybackStateCompat.STATE_PAUSED);
         }
+    }
+
+    /**
+     * Preview seek used while scrubbing.
+     *
+     * Unlike committed seek, this does not pause for codec flush and does not
+     * wait for buffering/playback resumption. It aims for responsive visual
+     * updates during drag, even if exact frame accuracy is lower.
+     */
+    public void setPreviewPosition(final float position) {
+        if (mMediaPlayer == null) {
+            return;
+        }
+        if (position < 0 || position > 1) {
+            return;
+        }
+
+        mSeekHandler.post(() -> {
+            if (mMediaPlayer == null || mNativeStopped) {
+                return;
+            }
+
+            final long lengthMs = mMediaPlayer.getLength();
+            final long targetMs = lengthMs > 0 ? (long) (position * lengthMs) : -1L;
+
+            if (targetMs >= 0) {
+                if (mLastPreviewSeekTargetMs >= 0
+                        && Math.abs(targetMs - mLastPreviewSeekTargetMs) < SEEK_TIME_EPSILON_MS) {
+                    return;
+                }
+                mLastPreviewSeekTargetMs = targetMs;
+            }
+
+            cancelPendingSeek();
+
+            if (targetMs >= 0) {
+                mMediaPlayer.setTime(targetMs);
+            } else {
+                mMediaPlayer.setPosition(position);
+            }
+        });
     }
 
     /**

@@ -11,7 +11,13 @@ import Animated, {
     cancelAnimation,
 } from 'react-native-reanimated';
 import { Feather } from '@react-native-vector-icons/feather';
-import { HapticsIcon, BackgroundPlayIcon } from './VideoPlayer/PlayerIcons';
+import {
+    HapticsIcon,
+    BackgroundPlayIcon,
+    VisualEnhancementIcon,
+    RecapIcon,
+    SmartSyncIcon,
+} from './VideoPlayer/PlayerIcons';
 
 interface BookmarkToastProps {
     visible: boolean;
@@ -20,6 +26,40 @@ interface BookmarkToastProps {
     onHide: () => void;
     icon?: string;
 }
+
+const ToastIcon = ({ icon }: { icon: string }) => {
+    switch (icon) {
+        case 'haptics':
+            return <HapticsIcon size={18} color="#fff" active={true} />;
+        case 'background-play':
+            return <BackgroundPlayIcon size={18} color="#fff" />;
+        case 'video-enhancement':
+        case 'layers':
+            return <VisualEnhancementIcon size={18} color="#fff" active={true} />;
+        case 'recap':
+            return <RecapIcon size={18} color="#fff" active={true} />;
+        case 'smart-sync':
+            return <SmartSyncIcon size={18} color="#fff" active={true} />;
+        case 'decoder':
+        case 'cpu':
+            return <Feather name="cpu" size={18} color="#fff" />;
+        case 'sleep-timer':
+        case 'clock':
+            return <Feather name="clock" size={18} color="#fff" />;
+        case 'error':
+            return <Feather name="alert-circle" size={18} color="#fff" />;
+        case 'warning':
+            return <Feather name="alert-triangle" size={18} color="#fff" />;
+        case 'success':
+            return <Feather name="check-circle" size={18} color="#fff" />;
+        case 'info':
+            return <Feather name="info" size={18} color="#fff" />;
+        case 'bookmark-remove':
+            return <Feather name="trash-2" size={18} color="#fff" />;
+        default:
+            return <Feather name={icon as any} size={18} color="#fff" />;
+    }
+};
 
 export const BookmarkToast = memo<BookmarkToastProps>(({ visible, message, duration = 2000, onHide, icon = 'bookmark' }) => {
     const translateY = useSharedValue(-100);
@@ -70,18 +110,15 @@ export const BookmarkToast = memo<BookmarkToastProps>(({ visible, message, durat
 
     return (
         <Animated.View style={[styles.container, animatedStyle]} pointerEvents="none">
-            {icon === 'haptics' ? (
-                <HapticsIcon size={18} color="#fff" active={true} />
-            ) : icon === 'background-play' ? (
-                <BackgroundPlayIcon size={18} color="#fff" />
-            ) : (
-                <Feather name={icon as any} size={18} color="#fff" />
-            )}
+            <ToastIcon icon={icon} />
             <Text style={styles.message}>{message}</Text>
         </Animated.View>
     );
 }, (prevProps, nextProps) => {
-    return prevProps.visible === nextProps.visible && prevProps.message === nextProps.message;
+    return prevProps.visible === nextProps.visible
+        && prevProps.message === nextProps.message
+        && prevProps.icon === nextProps.icon
+        && prevProps.duration === nextProps.duration;
 });
 
 BookmarkToast.displayName = 'BookmarkToast';

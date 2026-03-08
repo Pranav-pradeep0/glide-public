@@ -264,6 +264,12 @@ export type VLCPlayerProps = VLCPlayerCallbackProps & {
   seek?: number;
 
   /**
+   * Preview position seek between 0 and 1 without the full committed-seek
+   * pause/buffer/resume flow. Intended for live scrub preview only.
+   */
+  previewSeek?: number;
+
+  /**
    * Set the volume of the player
    */
   volume?: number;
@@ -403,6 +409,13 @@ declare class PlaybackMethods<T> extends Component<T> {
    * @param pos Position to seek to (as a percentage of the full duration)
    */
   seek(pos: number);
+
+  /**
+   * Preview seek to the given position without committing the full seek flow.
+   *
+   * @param pos Position to preview seek to (as a percentage of the full duration)
+   */
+  previewSeek(pos: number);
 
   /**
    * Resume playback

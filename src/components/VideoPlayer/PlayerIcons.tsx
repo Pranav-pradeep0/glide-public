@@ -156,13 +156,13 @@ export const getResizeModeIcon = (resizeMode: string) => {
 export const HapticsIcon = ({ size = 20, color = '#fff', active = true }: { size?: number, color?: string, active?: boolean }) => (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         {/* Central element */}
-        <Rect x="10" y="5" width="4" height="14" rx="2" fill={active ? color : 'none'} stroke={color} />
+        <Rect x="6" y="6" width="12" height="12" rx="2" fill={active ? color : 'none'} stroke={color} />
         {/* Left waves */}
-        <Path d="M6 8v8" stroke={color} strokeOpacity={active ? 1 : 0.6} />
-        <Path d="M2.5 10v4" stroke={color} strokeOpacity={active ? 0.6 : 0.3} />
+        <Path d="M3.5 8v8" stroke={color} strokeOpacity={active ? 1 : 0.6} />
+        <Path d="M1 10v4" stroke={color} strokeOpacity={active ? 0.6 : 0.3} />
         {/* Right waves */}
-        <Path d="M18 8v8" stroke={color} strokeOpacity={active ? 1 : 0.6} />
-        <Path d="M21.5 10v4" stroke={color} strokeOpacity={active ? 0.6 : 0.3} />
+        <Path d="M20.5 8v8" stroke={color} strokeOpacity={active ? 1 : 0.6} />
+        <Path d="M23 10v4" stroke={color} strokeOpacity={active ? 0.6 : 0.3} />
     </Svg>
 );
 

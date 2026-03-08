@@ -139,7 +139,7 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
         // Notify about decoder change for toast
         const decoderName = decoder === 'hardware_plus' ? 'HW+' :
             decoder === 'hardware' ? 'HW' : 'SW';
-        showToast?.(`Decoder switched to ${decoderName}`, 'cpu');
+        showToast?.(`Decoder switched to ${decoderName}`, 'decoder');
 
         // Call callback for any additional handling
         onDecoderChange?.();
@@ -191,12 +191,12 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
                 onSleepTimerEnd?.();
             }, minutes * 60 * 1000);
 
-            showToast?.(`Sleep timer set for ${minutes} minutes`, 'clock');
+            showToast?.(`Sleep timer set for ${minutes} minutes`, 'sleep-timer');
         } else if (minutes === -1) {
             // End of video - handled in player's onEnd
-            showToast?.('Sleep timer set for End of Video', 'clock');
+            showToast?.('Sleep timer set for End of Video', 'sleep-timer');
         } else {
-            showToast?.('Sleep timer disabled', 'clock');
+            showToast?.('Sleep timer disabled', 'sleep-timer');
         }
     }, [clearSleepTimer, onSleepTimerEnd, showToast]);
 
@@ -226,7 +226,7 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
                 ? 'Color Enhancement Enabled'
                 : 'Color Enhancement Disabled';
 
-            showToast?.(message, 'layers');
+            showToast?.(message, 'video-enhancement');
 
             return {
                 ...prev,

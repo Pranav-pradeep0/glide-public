@@ -10,7 +10,7 @@
 
 import { useMemo } from 'react';
 import { Gesture } from 'react-native-gesture-handler';
-import { SharedValue, runOnJS } from 'react-native-reanimated';
+import { SharedValue, runOnJS, useSharedValue } from 'react-native-reanimated';
 import { PLAYER_CONSTANTS } from './types';
 
 // ============================================================================
@@ -67,6 +67,7 @@ export function useSeekGesture(options: UseSeekGestureOptions) {
         onSeekComplete,
         onLockTap,
     } = options;
+    const lastSeekJsDispatchAt = useSharedValue(0);
 
     const gesture = useMemo(() => {
         return Gesture.Pan()
@@ -117,8 +118,11 @@ export function useSeekGesture(options: UseSeekGestureOptions) {
 
                 // Update shared value for 60fps HUD
                 seekTimeShared.value = targetTime;
-
-                runOnJS(onSeekUpdate)(targetTime);
+                const now = Date.now();
+                if (now - lastSeekJsDispatchAt.value >= 33) {
+                    lastSeekJsDispatchAt.value = now;
+                    runOnJS(onSeekUpdate)(targetTime);
+                }
             })
             .onEnd(() => {
                 'worklet';
@@ -164,6 +168,7 @@ export function useSeekGesture(options: UseSeekGestureOptions) {
         seekOffset,
         gestureActive,
         seekTimeShared,
+        lastSeekJsDispatchAt,
         onSeekStart,
         onSeekUpdate,
         onSeekComplete,

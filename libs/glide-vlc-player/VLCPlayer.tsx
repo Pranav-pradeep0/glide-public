@@ -22,6 +22,7 @@ interface RCTVLCPlayerNativeProps {
     paused?: boolean;
     rate?: number;
     seek?: number;
+    previewSeek?: number;
     resume?: boolean;
     muted?: boolean;
     repeat?: boolean;
@@ -76,6 +77,7 @@ export interface VLCPlayerProps extends ViewProps {
     /* Native only */
     rate?: number;
     seek?: number;
+    previewSeek?: number;
     resume?: boolean;
     paused?: boolean;
     autoAspectRatio?: boolean;
@@ -134,6 +136,7 @@ export interface VLCPlayerProps extends ViewProps {
 
 export interface VLCPlayerRef {
     seek: (pos: number) => void;
+    previewSeek: (pos: number) => void;
     resume: (isResume: boolean) => void;
     snapshot: (path: string) => void;
     startRecording: (path: string) => void;
@@ -153,6 +156,9 @@ const VLCPlayer = forwardRef<VLCPlayerRef, VLCPlayerProps>((props, ref) => {
     useImperativeHandle(ref, () => ({
         seek: (pos: number) => {
             setNativeProps({ seek: pos });
+        },
+        previewSeek: (pos: number) => {
+            setNativeProps({ previewSeek: pos });
         },
         resume: (isResume: boolean) => {
             setNativeProps({ resume: isResume });
@@ -298,7 +304,7 @@ const VLCPlayer = forwardRef<VLCPlayerRef, VLCPlayerProps>((props, ref) => {
             autoplay: props.autoplay ?? true,
         },
         src: src,
-        progressUpdateInterval: props.onProgress ? 250 : 0,
+        progressUpdateInterval: props.onProgress ? 120 : 0,
     };
 
     return (
