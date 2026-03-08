@@ -23,6 +23,7 @@ import {
 const LIVE_PREVIEW_THROTTLE_MS = 40;
 const SEEK_SETTLE_WINDOW_MS = 700;
 const SEEK_CONFIRM_EPSILON_SEC = 0.35;
+const PLAY_PAUSE_INTENT_GUARD_MS = 900;
 
 // ─── INITIAL STATE ────────────────────────────────────────────────────────────
 
@@ -87,6 +88,8 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
     // Seek settling
     const seekSettledUntilRef = useRef<number>(0);
     const pendingCommittedSeekRef = useRef<number | null>(null);
+    const lastPauseIntentAtRef = useRef<number>(0);
+    const lastPauseIntentValueRef = useRef<boolean>(initialPaused);
 
     // Player stopped flag
     const playerStoppedRef = useRef<boolean>(false);
@@ -264,6 +267,8 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
     // ═════════════════════════════════════════════════════════════════════════
 
     const play = useCallback(() => {
+        lastPauseIntentValueRef.current = false;
+        lastPauseIntentAtRef.current = Date.now();
         playerStoppedRef.current = false;
         isPlayingShared.value = true;
 
@@ -293,6 +298,8 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
 
     const pause = useCallback(() => {
         if (__DEV__) {console.log('[CONTROL] pause() | currentTime=' + currentTimeRef.current.toFixed(2));}
+        lastPauseIntentValueRef.current = true;
+        lastPauseIntentAtRef.current = Date.now();
 
         isPlayingShared.value = false;
 
@@ -308,6 +315,8 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
 
     const stop = useCallback(() => {
         if (__DEV__) {console.log('[CONTROL] stop()');}
+        lastPauseIntentValueRef.current = true;
+        lastPauseIntentAtRef.current = Date.now();
 
         videoRef.current?.stopPlayer?.();
         isPlayingShared.value = false;
@@ -528,10 +537,14 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
             return;
         }
 
+        const now = Date.now();
+        if (lastPauseIntentValueRef.current && (now - lastPauseIntentAtRef.current) < PLAY_PAUSE_INTENT_GUARD_MS) {
+            if (__DEV__) {console.log('[PLAYING] handlePlaying ignored - local pause intent guard');}
+            return;
+        }
+
         if (__DEV__) {console.log('[PLAYING] handlePlaying | isPaused=' + state.paused
             + ' isPlaying=' + state.isPlaying);}
-
-        const now = Date.now();
         isPlayingShared.value = true;
         lastSyncTimestamp.value = now;
         lastSyncPosition.value = currentTimeRef.current;
@@ -555,6 +568,12 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
             return;
         }
 
+        const now = Date.now();
+        if (!lastPauseIntentValueRef.current && (now - lastPauseIntentAtRef.current) < PLAY_PAUSE_INTENT_GUARD_MS) {
+            if (__DEV__) {console.log('[PLAYING] handlePaused ignored - local play intent guard');}
+            return;
+        }
+
         if (__DEV__) {console.log('[PLAYING] handlePaused | isPaused=' + state.paused
             + ' isPlaying=' + state.isPlaying);}
 
@@ -573,6 +592,8 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
      */
     const handleStopped = useCallback(() => {
         if (__DEV__) {console.log('[PLAYING] handleStopped');}
+        lastPauseIntentValueRef.current = true;
+        lastPauseIntentAtRef.current = Date.now();
 
         playerStoppedRef.current = true;
         isPlayingShared.value = false;
