@@ -457,13 +457,18 @@ class ReactVlcPlayerView extends TextureView implements
                         mVolumeBeforeDuck = -1;
                     }
                     if (mResumeOnFocusGain) {
-                        isPaused = false;
-                        mMediaPlayer.play();
-                        setKeepScreenOn(true);
-                        Log.i(TAG, "[AUDIO_FOCUS] GAIN → resumed playback");
-                        WritableMap map = createEventMap();
-                        if (map != null)
-                            emitPlayingEvent(map);
+                        boolean allowResume = !isHostPaused || playInBackground || isInPipMode;
+                        if (allowResume) {
+                            isPaused = false;
+                            mMediaPlayer.play();
+                            setKeepScreenOn(true);
+                            Log.i(TAG, "[AUDIO_FOCUS] GAIN → resumed playback");
+                            WritableMap map = createEventMap();
+                            if (map != null)
+                                emitPlayingEvent(map);
+                        } else {
+                            Log.i(TAG, "[AUDIO_FOCUS] GAIN -> host paused, background disabled; skip resume");
+                        }
                     }
                 }
                 mResumeOnFocusGain = false;
