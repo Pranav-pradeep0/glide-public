@@ -1,79 +1,197 @@
-This is a new [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
+# Glide - Haptic Video Player
 
-# Getting Started
+Glide is a React Native video player that blends traditional playback controls with a tactile, subtitle-aware experience. It is built around a custom VLC bridge and adds a smart subtitle pipeline, assisted sync tools, and deep media controls that go beyond a typical player UI.
 
->**Note**: Make sure you have completed the [React Native - Environment Setup](https://reactnative.dev/docs/environment-setup) instructions till "Creating a new application" step, before proceeding.
+## Why Glide Feels Different
 
-## Step 1: Start the Metro Server
+Most video players focus on decoding and playback controls. Glide keeps that foundation, but then adds a second layer that interprets the video context and makes the experience feel more alive.
 
-First, you will need to start **Metro**, the JavaScript _bundler_ that ships _with_ React Native.
+This is especially visible in three areas:
 
-To start Metro, run the following command from the _root_ of your React Native project:
+- Haptics are driven by subtitle sound effects and synthesized into real vibration waveforms.
+- Subtitles are not just rendered, they are parsed, styled, searched, auto-downloaded, and even used for assisted sync.
+- Playback controls are gesture-first, with brightness, volume, speed, zoom, and seek all handled directly on the video surface.
+
+## Feature Deep Dive
+
+## 1) Haptic-Enabled Playback
+
+Glide turns SDH subtitle cues into a tactile track.
+
+- Subtitle cues are scanned for bracketed sound effects like [Explosion] or (Footsteps).
+- A smart keyword matcher handles variations and blocks false positives with context blacklists.
+- ContextAnalyzer uses NLP and sentiment to shape intensity, speed, roughness, and sharpness.
+- HapticSynthesizer generates a waveform (not just a single buzz) and the engine applies priority and throttling so it feels intentional, not noisy.
+- Intensity is user-tunable and scaled across the entire waveform.
+
+Key files:
+- `C:\glide\src\services\HapticPatternGenerator.ts`
+- `C:\glide\src\services\ContextAnalyzer.ts`
+- `C:\glide\src\services\HapticSynthesizer.ts`
+- `C:\glide\src\services\HapticEngineService.ts`
+- `C:\glide\src\hooks\useHapticFeedback.ts`
+
+## 2) Assisted Subtitle Sync (Smart Sync)
+
+Glide includes a floating sync panel with two ways to fix drift:
+
+- Manual adjustment in 50ms steps with immediate feedback.
+- Assisted sync that can either search nearby cues by typing what you heard, or auto-listen and transcribe a 10s audio window around the current time.
+
+Auto-listen details:
+- FFmpeg extracts a short mono 16kHz WAV clip.
+- A quick RMS check skips silent segments to avoid wasted API calls.
+- Groq Whisper transcription powers a text query.
+- Matches are ranked by proximity and similarity, and then the offset is calculated and applied.
+
+Key files:
+- `C:\glide\src\components\FloatingSyncPanel.tsx`
+- `C:\glide\src\services\SubtitleSyncService.ts`
+- `C:\glide\src\utils\AudioExtractor.ts`
+- `C:\glide\src\services\SpeechToTextService.ts`
+
+## 3) Subtitle Engine and Rendering
+
+Subtitles are treated like a full subsystem, not a toggle.
+
+- Embedded tracks are discovered via FFprobe and extracted with FFmpeg when text-based.
+- Bitmap subtitles (PGS, VobSub) are detected and rendered natively by VLC.
+- External files can be picked locally or downloaded via SubDL.
+- SDH content is detected by actual text patterns, not only by filename hints.
+- Subtitle rendering supports inline HTML formatting with a custom parser.
+- On-screen subtitles are adjustable by pinch (font size) and drag (position) gestures.
+
+Key files:
+- `C:\glide\src\services\SubtitleCueStore.ts`
+- `C:\glide\src\utils\SubtitleExtractor.ts`
+- `C:\glide\src\utils\SubtitleHtmlParser.tsx`
+- `C:\glide\src\components\SubtitleOverlay.tsx`
+- `C:\glide\src\components\TrackSelector.tsx`
+- `C:\glide\src\services\SubtitleSelectionService.ts`
+
+## 4) Visual Enhancement Toggle
+
+A color enhancement toggle is wired directly into the VLC player instance. It allows quick visual boost without leaving playback.
+
+Key files:
+- `C:\glide\src\hooks\video-player\usePlayerSettings.ts`
+- `C:\glide\src\components\VideoPlayer\AnimatedVideoView.tsx`
+
+## 5) Audio Stack: EQ, Delay, and Route-Aware Volume
+
+Glide has a real audio stack:
+
+- 10-band equalizer with presets and custom tuning.
+- Audio delay control with a dedicated sync panel.
+- Route-aware volume handling (speaker, wired, bluetooth) with support for >100% boost through VLC when appropriate.
+- Hardware volume buttons and gestures update the HUD without fighting each other.
+
+Key files:
+- `C:\glide\src\components\EqualizerModal.tsx`
+- `C:\glide\src\hooks\video-player\useAudioController.ts`
+- `C:\glide\src\hooks\video-player\usePlayerSettings.ts`
+
+## 6) Gesture-First Playback UX
+
+The playback surface acts like a control surface:
+
+- Double-tap seek with ripple feedback.
+- Vertical swipes for brightness and volume with HUD indicators.
+- Long-press speed boost.
+- Pinch and pan zoom with safe constraints.
+- Lock mode to prevent accidental touches.
+
+Key files:
+- `C:\glide\src\hooks\video-player\usePlayerGestures.ts`
+- `C:\glide\src\hooks\video-player\useSeekGesture.ts`
+- `C:\glide\src\hooks\video-player\useSpeedGesture.ts`
+- `C:\glide\src\components\VideoPlayer\VideoHUD.tsx`
+
+## 7) Resume, Recap, and Context
+
+Glide preserves watch state and adds a recap flow for longer breaks.
+
+- Resume position, selected tracks, and delays are persisted per video.
+- A recap modal can generate a short summary based on the last few minutes of subtitle dialogue.
+- Content detection helps route movies and series into a details screen.
+
+Key files:
+- `C:\glide\src\services\RecapService.ts`
+- `C:\glide\src\store\videoHistoryStore.ts`
+- `C:\glide\src\services\ContentDetector.ts`
+
+## 8) Library and Metadata
+
+- MMKV-backed indexing for albums and fast search.
+- FFprobe-powered metadata badges for bitrate, codec, fps, and subtitle formats.
+
+Key files:
+- `C:\glide\src\store\videoIndexStore.ts`
+- `C:\glide\src\components\VideoOptionsBottomSheet.tsx`
+
+## Comparison to Typical Players
+
+Compared to mainstream players, Glide focuses less on just playing video and more on extracting meaning and context from it.
+
+- The haptic layer turns SDH subtitles into a tactile track, which most players treat as plain text.
+- Assisted subtitle sync uses audio transcription to reduce manual trial-and-error.
+- Subtitles are treated as a full pipeline (extraction, formatting, SDH detection, gesture-driven adjustments) rather than a single menu toggle.
+- Gesture controls cover not only seeking but brightness, volume, speed, and zoom without interrupting playback.
+
+Glide is not trying to replace any media player. Instead, it is pushing the player experience into a more immersive, assistive, and context-aware space.
+
+## Tech Stack
+
+- React Native 0.78
+- Custom VLC bridge (`@glide/vlc-player`)
+- FFmpeg/FFprobe via `react-native-ffmpeg-kit`
+- Groq Whisper for transcription and Llama 3.3 for recap
+- Zustand + MMKV for state and persistence
+
+## Environment Variables
+
+Copy `.env.example` to `.env` and fill in your keys.
+
+- SubDL API key for subtitle search and download
+- Groq API key for speech-to-text and recap
+- OMDB API key for metadata (optional)
+
+## Getting Started
+
+1. Install dependencies
 
 ```bash
-# using npm
+npm install
+```
+
+2. Configure environment
+
+```bash
+copy .env.example .env
+```
+
+3. Run Metro
+
+```bash
 npm start
-
-# OR using Yarn
-yarn start
 ```
 
-## Step 2: Start your Application
-
-Let Metro Bundler run in its _own_ terminal. Open a _new_ terminal from the _root_ of your React Native project. Run the following command to start your _Android_ or _iOS_ app:
-
-### For Android
+4. Run the app
 
 ```bash
-# using npm
 npm run android
-
-# OR using Yarn
-yarn android
-```
-
-### For iOS
-
-```bash
-# using npm
+# or
 npm run ios
-
-# OR using Yarn
-yarn ios
 ```
 
-If everything is set up _correctly_, you should see your new app running in your _Android Emulator_ or _iOS Simulator_ shortly provided you have set up your emulator/simulator correctly.
+## Project Structure
 
-This is one way to run your app — you can also run it directly from within Android Studio and Xcode respectively.
+- `C:\glide\src\components` UI components and player panels
+- `C:\glide\src\hooks` player hooks and gesture system
+- `C:\glide\src\services` haptics, sync, subtitle, recap, and system services
+- `C:\glide\src\utils` parsing, extraction, and helper utilities
+- `C:\glide\src\native` native module wrappers
 
-## Step 3: Modifying your App
+## License
 
-Now that you have successfully run the app, let's modify it.
-
-1. Open `App.tsx` in your text editor of choice and edit some lines.
-2. For **Android**: Press the <kbd>R</kbd> key twice or select **"Reload"** from the **Developer Menu** (<kbd>Ctrl</kbd> + <kbd>M</kbd> (on Window and Linux) or <kbd>Cmd ⌘</kbd> + <kbd>M</kbd> (on macOS)) to see your changes!
-
-   For **iOS**: Hit <kbd>Cmd ⌘</kbd> + <kbd>R</kbd> in your iOS Simulator to reload the app and see your changes!
-
-## Congratulations! :tada:
-
-You've successfully run and modified your React Native App. :partying_face:
-
-### Now what?
-
-- If you want to add this new React Native code to an existing application, check out the [Integration guide](https://reactnative.dev/docs/integration-with-existing-apps).
-- If you're curious to learn more about React Native, check out the [Introduction to React Native](https://reactnative.dev/docs/getting-started).
-
-# Troubleshooting
-
-If you can't get this to work, see the [Troubleshooting](https://reactnative.dev/docs/troubleshooting) page.
-
-# Learn More
-
-To learn more about React Native, take a look at the following resources:
-
-- [React Native Website](https://reactnative.dev) - learn more about React Native.
-- [Getting Started](https://reactnative.dev/docs/environment-setup) - an **overview** of React Native and how setup your environment.
-- [Learn the Basics](https://reactnative.dev/docs/getting-started) - a **guided tour** of the React Native **basics**.
-- [Blog](https://reactnative.dev/blog) - read the latest official React Native **Blog** posts.
-- [`@facebook/react-native`](https://github.com/facebook/react-native) - the Open Source; GitHub **repository** for React Native.
+This project is private by default. Add your license of choice before publishing.

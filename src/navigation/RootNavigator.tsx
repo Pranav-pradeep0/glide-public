@@ -24,6 +24,8 @@ const Tab = createBottomTabNavigator<MainTabParamList>();
 
 function MainTabs() {
     const theme = useTheme();
+    const { updateStatus } = useAppStore();
+    const showUpdateBadge = updateStatus.available;
 
     return (
         <Tab.Navigator
@@ -96,8 +98,27 @@ function MainTabs() {
                 options={{
                     title: 'Settings',
                     headerShown: false,
-                    tabBarIcon: ({ color, size }) => (
-                        <Feather name="settings" size={24} color={color} style={{ marginBottom: 4 }} />
+                    tabBarIcon: ({ color }) => (
+                        <View style={{ width: 28, height: 28, marginBottom: 4 }}>
+                            <Feather name="settings" size={24} color={color} />
+                            {!showUpdateBadge && (
+                                <View
+                                    style={{
+                                        position: 'absolute',
+                                        top: -5,
+                                        right: -6,
+                                        width: 18,
+                                        height: 18,
+                                        borderRadius: 9,
+                                        backgroundColor: theme.colors.primary,
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                    }}
+                                >
+                                    <Feather name="arrow-up" size={12} color="#000" />
+                                </View>
+                            )}
+                        </View>
                     ),
                 }}
             />
@@ -116,9 +137,9 @@ export default function RootNavigator({ onReady }: RootNavigatorProps) {
 
     useEffect(() => {
         const handleUrl = (url: string) => {
-            if (__DEV__) {console.log('[RootNavigator] URL event received:', url);}
+            if (__DEV__) { console.log('[RootNavigator] URL event received:', url); }
             if (DeepLinkService.isVideoUri(url)) {
-                if (__DEV__) {console.log('[RootNavigator] Received video URL in main activity, ignoring');}
+                if (__DEV__) { console.log('[RootNavigator] Received video URL in main activity, ignoring'); }
             }
         };
         const unsubscribe = DeepLinkService.addUrlListener(handleUrl);
@@ -126,7 +147,7 @@ export default function RootNavigator({ onReady }: RootNavigatorProps) {
     }, []);
 
     const onNavigationReady = useCallback(() => {
-        if (__DEV__) {console.log('[RootNavigator] Navigation ready');}
+        if (__DEV__) { console.log('[RootNavigator] Navigation ready'); }
         // Wait for one frame to ensure paint has started
         requestAnimationFrame(() => {
             onReady?.();

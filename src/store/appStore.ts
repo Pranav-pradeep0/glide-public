@@ -9,6 +9,16 @@ const DEFAULT_HAPTIC_SETTINGS: HapticSettings = {
 
 interface AppStore {
     settings: AppSettings;
+    updateStatus: {
+        available: boolean;
+        latestVersion: string | null;
+        releaseUrl: string | null;
+        releaseNotes: string | null;
+        apkUrl: string | null;
+        lastCheckedAt: number | null;
+        seen: boolean;
+        notified: boolean;
+    };
     updateSettings: (settings: Partial<AppSettings>) => void;
     toggleDarkMode: () => void;
     toggleHaptics: () => void;
@@ -37,6 +47,17 @@ interface AppStore {
 
     setAutoPlayNext: (enabled: boolean) => void;
     setDefaultAudioLanguage: (language: string | null) => void;
+
+    // Update actions
+    setUpdateStatus: (data: {
+        available: boolean;
+        latestVersion: string | null;
+        releaseUrl: string | null;
+        releaseNotes: string | null;
+        apkUrl: string | null;
+    }) => void;
+    markUpdateSeen: () => void;
+    markUpdateNotified: () => void;
 }
 
 export const useAppStore = create<AppStore>((set) => ({
@@ -64,6 +85,16 @@ export const useAppStore = create<AppStore>((set) => ({
 
         autoPlayNext: false,
         defaultAudioLanguage: null,
+    },
+    updateStatus: {
+        available: false,
+        latestVersion: null,
+        releaseUrl: null,
+        releaseNotes: null,
+        apkUrl: null,
+        lastCheckedAt: null,
+        seen: false,
+        notified: false,
     },
     updateSettings: (newSettings) =>
         set((state) => ({
@@ -189,5 +220,33 @@ export const useAppStore = create<AppStore>((set) => ({
     setDefaultAudioLanguage: (language) =>
         set((state) => ({
             settings: { ...state.settings, defaultAudioLanguage: language },
+        })),
+
+    setUpdateStatus: (data) =>
+        set((state) => {
+            const versionChanged = data.latestVersion && data.latestVersion !== state.updateStatus.latestVersion;
+            return {
+                updateStatus: {
+                    ...state.updateStatus,
+                    ...data,
+                    lastCheckedAt: Date.now(),
+                    seen: data.available ? false : state.updateStatus.seen,
+                    notified: data.available ? (versionChanged ? false : state.updateStatus.notified) : false,
+                },
+            };
+        }),
+    markUpdateSeen: () =>
+        set((state) => ({
+            updateStatus: {
+                ...state.updateStatus,
+                seen: true,
+            },
+        })),
+    markUpdateNotified: () =>
+        set((state) => ({
+            updateStatus: {
+                ...state.updateStatus,
+                notified: true,
+            },
         })),
 }));

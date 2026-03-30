@@ -10,6 +10,7 @@ import {
     Modal,
     FlatList,
     TextInput,
+    Linking,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { useAppStore } from '../store/appStore';
@@ -143,6 +144,7 @@ export default function SettingsScreen() {
 
     const {
         settings,
+        updateStatus,
         toggleDarkMode,
         toggleHaptics,
         toggleAutoDownloadSubtitles,
@@ -177,6 +179,8 @@ export default function SettingsScreen() {
     React.useEffect(() => {
         fontSizeSV.value = settings.subtitleFontSize;
     }, [settings.subtitleFontSize]);
+
+
 
     // Filter languages based on search
     const filteredLanguages = React.useMemo(() => {
@@ -292,6 +296,33 @@ export default function SettingsScreen() {
                 style={[styles.container, { backgroundColor: theme.colors.background }]}
                 contentContainerStyle={{ paddingBottom: 40 }}
             >
+                {updateStatus.available && updateStatus.latestVersion && updateStatus.releaseUrl && (
+                    <View style={[styles.updateCard, { backgroundColor: theme.colors.card }]}>
+                        <View style={styles.updateHeader}>
+                            <View style={styles.updateIconWrap}>
+                                <Feather name="download" size={16} color={theme.colors.text} />
+                            </View>
+                            <View style={styles.updateTextBlock}>
+                                <Text style={[styles.updateTitle, { color: theme.colors.text }]}>
+                                    New version available
+                                </Text>
+                                <Text style={[styles.updateSubtitle, { color: theme.colors.textSecondary }]}>
+                                    v{updateStatus.latestVersion} is ready to install
+                                </Text>
+                            </View>
+                        </View>
+                        <TouchableOpacity
+                            style={[styles.updateButton, { backgroundColor: theme.colors.primary }]}
+                            activeOpacity={0.8}
+                            onPress={() => {
+                                Linking.openURL(updateStatus.releaseUrl as string).catch(() => { });
+                            }}
+                        >
+                            <Text style={styles.updateButtonText}>Open Release</Text>
+                        </TouchableOpacity>
+                    </View>
+                )}
+
                 <View style={styles.section}>
                     <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
                         Appearance
@@ -832,6 +863,51 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
+    },
+    updateCard: {
+        marginHorizontal: 16,
+        marginTop: 8,
+        marginBottom: 12,
+        padding: 14,
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.08)',
+    },
+    updateHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    updateIconWrap: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(255,255,255,0.08)',
+        marginRight: 12,
+    },
+    updateTextBlock: {
+        flex: 1,
+    },
+    updateTitle: {
+        fontSize: 14,
+        fontWeight: '700',
+    },
+    updateSubtitle: {
+        marginTop: 2,
+        fontSize: 12,
+    },
+    updateButton: {
+        marginTop: 12,
+        paddingVertical: 10,
+        borderRadius: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    updateButtonText: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: '#000',
     },
     section: {
         padding: 16,

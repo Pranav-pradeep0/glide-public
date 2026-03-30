@@ -46,11 +46,11 @@ interface QuickSettingsPanelProps {
     onSetSleepTimer: (minutes: number | null) => void;
     decoder: 'hardware' | 'software' | 'hardware_plus';
     onSetDecoder: (mode: 'hardware' | 'software' | 'hardware_plus') => void;
-    onOpenPlaylist: () => void;
+    onOpenPlaylist?: () => void;
     onOpenAudio: () => void;
     onOpenSubtitle: () => void;
-    onOpenBookmarkPanel: () => void; // New Prop
-    onAddBookmark: () => void;
+    onOpenBookmarkPanel?: () => void; // Optional for streams
+    onAddBookmark?: () => void;
     resizeMode: PlayerResizeMode;
     onSetResizeMode: (mode: PlayerResizeMode) => void;
     isLandscape: boolean;
@@ -314,16 +314,17 @@ export const QuickSettingsPanel: React.FC<QuickSettingsPanelProps> = memo((props
                             {[
                                 { label: 'Audio Track', icon: AudioIcon, onPress: props.onOpenAudio },
                                 { label: 'Subtitles', icon: SubtitleIcon, onPress: props.onOpenSubtitle },
-                                { label: 'Playlist', icon: Feather, iconName: 'list', onPress: props.onOpenPlaylist }, // Custom Icon
-                                { label: 'Bookmarks', icon: BookmarkListIcon, onPress: props.onOpenBookmarkPanel }, // New Button
-                                { label: 'Add Bookmark', icon: Feather, iconName: 'bookmark', onPress: props.onAddBookmark }, // Modified to avoid dupe icon usage if desired, or keep generic
-                            ].map((item, i) => {
+                                { label: 'Playlist', icon: Feather, iconName: 'list', onPress: props.onOpenPlaylist },
+                                { label: 'Bookmarks', icon: BookmarkListIcon, onPress: props.onOpenBookmarkPanel },
+                                { label: 'Add Bookmark', icon: Feather, iconName: 'bookmark', onPress: props.onAddBookmark },
+                            ].filter(item => typeof item.onPress === 'function')
+                                .map((item) => {
                                 const Icon = item.icon as any;
                                 return (
                                     <Pressable
                                         key={item.label}
                                         style={({ pressed }) => [styles.actionRow, pressed && styles.actionPressed]}
-                                        onPress={item.onPress}
+                                        onPress={item.onPress as () => void}
                                     >
                                         <View style={styles.actionIcon}>
                                             {item.iconName

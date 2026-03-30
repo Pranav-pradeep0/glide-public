@@ -180,6 +180,7 @@ export default function VideoPlayerScreen({ route }: Props) {
     }, [videoPath]);
 
     const isLandscape = useMemo(() => width > height, [width, height]);
+    const isNetworkStream = useMemo(() => NavigationService.isNetworkStream(videoPath), [videoPath]);
 
     // UI and HUD hooks (needed by handlers below)
     const ui = usePlayerUI();
@@ -278,8 +279,8 @@ export default function VideoPlayerScreen({ route }: Props) {
 
     // Calculate resume state upfront to avoid flash
     const shouldResume = useMemo(() => {
-        return !!(resumePosition && resumePosition > 15);
-    }, [resumePosition]);
+        return !isNetworkStream && !!(resumePosition && resumePosition > 15);
+    }, [resumePosition, isNetworkStream]);
 
     const [resumeModalVisible, setResumeModalVisible] = React.useState(shouldResume);
 
@@ -297,9 +298,9 @@ export default function VideoPlayerScreen({ route }: Props) {
             formattedTime: formatTime(resumePosition),
             remainingTime: savedDuration ? remaining : undefined,
             finishByTime: finishBy,
-            showRecap: resumePosition > 120 && (!!imdbId || !!albumName),
+            showRecap: !isNetworkStream && resumePosition > 120 && (!!imdbId || !!albumName),
         };
-    }, [resumePosition, savedDuration, imdbId, albumName]);
+    }, [resumePosition, savedDuration, imdbId, albumName, isNetworkStream]);
 
     // ========================================================================
     // PLAYER HOOKS (ORDER MATTERS - dependencies flow down)
@@ -798,6 +799,7 @@ export default function VideoPlayerScreen({ route }: Props) {
     subtitleTracksRef.current = tracksHook.subtitleTracks;
 
     const handleRecapTrigger = useCallback(async () => {
+        if (isNetworkStream) {return;}
         // If we already have recap text, just show it
         if (recapText) {
             player.pause();
@@ -868,7 +870,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                 setIsGeneratingRecap(false);
             }
         }
-    }, [recapText, resumePosition, bookmarksHook, player, cleanTitle, videoName, videoPath, tracksHook.subtitleTracks]);
+    }, [recapText, resumePosition, bookmarksHook, player, cleanTitle, videoName, videoPath, tracksHook.subtitleTracks, isNetworkStream]);
 
     // Inactivity Prompt Logic
     useEffect(() => {
@@ -882,14 +884,14 @@ export default function VideoPlayerScreen({ route }: Props) {
             if (lastPauseTimeRef.current) {
                 const pauseDuration = Date.now() - lastPauseTimeRef.current;
                 // If paused for > threshold, show the resume modal again to offer a recap
-                if (pauseDuration > RECAP_INACTIVITY_THRESHOLD && !resumeModalVisible && !recapVisible) {
+                if (!isNetworkStream && pauseDuration > RECAP_INACTIVITY_THRESHOLD && !resumeModalVisible && !recapVisible) {
                     setResumeModalVisible(true);
                     player.pause();
                 }
             }
             lastPauseTimeRef.current = null;
         }
-    }, [player.state.paused, resumeModalVisible, recapVisible]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [player.state.paused, resumeModalVisible, recapVisible, isNetworkStream]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const handleResumeModalAction = useCallback((action: 'resume' | 'restart' | 'recap') => {
         if (action === 'resume') {
@@ -1163,7 +1165,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                     onBack={handleGoBack}
                     onToggleAudio={handleToggleAudio}
                     onToggleSubtitle={handleToggleSubtitle}
-                    onAddBookmark={handleAddBookmark}
+                    onAddBookmark={isNetworkStream ? undefined : handleAddBookmark}
                     paused={player.state.paused || resumeModalVisible || recapVisible}
                     onTogglePlayPause={handleTogglePlayPause}
                     currentTime={player.currentTimeShared}
@@ -1180,11 +1182,11 @@ export default function VideoPlayerScreen({ route }: Props) {
                     subtitleTrackSelected={tracksHook.selectedSubtitleTrackIndex !== null}
                     formatTime={formatTime}
                     onToggleQuickSettings={handleToggleQuickSettings}
-                    onToggleBookmarkPanel={handleToggleBookmarkPanel}
-                    onTogglePlaylist={handleTogglePlaylist}
+                    onToggleBookmarkPanel={isNetworkStream ? undefined : handleToggleBookmarkPanel}
+                    onTogglePlaylist={isNetworkStream ? undefined : handleTogglePlaylist}
                     // New Props for Redesign
-                    onNext={hasNext ? handleNext : undefined}
-                    onPrev={hasPrevious ? handlePrevious : undefined}
+                    onNext={!isNetworkStream && hasNext ? handleNext : undefined}
+                    onPrev={!isNetworkStream && hasPrevious ? handlePrevious : undefined}
                     onJumpBackward={handleJumpBackward}
                     onJumpForward={handleJumpForward}
                     onToggleLock={handleToggleOrientationLock}
@@ -1231,11 +1233,11 @@ export default function VideoPlayerScreen({ route }: Props) {
                     onSetSleepTimer={settingsHook.setSleepTimer}
                     decoder={settingsHook.settings.decoder}
                     onSetDecoder={settingsHook.setDecoder}
-                    onOpenPlaylist={handleQSOpenPlaylist}
+                    onOpenPlaylist={isNetworkStream ? undefined : handleQSOpenPlaylist}
                     onOpenAudio={handleQSOpenAudio}
                     onOpenSubtitle={handleQSOpenSubtitle}
-                    onOpenBookmarkPanel={handleQSOpenBookmarkPanel}
-                    onAddBookmark={bookmarksHook.addBookmark}
+                    onOpenBookmarkPanel={isNetworkStream ? undefined : handleQSOpenBookmarkPanel}
+                    onAddBookmark={isNetworkStream ? undefined : bookmarksHook.addBookmark}
                     resizeMode={settingsHook.settings.resizeMode}
                     onSetResizeMode={settingsHook.setResizeMode}
                     isLandscape={isLandscape}
@@ -1245,14 +1247,16 @@ export default function VideoPlayerScreen({ route }: Props) {
             )}
 
             {/* Playlist panel */}
-            <PlaylistPanel
-                visible={ui.state.playlistOpen}
-                onClose={() => ui.closePanel('playlist')}
-                currentVideoPath={videoPath}
-                onPlayVideo={handlePlayVideo}
-                isLandscape={isLandscape}
-                albumName={albumName ?? undefined}
-            />
+            {!isNetworkStream && (
+                <PlaylistPanel
+                    visible={ui.state.playlistOpen}
+                    onClose={() => ui.closePanel('playlist')}
+                    currentVideoPath={videoPath}
+                    onPlayVideo={handlePlayVideo}
+                    isLandscape={isLandscape}
+                    albumName={albumName ?? undefined}
+                />
+            )}
 
             {/* Track selectors */}
             <View style={styles.modalPortalWrapper} pointerEvents="box-none">
@@ -1324,7 +1328,7 @@ export default function VideoPlayerScreen({ route }: Props) {
 
             {/* Bookmark toast */}
             {
-                bookmarksHook.showToast && !isInPipMode && (
+                !isNetworkStream && bookmarksHook.showToast && !isInPipMode && (
                     <BookmarkToast
                         key={bookmarksHook.toastKey}
                         visible={bookmarksHook.showToast}
@@ -1337,50 +1341,56 @@ export default function VideoPlayerScreen({ route }: Props) {
             }
 
             {/* Bookmark panel */}
-            <BookmarkPanel
-                visible={ui.state.bookmarkPanelOpen}
-                bookmarks={bookmarksHook.bookmarks}
-                currentTime={player.state.currentTime}
-                onClose={() => ui.closePanel('bookmarkPanel')}
-                onSelectBookmark={bookmarksHook.jumpToBookmark}
-                onDeleteBookmark={bookmarksHook.deleteBookmark}
-                formatTime={formatTime}
-            />
+            {!isNetworkStream && (
+                <BookmarkPanel
+                    visible={ui.state.bookmarkPanelOpen}
+                    bookmarks={bookmarksHook.bookmarks}
+                    currentTime={player.state.currentTime}
+                    onClose={() => ui.closePanel('bookmarkPanel')}
+                    onSelectBookmark={bookmarksHook.jumpToBookmark}
+                    onDeleteBookmark={bookmarksHook.deleteBookmark}
+                    formatTime={formatTime}
+                />
+            )}
 
             {/* AI Recap Modal */}
-            <View style={styles.modalPortalWrapper} pointerEvents="box-none">
-                <RecapModal
-                    visible={recapVisible}
-                    onClose={() => {
-                        setRecapVisible(false);
-                        setIsGeneratingRecap(false);
-                        setRecapLoadingMessage(undefined);
-                        player.play(); // Resume video playback
-                    }}
-                    recapText={recapText}
-                    videoName={cleanTitle || albumName || videoName}
-                    isLoading={isGeneratingRecap}
-                    loadingMessage={recapLoadingMessage}
-                />
-            </View>
+            {!isNetworkStream && (
+                <View style={styles.modalPortalWrapper} pointerEvents="box-none">
+                    <RecapModal
+                        visible={recapVisible}
+                        onClose={() => {
+                            setRecapVisible(false);
+                            setIsGeneratingRecap(false);
+                            setRecapLoadingMessage(undefined);
+                            player.play(); // Resume video playback
+                        }}
+                        recapText={recapText}
+                        videoName={cleanTitle || albumName || videoName}
+                        isLoading={isGeneratingRecap}
+                        loadingMessage={recapLoadingMessage}
+                    />
+                </View>
+            )}
 
             {/* Resume Modal */}
-            <View style={styles.modalPortalWrapper} pointerEvents="box-none">
-                <ResumeModal
-                    visible={resumeModalVisible}
-                    videoName={videoName}
-                    resumeTime={resumePosition || 0}
-                    formattedResumeTime={resumeModalData?.formattedTime || ''}
-                    remainingTime={resumeModalData?.remainingTime}
-                    finishByTime={resumeModalData?.finishByTime}
-                    showRecapOption={!!resumeModalData?.showRecap}
-                    isGeneratingRecap={isGeneratingRecap}
-                    onResume={() => handleResumeModalAction('resume')}
-                    onRestart={() => handleResumeModalAction('restart')}
-                    onRecap={() => handleResumeModalAction('recap')}
-                    onClose={() => setResumeModalVisible(false)}
-                />
-            </View>
+            {!isNetworkStream && (
+                <View style={styles.modalPortalWrapper} pointerEvents="box-none">
+                    <ResumeModal
+                        visible={resumeModalVisible}
+                        videoName={videoName}
+                        resumeTime={resumePosition || 0}
+                        formattedResumeTime={resumeModalData?.formattedTime || ''}
+                        remainingTime={resumeModalData?.remainingTime}
+                        finishByTime={resumeModalData?.finishByTime}
+                        showRecapOption={!!resumeModalData?.showRecap}
+                        isGeneratingRecap={isGeneratingRecap}
+                        onResume={() => handleResumeModalAction('resume')}
+                        onRestart={() => handleResumeModalAction('restart')}
+                        onRecap={() => handleResumeModalAction('recap')}
+                        onClose={() => setResumeModalVisible(false)}
+                    />
+                </View>
+            )}
         </View >
     );
 }

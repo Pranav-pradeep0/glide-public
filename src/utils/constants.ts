@@ -41,6 +41,11 @@ export const GROQ_API_KEY = process.env.GROQ_API_KEY || Config.GROQ_API_KEY || '
 export const GROQ_API_URL = process.env.GROQ_API_URL || Config.GROQ_API_URL || 'https://api.groq.com/openai/v1/audio/transcriptions';
 export const GROQ_CHAT_API_URL = process.env.GROQ_CHAT_API_URL || Config.GROQ_CHAT_API_URL || 'https://api.groq.com/openai/v1/chat/completions';
 
+// GitHub Releases (Update Check)
+export const GITHUB_OWNER = process.env.GITHUB_OWNER || Config.GITHUB_OWNER || '';
+export const GITHUB_REPO = process.env.GITHUB_REPO || Config.GITHUB_REPO || '';
+export const GITHUB_RELEASES_URL = process.env.GITHUB_RELEASES_URL || Config.GITHUB_RELEASES_URL || '';
+
 // export const DEFAULT_STORAGE_PATH = '/storage/emulated/0/Movies';
 export const DEFAULT_STORAGE_PATH = RNFS.ExternalStorageDirectoryPath;
 

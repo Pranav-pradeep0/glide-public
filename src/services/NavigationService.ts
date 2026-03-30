@@ -1,5 +1,6 @@
 import { ContentDetector } from './ContentDetector';
 import { CommonActions } from '@react-navigation/native';
+import { DeepLinkService } from './DeepLinkService';
 
 export class NavigationService {
     /**
@@ -32,9 +33,10 @@ export class NavigationService {
         // For network streams, always go directly to VideoPlayer (skip PlayerDetail)
         if (this.isNetworkStream(videoPath)) {
             if (__DEV__) {console.log('[NavigationService] Network stream detected, skipping PlayerDetail');}
+            const derivedName = DeepLinkService.getVideoNameFromUri(videoPath);
             navigation.navigate('VideoPlayer', {
                 videoPath,
-                videoName: extraParams.videoName || 'Stream',
+                videoName: extraParams.videoName || derivedName || 'Stream',
                 playMode: 'normal', // No haptics for streams
                 ...extraParams,
             });

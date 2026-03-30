@@ -11,12 +11,15 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { SystemBars } from 'react-native-edge-to-edge';
 import { withStallion } from 'react-native-stallion';
 import { NativeModules } from 'react-native';
+import { UpdateService } from '@/services/UpdateService';
+import UpdateModal from '@/components/UpdateModal';
 
 function App() {
   const [appReady, setAppReady] = useState(false);
   const [navReady, setNavReady] = useState(false);
   const theme = useTheme();
-  const { settings } = useAppStore();
+  const { settings, updateStatus, setUpdateStatus, markUpdateNotified } = useAppStore();
+  const [showUpdateModal, setShowUpdateModal] = useState(false);
 
   const { initialize } = useVideoIndexStore();
   const hasStartedMediaInitRef = useRef(false);
@@ -30,6 +33,33 @@ function App() {
   useEffect(() => {
     initializeApp();
   }, []);
+
+  useEffect(() => {
+    if (!appReady) {
+      return;
+    }
+
+    const runUpdateCheck = async () => {
+      const result = await UpdateService.checkForUpdates();
+      setUpdateStatus({
+        available: result.available,
+        latestVersion: result.latestVersion,
+        releaseUrl: result.releaseUrl,
+        releaseNotes: result.releaseNotes,
+        apkUrl: result.apkUrl,
+      });
+    };
+
+    runUpdateCheck();
+  }, [appReady, setUpdateStatus]);
+
+  useEffect(() => {
+    if (!updateStatus.available || updateStatus.notified || !updateStatus.latestVersion) {
+      return;
+    }
+    setShowUpdateModal(true);
+    markUpdateNotified();
+  }, [updateStatus.available, updateStatus.notified, updateStatus.latestVersion, markUpdateNotified]);
 
   useEffect(() => {
     if (!appReady || !navReady || !settings.hasCompletedOnboarding) {
@@ -81,6 +111,16 @@ function App() {
           onError={(error, errorInfo) => console.log('App Error:', error, errorInfo)}
           onReset={() => console.log('App Reset')}
         >
+          <UpdateModal
+            visible={showUpdateModal}
+            latestVersion={updateStatus.latestVersion}
+            releaseNotes={updateStatus.releaseNotes}
+            releaseUrl={updateStatus.releaseUrl}
+            apkUrl={updateStatus.apkUrl}
+            onDismiss={() => {
+              setShowUpdateModal(false);
+            }}
+          />
           <RootNavigator onReady={() => setNavReady(true)} />
         </ErrorBoundary>
       </GestureHandlerRootView>

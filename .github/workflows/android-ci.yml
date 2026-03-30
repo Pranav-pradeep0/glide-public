@@ -54,6 +54,8 @@ jobs:
           GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}
           GROQ_API_URL=${{ secrets.GROQ_API_URL }}
           GROQ_CHAT_API_URL=${{ secrets.GROQ_CHAT_API_URL }}
+          GITHUB_OWNER=Pranav-pradeep0
+          GITHUB_REPO=glide-public
           STALLION_PROJECT_ID=${{ secrets.STALLION_PROJECT_ID }}
           STALLION_APP_TOKEN=${{ secrets.STALLION_APP_TOKEN }}
           EOF
@@ -127,6 +129,51 @@ jobs:
           echo "$MSG" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
+      - name: Generate changelog since last tag
+        id: changelog
+        run: |
+          set -e
+          LAST_TAG=$(git tag --list "v*" --sort=-creatordate | head -n 1)
+          if [ -z "$LAST_TAG" ]; then
+            RANGE="HEAD"
+            echo "No previous tag found. Using full history."
+          else
+            RANGE="${LAST_TAG}..HEAD"
+          fi
+          # Build grouped changelog from commit subjects, excluding merge commits and release chores
+          RAW_LOG=$(git log --no-merges --pretty=format:"%s" $RANGE)
+          # Keep only user-facing types
+          FEATS=$(echo "$RAW_LOG" | sed -nE 's/^(feat)(\([^)]*\))?:\s*/- /p')
+          FIXES=$(echo "$RAW_LOG" | sed -nE 's/^(fix)(\([^)]*\))?:\s*/- /p')
+          PERFS=$(echo "$RAW_LOG" | sed -nE 's/^(perf)(\([^)]*\))?:\s*/- /p')
+
+          BODY=""
+          if [ -n "$FEATS" ]; then
+            BODY="$BODY\n### Features\n$FEATS"
+          fi
+          if [ -n "$FIXES" ]; then
+            BODY="$BODY\n### Fixes\n$FIXES"
+          fi
+          if [ -n "$PERFS" ]; then
+            BODY="$BODY\n### Performance\n$PERFS"
+          fi
+
+          # Fallback to raw list if nothing matched
+          if [ -z "$BODY" ]; then
+            LOG=$(echo "$RAW_LOG" | sed -nE 's/^/- /p')
+            if [ -z "$LOG" ]; then
+              LOG="- No notable changes."
+            fi
+            BODY="$LOG"
+          else
+            # Trim leading newline
+            BODY=$(echo "$BODY" | sed '1{/^$/d}')
+          fi
+
+          echo "body<<EOF" >> $GITHUB_OUTPUT
+          echo "$BODY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       - name: Create Release
         if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         id: create_release
@@ -135,7 +182,7 @@ jobs:
           tag_name: ${{ steps.build_info.outputs.tag }}
           release_name: Glide ${{ steps.build_info.outputs.version }} (Build ${{ github.run_number }})
           body: |
-            ${{ steps.commit_msg.outputs.message }}
+            ${{ steps.changelog.outputs.body }}
             
             ---
             **Build Info**
@@ -144,7 +191,7 @@ jobs:
             - Commit: `${{ steps.build_info.outputs.short_sha }}`
             - Date: `${{ steps.build_info.outputs.build_date }}`
           draft: false
-          prerelease: true
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

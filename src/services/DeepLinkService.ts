@@ -37,18 +37,34 @@ export class DeepLinkService {
         try {
             // Handle HTTP/HTTPS URLs
             if (uri.startsWith('http://') || uri.startsWith('https://')) {
+                const fallbackFromString = () => {
+                    const withoutQuery = uri.split('?')[0];
+                    const parts = withoutQuery.split('/');
+                    const last = parts[parts.length - 1];
+                    if (last) {
+                        const clean = decodeURIComponent(last);
+                        if (clean && clean !== '/') {return clean;}
+                    }
+                    // Extract host as final fallback
+                    const hostMatch = withoutQuery.match(/https?:\/\/([^/]+)/i);
+                    return hostMatch?.[1] || 'Stream';
+                };
+
                 try {
                     const url = new URL(uri);
                     const pathname = url.pathname;
                     const parts = pathname.split('/');
                     const lastPart = parts[parts.length - 1];
-                    if (lastPart && lastPart.includes('.')) {
-                        return decodeURIComponent(lastPart.split('?')[0]);
+                    if (lastPart) {
+                        const clean = decodeURIComponent(lastPart.split('?')[0]);
+                        if (clean && clean !== '/') {
+                            return clean;
+                        }
                     }
                     // For HLS streams or URLs without filename
-                    return url.hostname || 'Stream';
+                    return url.hostname || fallbackFromString();
                 } catch {
-                    return 'Stream';
+                    return fallbackFromString();
                 }
             }
 
