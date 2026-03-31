@@ -1,6 +1,7 @@
 package com.glide.app
 
 import android.content.res.Configuration
+import android.content.pm.ActivityInfo
 import android.os.Build
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
@@ -17,6 +18,12 @@ class VideoPlayerActivity : ReactActivity() {
    * rendering of the component.
    */
   override fun getMainComponentName(): String = "VideoPlayerActivity"
+
+  override fun onCreate(savedInstanceState: Bundle?) {
+    // Set orientation before super.onCreate so OEMs can settle during the transition.
+    requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+    super.onCreate(savedInstanceState)
+  }
 
   /**
    * Returns the instance of the [ReactActivityDelegate]. We use [DefaultReactActivityDelegate]

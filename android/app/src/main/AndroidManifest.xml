@@ -48,6 +48,7 @@
         android:name=".VideoPlayerActivity"
         android:label="@string/play_with_glide"
         android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+        android:screenOrientation="fullSensor"
         android:launchMode="singleTask"
         android:exported="true"
         android:supportsPictureInPicture="true"

@@ -87,7 +87,7 @@ class ReactVlcPlayerView extends TextureView implements
     private static final int BUFFERING_DEBOUNCE_MS = 200;
 
     // Resize debounce
-    private static final int RESIZE_DEBOUNCE_MS = 100;
+    private static final int RESIZE_DEBOUNCE_MS = 50;
 
     // Best-fit thresholds (hysteresis)
     private static final float BEST_FIT_ENTER_CROP_RATIO = 0.06f;
@@ -672,6 +672,10 @@ class ReactVlcPlayerView extends TextureView implements
         if (!areDimensionsStable())
             return;
         clearPendingResizeRequest();
+        if (!isResizeModeApplied) {
+            applyResizeMode();
+            return;
+        }
         pendingResize = new Runnable() {
             @Override
             public void run() {

@@ -1061,15 +1061,13 @@ export default function VideoPlayerScreen({ route }: Props) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // Focus effect for orientation
-    useFocusEffect(
-        useCallback(() => {
-            VideoOrientationService.enableAuto();
-            return () => {
-                VideoOrientationService.release();
-            };
-        }, [])
-    );
+    // Set orientation immediately on mount (avoid waiting for nav transition).
+    useEffect(() => {
+        VideoOrientationService.enableAuto();
+        return () => {
+            VideoOrientationService.release();
+        };
+    }, []);
 
     // Back button handler
     useEffect(() => {

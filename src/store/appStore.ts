@@ -86,7 +86,7 @@ export const useAppStore = create<AppStore>((set) => ({
 
         autoPlayNext: false,
         defaultAudioLanguage: null,
-        shakeThreshold: 2.2,
+        shakeThreshold: 1.2,
     },
     updateStatus: {
         available: false,
