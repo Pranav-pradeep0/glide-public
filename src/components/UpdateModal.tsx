@@ -101,6 +101,9 @@ export default function UpdateModal({
             transparent
             animationType="fade"
             onRequestClose={onDismiss}
+            statusBarTranslucent
+            navigationBarTranslucent
+            presentationStyle="overFullScreen"
         >
             <View style={styles.backdrop}>
                 <View style={[styles.card, { backgroundColor: theme.colors.card }]}>
@@ -252,4 +255,3 @@ const styles = StyleSheet.create({
         gap: 8,
     },
 });
-
