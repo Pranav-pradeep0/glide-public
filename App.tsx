@@ -10,13 +10,14 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { SystemBars } from 'react-native-edge-to-edge';
 import { withStallion } from 'react-native-stallion';
-import { NativeModules } from 'react-native';
+import { NativeModules, InteractionManager } from 'react-native';
 import { UpdateService } from '@/services/UpdateService';
 import UpdateModal from '@/components/UpdateModal';
 
 function App() {
   const [appReady, setAppReady] = useState(false);
   const [navReady, setNavReady] = useState(false);
+  const [rootLayoutReady, setRootLayoutReady] = useState(false);
   const theme = useTheme();
   const { settings, updateStatus, setUpdateStatus, markUpdateNotified } = useAppStore();
   const [showUpdateModal, setShowUpdateModal] = useState(false);
@@ -57,9 +58,26 @@ function App() {
     if (!updateStatus.available || updateStatus.notified || !updateStatus.latestVersion) {
       return;
     }
-    setShowUpdateModal(true);
-    markUpdateNotified();
-  }, [updateStatus.available, updateStatus.notified, updateStatus.latestVersion, markUpdateNotified]);
+    if (!rootLayoutReady || !navReady) {
+      return;
+    }
+
+    const task = InteractionManager.runAfterInteractions(() => {
+      setShowUpdateModal(true);
+      markUpdateNotified();
+    });
+
+    return () => {
+      task.cancel();
+    };
+  }, [
+    updateStatus.available,
+    updateStatus.notified,
+    updateStatus.latestVersion,
+    markUpdateNotified,
+    rootLayoutReady,
+    navReady,
+  ]);
 
   useEffect(() => {
     if (!appReady || !navReady || !settings.hasCompletedOnboarding) {
@@ -105,7 +123,12 @@ function App() {
   }
 
   return (
-    <SafeAreaProvider style={{ flex: 1, backgroundColor: theme.colors.background }}>
+    <SafeAreaProvider
+      style={{ flex: 1, backgroundColor: theme.colors.background }}
+      onLayout={() => {
+        setRootLayoutReady(true);
+      }}
+    >
       <GestureHandlerRootView style={{ flex: 1, backgroundColor: theme.colors.background }}>
         <ErrorBoundary
           onError={(error, errorInfo) => console.log('App Error:', error, errorInfo)}

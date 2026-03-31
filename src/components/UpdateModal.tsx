@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     Modal,
     View,
@@ -13,6 +13,10 @@ import {
 import { Feather } from '@react-native-vector-icons/feather';
 import { useTheme } from '@/hooks/useTheme';
 import * as RNFS from '@dr.pogodin/react-native-fs';
+import Share from 'react-native-share';
+import pkg from '../../package.json';
+import { compareVersions, normalizeVersion } from '@/utils/version';
+import { updateStorage, UpdateApkCache } from '@/storage/updateStorage';
 
 interface UpdateModalProps {
     visible: boolean;
@@ -39,9 +43,104 @@ export default function UpdateModal({
     const theme = useTheme();
     const [isDownloading, setIsDownloading] = useState(false);
     const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
+    const [cachedApk, setCachedApk] = useState<UpdateApkCache | null>(null);
 
     const displayNotes = useMemo(() => formatNotes(releaseNotes), [releaseNotes]);
     const canDownload = Boolean(apkUrl);
+    const hasCachedApk = Boolean(cachedApk?.path);
+    const currentVersion = normalizeVersion(String(pkg.version || '0.0.0'));
+
+    const safeDeleteFile = useCallback(async (filePath?: string | null) => {
+        if (!filePath) {return;}
+        try {
+            const exists = await RNFS.exists(filePath);
+            if (exists) {
+                await RNFS.unlink(filePath);
+            }
+        } catch (error) {
+            if (__DEV__) {
+                console.warn('[UpdateModal] Failed to delete cached APK:', error);
+            }
+        }
+    }, []);
+
+    useEffect(() => {
+        let isActive = true;
+
+        const loadCache = async () => {
+            const cached = await updateStorage.load();
+            if (!cached) {
+                if (isActive) {setCachedApk(null);}
+                return;
+            }
+
+            // If app is already at or above cached version, delete the file.
+            if (compareVersions(currentVersion, cached.version) >= 0) {
+                await safeDeleteFile(cached.path);
+                await updateStorage.clear();
+                if (isActive) {setCachedApk(null);}
+                return;
+            }
+
+            // If a newer update is available, remove old cached APK.
+            if (latestVersion && compareVersions(cached.version, latestVersion) !== 0) {
+                await safeDeleteFile(cached.path);
+                await updateStorage.clear();
+                if (isActive) {setCachedApk(null);}
+                return;
+            }
+
+            const exists = await RNFS.exists(cached.path);
+            if (!exists) {
+                await updateStorage.clear();
+                if (isActive) {setCachedApk(null);}
+                return;
+            }
+
+            if (isActive) {
+                setCachedApk(cached);
+            }
+        };
+
+        loadCache();
+
+        return () => {
+            isActive = false;
+        };
+    }, [latestVersion, currentVersion, safeDeleteFile]);
+
+    const openInstaller = useCallback(async (filePath: string, fileName: string) => {
+        const fileUrl = Platform.OS === 'android'
+            ? `file://${filePath}`
+            : filePath;
+
+        if (Platform.OS === 'android') {
+            try {
+                await Share.open({
+                    url: fileUrl,
+                    type: 'application/vnd.android.package-archive',
+                    filename: fileName,
+                    failOnCancel: false,
+                });
+                return true;
+            } catch (error) {
+                if (__DEV__) {
+                    console.warn('[UpdateModal] Share install failed:', error);
+                }
+            }
+        }
+
+        try {
+            await Linking.openURL(fileUrl);
+            return true;
+        } catch (error) {
+            if (__DEV__) {
+                console.warn('[UpdateModal] Linking install failed:', error);
+            }
+        }
+
+        return false;
+    }, []);
 
     const handleOpenRelease = useCallback(async () => {
         if (!releaseUrl) {return;}
@@ -52,13 +151,22 @@ export default function UpdateModal({
         }
     }, [releaseUrl]);
 
+    const handleInstallCached = useCallback(async () => {
+        if (!cachedApk) {return;}
+        const opened = await openInstaller(cachedApk.path, cachedApk.fileName);
+        if (!opened && releaseUrl) {
+            handleOpenRelease();
+        }
+    }, [cachedApk, handleOpenRelease, openInstaller, releaseUrl]);
+
     const handleDownloadAndInstall = useCallback(async () => {
         if (!apkUrl || isDownloading) {return;}
         try {
             setIsDownloading(true);
             setDownloadProgress(0);
 
-            const fileName = `Glide-${latestVersion || 'update'}.apk`;
+            const versionTag = latestVersion || 'update';
+            const fileName = `Glide-${versionTag}.apk`;
             const targetPath = `${RNFS.CachesDirectoryPath}/${fileName}`;
 
             const download = RNFS.downloadFile({
@@ -78,10 +186,23 @@ export default function UpdateModal({
                 throw new Error('Download failed');
             }
 
-            const fileUrl = Platform.OS === 'android'
-                ? `file://${targetPath}`
-                : targetPath;
-            await Linking.openURL(fileUrl);
+            await updateStorage.save({
+                version: normalizeVersion(versionTag),
+                path: targetPath,
+                fileName,
+                savedAt: Date.now(),
+            });
+            setCachedApk({
+                version: normalizeVersion(versionTag),
+                path: targetPath,
+                fileName,
+                savedAt: Date.now(),
+            });
+
+            const opened = await openInstaller(targetPath, fileName);
+            if (!opened && releaseUrl) {
+                handleOpenRelease();
+            }
         } catch (error) {
             if (__DEV__) {
                 console.warn('[UpdateModal] Download/Install failed:', error);
@@ -93,7 +214,7 @@ export default function UpdateModal({
             setIsDownloading(false);
             setDownloadProgress(null);
         }
-    }, [apkUrl, handleOpenRelease, isDownloading, latestVersion, releaseUrl]);
+    }, [apkUrl, handleOpenRelease, isDownloading, latestVersion, openInstaller, releaseUrl]);
 
     return (
         <Modal
@@ -143,7 +264,11 @@ export default function UpdateModal({
 
                         <TouchableOpacity
                             style={[styles.primaryButton, { backgroundColor: theme.colors.primary }]}
-                            onPress={canDownload ? handleDownloadAndInstall : handleOpenRelease}
+                            onPress={
+                                hasCachedApk
+                                    ? handleInstallCached
+                                    : (canDownload ? handleDownloadAndInstall : handleOpenRelease)
+                            }
                             activeOpacity={0.85}
                             disabled={isDownloading}
                         >
@@ -156,7 +281,9 @@ export default function UpdateModal({
                                 </View>
                             ) : (
                                 <Text style={styles.primaryText}>
-                                    {canDownload ? 'Download & Install' : 'Open Release'}
+                                    {hasCachedApk
+                                        ? 'Install Update'
+                                        : (canDownload ? 'Download & Install' : 'Open Release')}
                                 </Text>
                             )}
                         </TouchableOpacity>
