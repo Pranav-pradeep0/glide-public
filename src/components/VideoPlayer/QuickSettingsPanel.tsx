@@ -56,6 +56,11 @@ interface QuickSettingsPanelProps {
     isLandscape: boolean;
     insets?: any;
     enableHaptics?: boolean;
+    shakeEnabled?: boolean;
+    onToggleShake?: () => void;
+    shakeAction?: 'play_pause' | 'next' | 'previous' | 'seek_forward' | 'seek_backward';
+    onSelectShakeAction?: (action: 'play_pause' | 'next' | 'previous' | 'seek_forward' | 'seek_backward') => void;
+    seekDuration?: number;
 }
 
 export const QuickSettingsPanel: React.FC<QuickSettingsPanelProps> = memo((props) => {
@@ -188,6 +193,51 @@ export const QuickSettingsPanel: React.FC<QuickSettingsPanelProps> = memo((props
                                 </View>
                             </View>
                         )}
+
+                        {/* SHAKE CONTROLS */}
+                        <View style={styles.section}>
+                            <View style={styles.sectionHeaderRow}>
+                                <Text style={styles.sectionTitle}>SHAKE CONTROLS</Text>
+                                <Pressable
+                                    style={[styles.switch, props.shakeEnabled && styles.switchActive]}
+                                    onPress={props.onToggleShake}
+                                >
+                                    <View style={[styles.switchThumb, props.shakeEnabled && styles.switchThumbActive]} />
+                                </Pressable>
+                            </View>
+                            <View style={[styles.card, !props.shakeEnabled && styles.disabledOpacity]}>
+                                <Text style={styles.subtleText}>
+                                    Intensity: {settings.shakeThreshold.toFixed(1)} · Tune in Settings
+                                </Text>
+                                <View style={styles.gridContainer}>
+                                    {([
+                                        { id: 'play_pause', label: 'Play/Pause' },
+                                        { id: 'next', label: 'Next' },
+                                        { id: 'previous', label: 'Previous' },
+                                        { id: 'seek_forward', label: `Seek +${props.seekDuration ?? 30}` },
+                                        { id: 'seek_backward', label: `Seek -${props.seekDuration ?? 30}` },
+                                    ] as const).map((item) => (
+                                        <Pressable
+                                            key={item.id}
+                                            style={[
+                                                styles.gridItem,
+                                                props.shakeAction === item.id && styles.activeGridItem,
+                                                { flexGrow: 1, minWidth: 110 },
+                                            ]}
+                                            onPress={() => props.onSelectShakeAction?.(item.id)}
+                                            disabled={!props.shakeEnabled}
+                                        >
+                                            <Text style={[
+                                                styles.gridItemText,
+                                                props.shakeAction === item.id && styles.activeGridItemText,
+                                            ]}>
+                                                {item.label}
+                                            </Text>
+                                        </Pressable>
+                                    ))}
+                                </View>
+                            </View>
+                        </View>
 
                         {/* PLAYBACK SPEED */}
                         <View style={styles.section}>
@@ -634,6 +684,11 @@ const styles = StyleSheet.create({
         letterSpacing: 0.3,
         includeFontPadding: false,
         textAlignVertical: 'center',
+    },
+    subtleText: {
+        color: 'rgba(255,255,255,0.55)',
+        fontSize: 12,
+        marginBottom: 10,
     },
 });
 

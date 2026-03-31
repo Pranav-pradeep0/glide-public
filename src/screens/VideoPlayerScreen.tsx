@@ -47,6 +47,7 @@ import {
     usePlayerTracks,
     usePlayerBookmarks,
     usePlayerSettings,
+    useShakeControl,
     formatTime,
     PLAYER_CONSTANTS,
 } from '@/hooks/video-player';
@@ -196,6 +197,8 @@ export default function VideoPlayerScreen({ route }: Props) {
     const [syncPanelType, setSyncPanelType] = React.useState<'audio' | 'subtitle' | null>(null);
     const [basePlaybackRate, setBasePlaybackRate] = React.useState(1.0);
     const [temporaryHoldRate, setTemporaryHoldRate] = React.useState<number | null>(null);
+    const [shakeEnabled, setShakeEnabled] = React.useState(false);
+    const [shakeAction, setShakeAction] = React.useState<'play_pause' | 'next' | 'previous' | 'seek_forward' | 'seek_backward'>('play_pause');
 
     // AI Recap State
     const [recapVisible, setRecapVisible] = React.useState(false);
@@ -777,6 +780,48 @@ export default function VideoPlayerScreen({ route }: Props) {
         }
     }, [hasNext, albumVideos, currentVideoIndex, ui, navigation, albumName, playMode]);
 
+    const handleShakeAction = useCallback(() => {
+        if (shakeAction === 'play_pause') {
+            handleTogglePlayPause();
+            return;
+        }
+        if (shakeAction === 'next') {
+            if (!isNetworkStream && hasNext) { handleNext(); }
+            return;
+        }
+        if (shakeAction === 'previous') {
+            if (!isNetworkStream && hasPrevious) { handlePrevious(); }
+            return;
+        }
+        if (shakeAction === 'seek_forward') {
+            handleJumpForward();
+            return;
+        }
+        if (shakeAction === 'seek_backward') {
+            handleJumpBackward();
+        }
+    }, [
+        shakeAction,
+        handleTogglePlayPause,
+        handleNext,
+        handlePrevious,
+        handleJumpForward,
+        handleJumpBackward,
+        hasNext,
+        hasPrevious,
+        isNetworkStream,
+    ]);
+
+    useShakeControl({
+        enabled: shakeEnabled,
+        onShake: handleShakeAction,
+        shakeThreshold: settings.shakeThreshold,
+        isLocked: ui.state.locked,
+        isSeeking: player.state.isSeeking,
+        isInPip: isInPipMode,
+        isQuickSettingsOpen: ui.state.quickSettingsOpen,
+    });
+
     const handleVideoEnd = useCallback(() => {
         // Always call default player end handler to ensure clean state
         player.handleEnd();
@@ -1243,6 +1288,11 @@ export default function VideoPlayerScreen({ route }: Props) {
                     isLandscape={isLandscape}
                     insets={effectiveInsets}
                     enableHaptics={playMode === 'with-haptics'}
+                    shakeEnabled={shakeEnabled}
+                    onToggleShake={() => setShakeEnabled(prev => !prev)}
+                    shakeAction={shakeAction}
+                    onSelectShakeAction={setShakeAction}
+                    seekDuration={settings.seekDuration}
                 />
             )}
 

@@ -23,6 +23,7 @@ export { useTapGestures } from './useTapGestures';
 export { usePlayerTracks } from './usePlayerTracks';
 export { usePlayerBookmarks } from './usePlayerBookmarks';
 export { usePlayerSettings } from './usePlayerSettings';
+export { useShakeControl } from './useShakeControl';
 
 // Types and utilities
 export * from './types';

@@ -20,6 +20,7 @@ import { SUBTITLE_FONT_SIZES, SUBTITLE_COLORS } from '../utils/constants';
 import { FileService } from '@/services/FileService';
 import { LANGUAGES } from '@/utils/languages';
 import HapticModule from '../native/HapticModule';
+import { useShakeControl } from '../hooks/video-player';
 import { Feather } from '@react-native-vector-icons/feather';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -167,10 +168,12 @@ export default function SettingsScreen() {
         setSeekDuration,
         setAutoPlayNext,
         setDefaultAudioLanguage,
+        setShakeThreshold,
     } = useAppStore();
     const clearAllHistory = useVideoHistoryStore((state) => state.clearAllHistory);
     const [languageModalVisible, setLanguageModalVisible] = React.useState(false);
     const [searchQuery, setSearchQuery] = React.useState('');
+    const [shakeTuneEnabled, setShakeTuneEnabled] = React.useState(false);
 
     // SharedValue for smooth font size animation
     const fontSizeSV = useSharedValue(settings.subtitleFontSize);
@@ -229,12 +232,24 @@ export default function SettingsScreen() {
     }, [setHapticIntensity]);
 
     const getIntensityLabel = (value: number): string => {
-        if (value < 50) {return 'Very Light';}
-        if (value < 100) {return 'Light';}
-        if (value < 150) {return 'Medium';}
-        if (value < 200) {return 'Strong';}
+        if (value < 50) { return 'Very Light'; }
+        if (value < 100) { return 'Light'; }
+        if (value < 150) { return 'Medium'; }
+        if (value < 200) { return 'Strong'; }
         return 'Very Strong';
     };
+
+    useShakeControl({
+        enabled: shakeTuneEnabled,
+        onShake: () => { },
+        onThresholdHit: () => {
+            if (HapticModule) {
+                HapticModule.vibrate(80, 160);
+            }
+        },
+        mode: 'tuning',
+        shakeThreshold: settings.shakeThreshold,
+    });
 
     async function handleClearCache() {
         Alert.alert(
@@ -265,6 +280,23 @@ export default function SettingsScreen() {
                     style: 'destructive',
                     onPress: () => {
                         resetHapticSettings();
+                    },
+                },
+            ]
+        );
+    }
+
+    function handleResetShakeIntensity() {
+        Alert.alert(
+            'Reset Shake Intensity',
+            'This will reset shake intensity to default. Continue?',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Reset',
+                    style: 'destructive',
+                    onPress: () => {
+                        setShakeThreshold(2.2);
                     },
                 },
             ]
@@ -470,6 +502,63 @@ export default function SettingsScreen() {
                             </View>
                         </View>
                     )}
+
+                    {/* Shake Intensity */}
+                    <View style={[styles.sliderCard, { backgroundColor: theme.colors.card, marginTop: 1 }]}>
+                        <Text style={[styles.presetsTitle, { color: theme.colors.text }]}>
+                            Shake Intensity
+                        </Text>
+                        <View style={[styles.item, { backgroundColor: 'transparent', marginBottom: 0, paddingHorizontal: 0, elevation: 0, shadowOpacity: 0 }]}>
+                            <View style={styles.itemContent}>
+                                <Text style={[styles.itemLabel, { color: theme.colors.text }]}>
+                                    Tune Shake Intensity
+                                </Text>
+                                <Text style={[styles.itemDescription, { color: theme.colors.textSecondary }]}>
+                                    Vibrate when your shake reaches the target intensity
+                                </Text>
+                            </View>
+                            <Switch
+                                value={shakeTuneEnabled}
+                                onValueChange={setShakeTuneEnabled}
+                            />
+                        </View>
+
+                        <View style={styles.sliderHeader}>
+                            <Text style={[styles.itemLabel, { color: theme.colors.text }]}>
+                                Shake Intensity
+                            </Text>
+                            <Text style={[styles.intensityValue, { color: theme.colors.primary }]}>
+                                {settings.shakeThreshold.toFixed(1)}
+                            </Text>
+                        </View>
+                        <Slider
+                            style={styles.slider}
+                            minimumValue={0.8}
+                            maximumValue={4.0}
+                            step={0.1}
+                            value={settings.shakeThreshold}
+                            onValueChange={setShakeThreshold}
+                            minimumTrackTintColor={theme.colors.primary}
+                            maximumTrackTintColor={theme.colors.border}
+                            thumbTintColor={theme.colors.primary}
+                            disabled={!shakeTuneEnabled}
+                        />
+                        <View style={[styles.tipCard, { backgroundColor: theme.colors.card }]}>
+                            <Feather name="info" size={16} color={theme.colors.primary} />
+                            <Text style={[styles.tipText, { color: theme.colors.textSecondary }]}>
+                                Test: enable Tune Mode, then shake the device. You will feel a vibration when your shake
+                                reaches the target intensity.
+                            </Text>
+                        </View>
+                        <TouchableOpacity
+                            style={[styles.resetButton, { backgroundColor: theme.colors.card }]}
+                            onPress={handleResetShakeIntensity}
+                            activeOpacity={0.7}>
+                            <Text style={[styles.resetButtonText, { color: theme.colors.textSecondary }]}>
+                                Reset to Default
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
                 </View>
 
                 <View style={styles.section}>

@@ -101,7 +101,7 @@ function MainTabs() {
                     tabBarIcon: ({ color }) => (
                         <View style={{ width: 28, height: 28, marginBottom: 4 }}>
                             <Feather name="settings" size={24} color={color} />
-                            {!showUpdateBadge && (
+                            {showUpdateBadge && (
                                 <View
                                     style={{
                                         position: 'absolute',

@@ -74,6 +74,7 @@ export interface AppSettings {
 
     autoPlayNext: boolean; // Auto-play next video in folder
     defaultAudioLanguage: string | null; // Preferred audio language (matches substring in track name)
+    shakeThreshold: number; // Shake intensity threshold in g units
 }
 
 export interface PlayerState {

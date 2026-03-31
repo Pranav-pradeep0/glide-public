@@ -47,6 +47,7 @@ interface AppStore {
 
     setAutoPlayNext: (enabled: boolean) => void;
     setDefaultAudioLanguage: (language: string | null) => void;
+    setShakeThreshold: (threshold: number) => void;
 
     // Update actions
     setUpdateStatus: (data: {
@@ -85,6 +86,7 @@ export const useAppStore = create<AppStore>((set) => ({
 
         autoPlayNext: false,
         defaultAudioLanguage: null,
+        shakeThreshold: 2.2,
     },
     updateStatus: {
         available: false,
@@ -220,6 +222,10 @@ export const useAppStore = create<AppStore>((set) => ({
     setDefaultAudioLanguage: (language) =>
         set((state) => ({
             settings: { ...state.settings, defaultAudioLanguage: language },
+        })),
+    setShakeThreshold: (threshold) =>
+        set((state) => ({
+            settings: { ...state.settings, shakeThreshold: threshold },
         })),
 
     setUpdateStatus: (data) =>
