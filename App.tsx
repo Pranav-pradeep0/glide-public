@@ -10,14 +10,13 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { SystemBars } from 'react-native-edge-to-edge';
 import { withStallion } from 'react-native-stallion';
-import { NativeModules, InteractionManager } from 'react-native';
+import { NativeModules } from 'react-native';
 import { UpdateService } from '@/services/UpdateService';
 import UpdateModal from '@/components/UpdateModal';
 
 function App() {
   const [appReady, setAppReady] = useState(false);
   const [navReady, setNavReady] = useState(false);
-  const [rootLayoutReady, setRootLayoutReady] = useState(false);
   const theme = useTheme();
   const { settings, updateStatus, setUpdateStatus, markUpdateNotified } = useAppStore();
   const [showUpdateModal, setShowUpdateModal] = useState(false);
@@ -54,29 +53,31 @@ function App() {
     runUpdateCheck();
   }, [appReady, setUpdateStatus]);
 
+  const [splashHidden, setSplashHidden] = useState(false);
+
   useEffect(() => {
     if (!updateStatus.available || updateStatus.notified || !updateStatus.latestVersion) {
       return;
     }
-    if (!rootLayoutReady || !navReady) {
+    if (!splashHidden) {
       return;
     }
 
-    const task = InteractionManager.runAfterInteractions(() => {
+    // Wait for the UI to fully settle after splash hides
+    const timer = setTimeout(() => {
       setShowUpdateModal(true);
       markUpdateNotified();
-    });
+    }, 800);
 
     return () => {
-      task.cancel();
+      clearTimeout(timer);
     };
   }, [
     updateStatus.available,
     updateStatus.notified,
     updateStatus.latestVersion,
     markUpdateNotified,
-    rootLayoutReady,
-    navReady,
+    splashHidden,
   ]);
 
   useEffect(() => {
@@ -104,6 +105,7 @@ function App() {
 
       const timer = setTimeout(() => {
         NativeModules.SplashModule?.hide();
+        setSplashHidden(true);
       }, remaining);
       return () => clearTimeout(timer);
     }
@@ -125,15 +127,13 @@ function App() {
   return (
     <SafeAreaProvider
       style={{ flex: 1, backgroundColor: theme.colors.background }}
-      onLayout={() => {
-        setRootLayoutReady(true);
-      }}
     >
       <GestureHandlerRootView style={{ flex: 1, backgroundColor: theme.colors.background }}>
         <ErrorBoundary
           onError={(error, errorInfo) => console.log('App Error:', error, errorInfo)}
           onReset={() => console.log('App Reset')}
         >
+          <RootNavigator onReady={() => setNavReady(true)} />
           <UpdateModal
             visible={showUpdateModal}
             latestVersion={updateStatus.latestVersion}
@@ -144,7 +144,6 @@ function App() {
               setShowUpdateModal(false);
             }}
           />
-          <RootNavigator onReady={() => setNavReady(true)} />
         </ErrorBoundary>
       </GestureHandlerRootView>
     </SafeAreaProvider>

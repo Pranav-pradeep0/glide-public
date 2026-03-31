@@ -1,22 +1,24 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-    Modal,
     View,
     Text,
     StyleSheet,
     TouchableOpacity,
+    TouchableWithoutFeedback,
     ScrollView,
-    ActivityIndicator,
-    Linking,
-    Platform,
+    BackHandler,
 } from 'react-native';
+import Animated, {
+    useSharedValue,
+    useAnimatedStyle,
+    withTiming,
+    withSpring,
+    runOnJS,
+} from 'react-native-reanimated';
 import { Feather } from '@react-native-vector-icons/feather';
 import { useTheme } from '@/hooks/useTheme';
-import * as RNFS from '@dr.pogodin/react-native-fs';
-import Share from 'react-native-share';
-import pkg from '../../package.json';
-import { compareVersions, normalizeVersion } from '@/utils/version';
-import { updateStorage, UpdateApkCache } from '@/storage/updateStorage';
+import { UpdateActionButton } from '@/components/UpdateActionButton';
+import { useUpdateInstaller } from '@/hooks/useUpdateInstaller';
 
 interface UpdateModalProps {
     visible: boolean;
@@ -41,272 +43,167 @@ export default function UpdateModal({
     onDismiss,
 }: UpdateModalProps) {
     const theme = useTheme();
-    const [isDownloading, setIsDownloading] = useState(false);
-    const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
-    const [cachedApk, setCachedApk] = useState<UpdateApkCache | null>(null);
+    const [mounted, setMounted] = useState(false);
 
+    // Reanimated Shared Values
+    const fadeAnim = useSharedValue(0);
+    const scaleAnim = useSharedValue(0.9);
     const displayNotes = useMemo(() => formatNotes(releaseNotes), [releaseNotes]);
-    const canDownload = Boolean(apkUrl);
-    const hasCachedApk = Boolean(cachedApk?.path);
-    const currentVersion = normalizeVersion(String(pkg.version || '0.0.0'));
+    const {
+        canDownload,
+        downloadProgress,
+        hasCachedApk,
+        isDownloading,
+        handleDownloadAndInstall,
+        handleInstallCached,
+        handleOpenRelease,
+    } = useUpdateInstaller({ latestVersion, releaseUrl, apkUrl });
 
-    const safeDeleteFile = useCallback(async (filePath?: string | null) => {
-        if (!filePath) {return;}
-        try {
-            const exists = await RNFS.exists(filePath);
-            if (exists) {
-                await RNFS.unlink(filePath);
-            }
-        } catch (error) {
-            if (__DEV__) {
-                console.warn('[UpdateModal] Failed to delete cached APK:', error);
-            }
-        }
-    }, []);
+    // Animated Styles
+    const backdropStyle = useAnimatedStyle(() => ({
+        opacity: fadeAnim.value,
+    }));
 
+    const cardStyle = useAnimatedStyle(() => ({
+        opacity: fadeAnim.value,
+        transform: [{ scale: scaleAnim.value }],
+    }));
+
+    // Entrance/Exit Animations
     useEffect(() => {
-        let isActive = true;
-
-        const loadCache = async () => {
-            const cached = await updateStorage.load();
-            if (!cached) {
-                if (isActive) {setCachedApk(null);}
-                return;
-            }
-
-            // If app is already at or above cached version, delete the file.
-            if (compareVersions(currentVersion, cached.version) >= 0) {
-                await safeDeleteFile(cached.path);
-                await updateStorage.clear();
-                if (isActive) {setCachedApk(null);}
-                return;
-            }
-
-            // If a newer update is available, remove old cached APK.
-            if (latestVersion && compareVersions(cached.version, latestVersion) !== 0) {
-                await safeDeleteFile(cached.path);
-                await updateStorage.clear();
-                if (isActive) {setCachedApk(null);}
-                return;
-            }
-
-            const exists = await RNFS.exists(cached.path);
-            if (!exists) {
-                await updateStorage.clear();
-                if (isActive) {setCachedApk(null);}
-                return;
-            }
-
-            if (isActive) {
-                setCachedApk(cached);
-            }
-        };
-
-        loadCache();
-
-        return () => {
-            isActive = false;
-        };
-    }, [latestVersion, currentVersion, safeDeleteFile]);
-
-    const openInstaller = useCallback(async (filePath: string, fileName: string) => {
-        const fileUrl = Platform.OS === 'android'
-            ? `file://${filePath}`
-            : filePath;
-
-        if (Platform.OS === 'android') {
-            try {
-                await Share.open({
-                    url: fileUrl,
-                    type: 'application/vnd.android.package-archive',
-                    filename: fileName,
-                    failOnCancel: false,
-                });
-                return true;
-            } catch (error) {
-                if (__DEV__) {
-                    console.warn('[UpdateModal] Share install failed:', error);
-                }
-            }
+        if (visible) {
+            setMounted(true);
+            fadeAnim.value = withTiming(1, { duration: 250 });
+            scaleAnim.value = withSpring(1, { damping: 15, stiffness: 100 });
+        } else if (mounted) {
+            fadeAnim.value = withTiming(0, { duration: 200 }, (finished) => {
+                if (finished) runOnJS(setMounted)(false);
+            });
+            scaleAnim.value = withTiming(0.9, { duration: 200 });
         }
+    }, [visible, mounted, fadeAnim, scaleAnim]);
 
-        try {
-            await Linking.openURL(fileUrl);
+    // Handle Android back button
+    useEffect(() => {
+        if (!visible) {return;}
+
+        const handler = BackHandler.addEventListener('hardwareBackPress', () => {
+            onDismiss();
             return true;
-        } catch (error) {
-            if (__DEV__) {
-                console.warn('[UpdateModal] Linking install failed:', error);
-            }
-        }
+        });
 
-        return false;
-    }, []);
+        return () => handler.remove();
+    }, [visible, onDismiss]);
 
-    const handleOpenRelease = useCallback(async () => {
-        if (!releaseUrl) {return;}
-        try {
-            await Linking.openURL(releaseUrl);
-        } catch {
-            // ignore
-        }
-    }, [releaseUrl]);
+    if (!mounted) {
+        return null;
+    }
 
-    const handleInstallCached = useCallback(async () => {
-        if (!cachedApk) {return;}
-        const opened = await openInstaller(cachedApk.path, cachedApk.fileName);
-        if (!opened && releaseUrl) {
-            handleOpenRelease();
-        }
-    }, [cachedApk, handleOpenRelease, openInstaller, releaseUrl]);
-
-    const handleDownloadAndInstall = useCallback(async () => {
-        if (!apkUrl || isDownloading) {return;}
-        try {
-            setIsDownloading(true);
-            setDownloadProgress(0);
-
-            const versionTag = latestVersion || 'update';
-            const fileName = `Glide-${versionTag}.apk`;
-            const targetPath = `${RNFS.CachesDirectoryPath}/${fileName}`;
-
-            const download = RNFS.downloadFile({
-                fromUrl: apkUrl,
-                toFile: targetPath,
-                progressDivider: 5,
-                progress: (res) => {
-                    if (res.contentLength > 0) {
-                        const pct = Math.round((res.bytesWritten / res.contentLength) * 100);
-                        setDownloadProgress(pct);
-                    }
-                },
-            });
-
-            const result = await download.promise;
-            if (result.statusCode !== 200) {
-                throw new Error('Download failed');
-            }
-
-            await updateStorage.save({
-                version: normalizeVersion(versionTag),
-                path: targetPath,
-                fileName,
-                savedAt: Date.now(),
-            });
-            setCachedApk({
-                version: normalizeVersion(versionTag),
-                path: targetPath,
-                fileName,
-                savedAt: Date.now(),
-            });
-
-            const opened = await openInstaller(targetPath, fileName);
-            if (!opened && releaseUrl) {
-                handleOpenRelease();
-            }
-        } catch (error) {
-            if (__DEV__) {
-                console.warn('[UpdateModal] Download/Install failed:', error);
-            }
-            if (releaseUrl) {
-                handleOpenRelease();
-            }
-        } finally {
-            setIsDownloading(false);
-            setDownloadProgress(null);
-        }
-    }, [apkUrl, handleOpenRelease, isDownloading, latestVersion, openInstaller, releaseUrl]);
+    const cardBg = theme.dark ? '#1A1A1A' : '#FFFFFF';
+    const cardBorder = theme.dark ? '#333333' : '#E5E7EB';
+    const textColor = theme.dark ? '#FFFFFF' : '#000000';
+    const textSecondaryColor = theme.dark ? '#A0A0A0' : '#6B7280';
+    const iconBg = theme.dark ? '#2A2A2A' : '#F3F4F6';
 
     return (
-        <Modal
-            visible={visible}
-            transparent
-            animationType="fade"
-            onRequestClose={onDismiss}
-            statusBarTranslucent
-            navigationBarTranslucent
-            presentationStyle="overFullScreen"
+        <Animated.View
+            style={[
+                StyleSheet.absoluteFill,
+                styles.backdrop,
+                backdropStyle,
+            ]}
+            pointerEvents={visible ? 'auto' : 'none'}
         >
-            <View style={styles.backdrop}>
-                <View style={[styles.card, { backgroundColor: theme.colors.card }]}>
-                    <View style={styles.header}>
-                        <View style={[styles.iconWrap, { backgroundColor: theme.colors.cardElevated }]}>
-                            <Feather name="download" size={18} color={theme.colors.text} />
-                        </View>
-                        <View style={styles.headerText}>
-                            <Text style={[styles.title, { color: theme.colors.text }]}>
-                                New update available
-                            </Text>
-                            <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>
-                                {latestVersion ? `Version ${latestVersion}` : 'A new version is ready'}
-                            </Text>
-                        </View>
-                    </View>
+            <TouchableWithoutFeedback onPress={onDismiss}>
+                <View style={StyleSheet.absoluteFill} />
+            </TouchableWithoutFeedback>
 
-                    <View style={styles.notesBlock}>
-                        <Text style={[styles.notesTitle, { color: theme.colors.text }]}>
-                            What’s new
+            <Animated.View
+                style={[
+                    styles.card,
+                    {
+                        backgroundColor: cardBg,
+                        borderColor: cardBorder,
+                        borderWidth: 1,
+                    },
+                    cardStyle,
+                ]}
+            >
+                <View style={styles.header}>
+                    <View style={[styles.iconWrap, { backgroundColor: iconBg }]}>
+                        <Feather name="download" size={18} color={textColor} />
+                    </View>
+                    <View style={styles.headerText}>
+                        <Text style={[styles.title, { color: textColor }]}>
+                            New update available
                         </Text>
-                        <ScrollView style={styles.notesScroll} showsVerticalScrollIndicator={false}>
-                            <Text style={[styles.notesText, { color: theme.colors.textSecondary }]}>
-                                {displayNotes}
-                            </Text>
-                        </ScrollView>
+                        <Text style={[styles.subtitle, { color: textSecondaryColor }]}>
+                            {latestVersion ? `Version ${latestVersion}` : 'A new version is ready'}
+                        </Text>
                     </View>
+                </View>
 
-                    <View style={styles.actions}>
+                <View style={styles.notesBlock}>
+                    <Text style={[styles.notesTitle, { color: textColor }]}>
+                        What's new
+                    </Text>
+                    <ScrollView
+                        style={styles.notesScroll}
+                        showsVerticalScrollIndicator={false}
+                        nestedScrollEnabled
+                    >
+                        <Text style={[styles.notesText, { color: textSecondaryColor }]}>
+                            {displayNotes}
+                        </Text>
+                    </ScrollView>
+                </View>
+
+                <View style={styles.actions}>
+                    {!isDownloading && (
                         <TouchableOpacity
-                            style={[styles.dismissButton, { borderColor: theme.colors.border }]}
+                            style={[styles.dismissButton, { borderColor: cardBorder }]}
                             onPress={onDismiss}
                             activeOpacity={0.8}
                         >
-                            <Text style={[styles.dismissText, { color: theme.colors.text }]}>Dismiss</Text>
+                            <Text style={[styles.dismissText, { color: textColor }]}>Dismiss</Text>
                         </TouchableOpacity>
+                    )}
 
-                        <TouchableOpacity
-                            style={[styles.primaryButton, { backgroundColor: theme.colors.primary }]}
-                            onPress={
-                                hasCachedApk
-                                    ? handleInstallCached
-                                    : (canDownload ? handleDownloadAndInstall : handleOpenRelease)
-                            }
-                            activeOpacity={0.85}
-                            disabled={isDownloading}
-                        >
-                            {isDownloading ? (
-                                <View style={styles.downloadRow}>
-                                    <ActivityIndicator color="#000" size="small" />
-                                    <Text style={styles.primaryText}>
-                                        {downloadProgress !== null ? `Downloading ${downloadProgress}%` : 'Downloading...'}
-                                    </Text>
-                                </View>
-                            ) : (
-                                <Text style={styles.primaryText}>
-                                    {hasCachedApk
-                                        ? 'Install Update'
-                                        : (canDownload ? 'Download & Install' : 'Open Release')}
-                                </Text>
-                            )}
-                        </TouchableOpacity>
-                    </View>
+                    <UpdateActionButton
+                        canDownload={canDownload}
+                        downloadProgress={downloadProgress}
+                        hasCachedApk={hasCachedApk}
+                        isDownloading={isDownloading}
+                        onDownloadAndInstall={handleDownloadAndInstall}
+                        onInstallCached={handleInstallCached}
+                        onOpenRelease={handleOpenRelease}
+                        style={styles.primaryButton}
+                    />
                 </View>
-            </View>
-        </Modal>
+            </Animated.View>
+        </Animated.View>
     );
 }
 
 const styles = StyleSheet.create({
     backdrop: {
-        flex: 1,
         backgroundColor: 'rgba(0,0,0,0.6)',
         alignItems: 'center',
         justifyContent: 'center',
         padding: 24,
+        zIndex: 9999,
+        elevation: 9999,
     },
     card: {
         width: '100%',
+        maxWidth: 420,
         borderRadius: 20,
-        padding: 18,
-        maxHeight: '80%',
+        padding: 20,
+        elevation: 24,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.4,
+        shadowRadius: 24,
     },
     header: {
         flexDirection: 'row',
@@ -314,9 +211,9 @@ const styles = StyleSheet.create({
         marginBottom: 16,
     },
     iconWrap: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
+        width: 40,
+        height: 40,
+        borderRadius: 20,
         alignItems: 'center',
         justifyContent: 'center',
         marginRight: 12,
@@ -325,28 +222,27 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     title: {
-        fontSize: 16,
+        fontSize: 17,
         fontWeight: '700',
     },
     subtitle: {
         marginTop: 2,
-        fontSize: 12,
+        fontSize: 13,
     },
     notesBlock: {
-        flex: 1,
-        marginBottom: 16,
+        marginBottom: 20,
     },
     notesTitle: {
-        fontSize: 13,
+        fontSize: 14,
         fontWeight: '700',
         marginBottom: 8,
     },
     notesScroll: {
-        maxHeight: 220,
+        maxHeight: 200,
     },
     notesText: {
-        fontSize: 12,
-        lineHeight: 18,
+        fontSize: 13,
+        lineHeight: 20,
     },
     actions: {
         flexDirection: 'row',
@@ -354,31 +250,18 @@ const styles = StyleSheet.create({
     },
     dismissButton: {
         flex: 1,
-        paddingVertical: 12,
+        paddingVertical: 14,
+        paddingHorizontal: 16,
         borderRadius: 12,
         borderWidth: 1,
         alignItems: 'center',
         justifyContent: 'center',
     },
     dismissText: {
-        fontSize: 12,
+        fontSize: 14,
         fontWeight: '700',
     },
     primaryButton: {
         flex: 1,
-        paddingVertical: 12,
-        borderRadius: 12,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    primaryText: {
-        fontSize: 12,
-        fontWeight: '700',
-        color: '#000',
-    },
-    downloadRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
     },
 });

@@ -10,7 +10,6 @@ import {
     Modal,
     FlatList,
     TextInput,
-    Linking,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { useAppStore } from '../store/appStore';
@@ -25,6 +24,8 @@ import { Feather } from '@react-native-vector-icons/feather';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { useSharedValue, useAnimatedStyle, runOnJS } from 'react-native-reanimated';
+import { UpdateActionButton } from '@/components/UpdateActionButton';
+import { useUpdateInstaller } from '@/hooks/useUpdateInstaller';
 
 // Reanimated Text for smooth preview
 const AnimatedText = Animated.createAnimatedComponent(Text);
@@ -177,12 +178,10 @@ export default function SettingsScreen() {
 
     // SharedValue for smooth font size animation
     const fontSizeSV = useSharedValue(settings.subtitleFontSize);
-
     // Sync SharedValue when settings change externally
     React.useEffect(() => {
         fontSizeSV.value = settings.subtitleFontSize;
     }, [settings.subtitleFontSize]);
-
 
 
     // Filter languages based on search
@@ -250,6 +249,7 @@ export default function SettingsScreen() {
         mode: 'tuning',
         shakeThreshold: settings.shakeThreshold,
     });
+
 
     async function handleClearCache() {
         Alert.alert(
@@ -321,6 +321,20 @@ export default function SettingsScreen() {
         );
     }
 
+    const {
+        canDownload,
+        downloadProgress,
+        hasCachedApk,
+        isDownloading,
+        handleDownloadAndInstall,
+        handleInstallCached,
+        handleOpenRelease,
+    } = useUpdateInstaller({
+        latestVersion: updateStatus.latestVersion,
+        releaseUrl: updateStatus.releaseUrl,
+        apkUrl: updateStatus.apkUrl,
+    });
+
     return (
         <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
             {renderHeader()}
@@ -328,10 +342,10 @@ export default function SettingsScreen() {
                 style={[styles.container, { backgroundColor: theme.colors.background }]}
                 contentContainerStyle={{ paddingBottom: 40 }}
             >
-                {updateStatus.available && updateStatus.latestVersion && updateStatus.releaseUrl && (
-                    <View style={[styles.updateCard, { backgroundColor: theme.colors.card }]}>
+                {updateStatus.available && updateStatus.latestVersion && (updateStatus.releaseUrl || updateStatus.apkUrl) && (
+                    <View style={[styles.updateCard, { backgroundColor: theme.colors.card, borderColor: theme.dark ? '#333333' : '#E5E7EB' }]}>
                         <View style={styles.updateHeader}>
-                            <View style={styles.updateIconWrap}>
+                            <View style={[styles.updateIconWrap, { backgroundColor: theme.dark ? '#2A2A2A' : '#F3F4F6' }]}>
                                 <Feather name="download" size={16} color={theme.colors.text} />
                             </View>
                             <View style={styles.updateTextBlock}>
@@ -343,15 +357,16 @@ export default function SettingsScreen() {
                                 </Text>
                             </View>
                         </View>
-                        <TouchableOpacity
-                            style={[styles.updateButton, { backgroundColor: theme.colors.primary }]}
-                            activeOpacity={0.8}
-                            onPress={() => {
-                                Linking.openURL(updateStatus.releaseUrl as string).catch(() => { });
-                            }}
-                        >
-                            <Text style={styles.updateButtonText}>Open Release</Text>
-                        </TouchableOpacity>
+                        <UpdateActionButton
+                            canDownload={canDownload}
+                            downloadProgress={downloadProgress}
+                            hasCachedApk={hasCachedApk}
+                            isDownloading={isDownloading}
+                            onDownloadAndInstall={handleDownloadAndInstall}
+                            onInstallCached={handleInstallCached}
+                            onOpenRelease={handleOpenRelease}
+                            style={styles.updatePrimaryButton}
+                        />
                     </View>
                 )}
 
@@ -986,17 +1001,8 @@ const styles = StyleSheet.create({
         marginTop: 2,
         fontSize: 12,
     },
-    updateButton: {
+    updatePrimaryButton: {
         marginTop: 12,
-        paddingVertical: 10,
-        borderRadius: 12,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    updateButtonText: {
-        fontSize: 12,
-        fontWeight: '700',
-        color: '#000',
     },
     section: {
         padding: 16,

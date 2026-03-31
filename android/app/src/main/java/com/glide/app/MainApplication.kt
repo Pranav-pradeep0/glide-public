@@ -30,6 +30,7 @@ class MainApplication : Application(), ReactApplication {
               add(SimpleThumbnailPackage())
               add(AudioControlPackage())
               add(SplashPackage())
+              add(ApkInstallerPackage())
             }
 
         override fun getJSBundleFile(): String? {
