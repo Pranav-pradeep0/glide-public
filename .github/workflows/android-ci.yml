@@ -149,13 +149,13 @@ jobs:
 
           BODY=""
           if [ -n "$FEATS" ]; then
-            BODY="$BODY\n### Features\n$FEATS"
+            BODY="${BODY}"$'\n'"### Features"$'\n'"$FEATS"
           fi
           if [ -n "$FIXES" ]; then
-            BODY="$BODY\n### Fixes\n$FIXES"
+            BODY="${BODY}"$'\n'"### Fixes"$'\n'"$FIXES"
           fi
           if [ -n "$PERFS" ]; then
-            BODY="$BODY\n### Performance\n$PERFS"
+            BODY="${BODY}"$'\n'"### Performance"$'\n'"$PERFS"
           fi
 
           # Fallback to raw list if nothing matched

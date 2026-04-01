@@ -5,6 +5,10 @@ import { SubtitleCueStore } from './SubtitleCueStore';
 import { SubtitleTrack } from '../utils/SubtitleExtractor';
 
 export class RecapService {
+    private static readonly MIN_DIALOGUE_LINES = 4;
+    private static readonly MIN_DIALOGUE_WORDS = 40;
+    private static readonly MIN_DIALOGUE_DURATION_SECONDS = 12;
+
     /**
      * High-level entry point to get dialogue for recap.
      * Checks existing cues first, then uses SubtitleCueStore to find/extract the best track.
@@ -16,6 +20,55 @@ export class RecapService {
         resumePosition: number,
         _videoTitle?: string
     ): Promise<string | null> {
+        const cues = await this.getCuesForRecap(videoPath, tracks, existingCues);
+
+        if (!cues || cues.length === 0) {
+            if (__DEV__) { console.warn('[RecapService] No subtitles available for recap'); }
+            return null;
+        }
+
+        const stats = this.getRecentDialogueStats(cues, resumePosition);
+        if (!stats || !this.isDialogueSufficient(stats)) {
+            if (__DEV__) { console.warn('[RecapService] Not enough dialogue for recap'); }
+            return null;
+        }
+
+        return stats.dialogue;
+    }
+
+    /**
+     * Extracts dialogue from the last few minutes (e.g., 5 mins) before the resume position.
+     * Balanced for quality and token usage.
+     */
+    static getRecentDialogue(cues: SubtitleCue[], resumePosition: number, windowSeconds: number = 300): string {
+        const stats = this.getRecentDialogueStats(cues, resumePosition, windowSeconds);
+        return stats?.dialogue || '';
+    }
+
+    static async getRecapEligibility(
+        videoPath: string,
+        tracks: SubtitleTrack[],
+        existingCues: SubtitleCue[],
+        resumePosition: number
+    ): Promise<{ eligible: boolean; reason: 'no_subtitles' | 'insufficient_dialogue' | 'ok' }> {
+        const cues = await this.getCuesForRecap(videoPath, tracks, existingCues);
+        if (!cues || cues.length === 0) {
+            return { eligible: false, reason: 'no_subtitles' };
+        }
+
+        const stats = this.getRecentDialogueStats(cues, resumePosition);
+        if (!stats || !this.isDialogueSufficient(stats)) {
+            return { eligible: false, reason: 'insufficient_dialogue' };
+        }
+
+        return { eligible: true, reason: 'ok' };
+    }
+
+    private static async getCuesForRecap(
+        videoPath: string,
+        tracks: SubtitleTrack[],
+        existingCues: SubtitleCue[]
+    ): Promise<SubtitleCue[] | null> {
         let cues = existingCues;
 
         // If no cues currently enabled, find the best track and extract
@@ -28,38 +81,43 @@ export class RecapService {
             }
         }
 
-        if (!cues || cues.length === 0) {
-            if (__DEV__) { console.warn('[RecapService] No subtitles available for recap'); }
-            return null;
-        }
-
-        return this.getRecentDialogue(cues, resumePosition);
+        return cues && cues.length > 0 ? cues : null;
     }
 
-    /**
-     * Extracts dialogue from the last few minutes (e.g., 5 mins) before the resume position.
-     * Balanced for quality and token usage.
-     */
-    static getRecentDialogue(cues: SubtitleCue[], resumePosition: number, windowSeconds: number = 300): string {
+    private static getRecentDialogueStats(
+        cues: SubtitleCue[],
+        resumePosition: number,
+        windowSeconds: number = 300
+    ): { dialogue: string; lineCount: number; wordCount: number; durationSeconds: number } | null {
         const startTime = Math.max(0, resumePosition - windowSeconds);
         const relevantCues = cues.filter(
             cue => cue.startTime >= startTime && cue.startTime <= resumePosition
         );
 
-        if (relevantCues.length === 0) { return ''; }
+        if (relevantCues.length === 0) { return null; }
 
-        // Clean and prepare dialogue
-        const processedCues = relevantCues
-            .map(cue => {
-                // Remove HTML-like tags
-                let text = cue.text.replace(/<[^>]*>/g, '');
-                // Remove bracketed noise like [MUSIC], (SIGHS), [Door Slams]
-                text = text.replace(/\[[^\]]*\]|\([^)]*\)/g, '');
-                return text.trim();
-            })
-            .filter(text => text.length > 0);
+        let lineCount = 0;
+        let wordCount = 0;
+        let durationSeconds = 0;
+        const processedCues: string[] = [];
 
-        // Join dialogue
+        for (const cue of relevantCues) {
+            // Remove HTML-like tags
+            let text = cue.text.replace(/<[^>]*>/g, '');
+            // Remove bracketed noise like [MUSIC], (SIGHS), [Door Slams]
+            text = text.replace(/\[[^\]]*\]|\([^)]*\)/g, '');
+            text = text.trim();
+
+            if (!text) { continue; }
+
+            processedCues.push(text);
+            lineCount += 1;
+            durationSeconds += Math.max(0, cue.endTime - cue.startTime);
+            wordCount += text.split(/\s+/).filter(Boolean).length;
+        }
+
+        if (processedCues.length === 0) { return null; }
+
         let dialogue = processedCues.join(' ');
 
         // Limit to roughly 1000-1200 tokens (~5000 characters)
@@ -71,7 +129,15 @@ export class RecapService {
             dialogue = firstSpace !== -1 ? truncated.substring(firstSpace).trim() : truncated;
         }
 
-        return dialogue;
+        return { dialogue, lineCount, wordCount, durationSeconds };
+    }
+
+    private static isDialogueSufficient(stats: { lineCount: number; wordCount: number; durationSeconds: number }): boolean {
+        return (
+            stats.lineCount >= this.MIN_DIALOGUE_LINES &&
+            stats.wordCount >= this.MIN_DIALOGUE_WORDS &&
+            stats.durationSeconds >= this.MIN_DIALOGUE_DURATION_SECONDS
+        );
     }
 
     /**

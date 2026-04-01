@@ -8,6 +8,7 @@ import {
     ScrollView,
     BackHandler,
 } from 'react-native';
+import Markdown from 'react-native-markdown-display';
 import Animated, {
     useSharedValue,
     useAnimatedStyle,
@@ -31,7 +32,25 @@ interface UpdateModalProps {
 
 function formatNotes(notes: string | null): string {
     if (!notes) {return 'No changelog provided.';}
-    return notes.trim();
+
+    let normalized = notes
+        .replace(/\r\n/g, '\n')
+        .replace(/\\r\\n/g, '\n')
+        .replace(/\\n/g, '\n')
+        .replace(/\\r/g, '\n')
+        .trim();
+
+    const dividerIndex = normalized.indexOf('\n---');
+    if (dividerIndex !== -1) {
+        normalized = normalized.slice(0, dividerIndex).trim();
+    }
+
+    const buildInfoIndex = normalized.indexOf('\n**Build Info**');
+    if (buildInfoIndex !== -1) {
+        normalized = normalized.slice(0, buildInfoIndex).trim();
+    }
+
+    return normalized.length > 0 ? normalized : 'No changelog provided.';
 }
 
 export default function UpdateModal({
@@ -152,9 +171,17 @@ export default function UpdateModal({
                         showsVerticalScrollIndicator={false}
                         nestedScrollEnabled
                     >
-                        <Text style={[styles.notesText, { color: textSecondaryColor }]}>
+                        <Markdown
+                            style={{
+                                body: [styles.notesText, { color: textSecondaryColor }],
+                                heading3: [styles.notesHeading, { color: textColor }],
+                                list_item: styles.notesListItem,
+                                bullet_list: styles.notesList,
+                                ordered_list: styles.notesList,
+                            }}
+                        >
                             {displayNotes}
-                        </Text>
+                        </Markdown>
                     </ScrollView>
                 </View>
 
@@ -243,6 +270,19 @@ const styles = StyleSheet.create({
     notesText: {
         fontSize: 13,
         lineHeight: 20,
+    },
+    notesHeading: {
+        fontSize: 14,
+        fontWeight: '700',
+        marginBottom: 6,
+        marginTop: 6,
+    },
+    notesList: {
+        marginTop: 4,
+        marginBottom: 4,
+    },
+    notesListItem: {
+        marginBottom: 4,
     },
     actions: {
         flexDirection: 'row',

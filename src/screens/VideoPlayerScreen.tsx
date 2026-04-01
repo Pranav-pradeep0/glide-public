@@ -205,6 +205,7 @@ export default function VideoPlayerScreen({ route }: Props) {
     const [recapText, setRecapText] = React.useState<string | null>(null);
     const [isGeneratingRecap, setIsGeneratingRecap] = React.useState(false);
     const [recapLoadingMessage, setRecapLoadingMessage] = React.useState<string | undefined>(undefined);
+    const [isRecapEligible, setIsRecapEligible] = React.useState(false);
 
     const handleToggleOrientationLock = useCallback(() => {
         if (orientationLocked) {
@@ -301,9 +302,9 @@ export default function VideoPlayerScreen({ route }: Props) {
             formattedTime: formatTime(resumePosition),
             remainingTime: savedDuration ? remaining : undefined,
             finishByTime: finishBy,
-            showRecap: !isNetworkStream && resumePosition > 120 && (!!imdbId || !!albumName),
+            showRecap: !isNetworkStream && resumePosition > 120 && (!!imdbId || !!albumName) && isRecapEligible,
         };
-    }, [resumePosition, savedDuration, imdbId, albumName, isNetworkStream]);
+    }, [resumePosition, savedDuration, imdbId, albumName, isNetworkStream, isRecapEligible]);
 
     // ========================================================================
     // PLAYER HOOKS (ORDER MATTERS - dependencies flow down)
@@ -840,8 +841,46 @@ export default function VideoPlayerScreen({ route }: Props) {
     const subtitleCuesRef = useRef(tracksHook.subtitleCues);
     subtitleCuesRef.current = tracksHook.subtitleCues;
 
-    const subtitleTracksRef = useRef(tracksHook.subtitleTracks);
-    subtitleTracksRef.current = tracksHook.subtitleTracks;
+    useEffect(() => {
+        let isActive = true;
+
+        const evaluateRecapEligibility = async () => {
+            if (
+                isNetworkStream ||
+                !resumePosition ||
+                resumePosition <= 120 ||
+                (!imdbId && !albumName)
+            ) {
+                if (isActive) {setIsRecapEligible(false);}
+                return;
+            }
+
+            const result = await RecapService.getRecapEligibility(
+                videoPath,
+                tracksHook.subtitleTracks,
+                subtitleCuesRef.current,
+                resumePosition
+            );
+
+            if (isActive) {
+                setIsRecapEligible(result.eligible);
+            }
+        };
+
+        evaluateRecapEligibility();
+
+        return () => {
+            isActive = false;
+        };
+    }, [
+        videoPath,
+        resumePosition,
+        isNetworkStream,
+        imdbId,
+        albumName,
+        tracksHook.subtitleTracks,
+        tracksHook.subtitleCues,
+    ]);
 
     const handleRecapTrigger = useCallback(async () => {
         if (isNetworkStream) {return;}
@@ -854,6 +893,11 @@ export default function VideoPlayerScreen({ route }: Props) {
         }
 
         if (!resumePosition) {return;}
+
+        if (!isRecapEligible) {
+            bookmarksHook.showToastWithMessage('Recap unavailable for this title', 'recap');
+            return;
+        }
 
         // Pause player and show RecapModal immediately with loading state
         player.pause();
