@@ -166,11 +166,13 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
 
     const setBrightnessNative = useCallback((val: number, isFinal: boolean = false) => {
         const brightness = Math.max(0, Math.min(1, val));
-        // Use sync method for smooth gesture performance
-        if (AudioControlModule?.setBrightnessSync) {
+        // Use window-only sync updates during the gesture, then commit once at the end.
+        if (isFinal) {
+            AudioControlModule?.setBrightness?.(brightness).catch(() => { });
+        } else if (AudioControlModule?.setBrightnessSync) {
             AudioControlModule.setBrightnessSync(brightness);
         } else {
-            AudioControlModule?.setBrightness(brightness).catch(() => { });
+            AudioControlModule?.setBrightness?.(brightness).catch(() => { });
         }
 
         // Notify JS callback for persistence

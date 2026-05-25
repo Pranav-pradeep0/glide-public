@@ -72,11 +72,15 @@ export function useBrightnessGesture(options: UseBrightnessGestureOptions) {
                 top: 0,
                 bottom: 0,
             })
-            .onStart(() => {
+            .onStart((event) => {
                 'worklet';
 
                 if (isLockedShared.value) {
                     runOnJS(onLockTap)();
+                    return;
+                }
+
+                if (event.x > leftZoneWidth) {
                     return;
                 }
 
@@ -94,7 +98,7 @@ export function useBrightnessGesture(options: UseBrightnessGestureOptions) {
             .onUpdate((event) => {
                 'worklet';
 
-                if (isLockedShared.value) {return;}
+                if (isLockedShared.value || !isGestureActive.value) {return;}
 
                 // Calculate delta - negative Y translation = up = increase
                 const delta = -event.translationY * PLAYER_CONSTANTS.BRIGHTNESS_SENSITIVITY;
@@ -112,6 +116,7 @@ export function useBrightnessGesture(options: UseBrightnessGestureOptions) {
             })
             .onEnd(() => {
                 'worklet';
+                if (!isGestureActive.value) {return;}
                 runOnJS(onBrightnessApply)(currentBrightness.value, true);
             })
             .onFinalize(() => {
@@ -132,6 +137,7 @@ export function useBrightnessGesture(options: UseBrightnessGestureOptions) {
         brightnessStart,
         onBrightnessChange,
         onBrightnessApply,
+        onGestureStart,
         onGestureEnd,
         onLockTap,
     ]);

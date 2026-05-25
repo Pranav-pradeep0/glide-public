@@ -237,6 +237,8 @@ export function usePlayerHUD(): UsePlayerHUDReturn {
     // ========================================================================
 
     const showBrightnessHUD = useCallback((value: number, isGestureActive = false) => {
+        clearTimer('volume');
+        dispatch({ type: 'HIDE_VOLUME' });
         dispatch({ type: 'SHOW_BRIGHTNESS', value });
         clearTimer('brightness');
 
@@ -258,6 +260,8 @@ export function usePlayerHUD(): UsePlayerHUDReturn {
     // ========================================================================
 
     const showVolumeHUD = useCallback((value: number, isGestureActive = false) => {
+        clearTimer('brightness');
+        dispatch({ type: 'HIDE_BRIGHTNESS' });
         dispatch({ type: 'SHOW_VOLUME', value });
         clearTimer('volume');
 

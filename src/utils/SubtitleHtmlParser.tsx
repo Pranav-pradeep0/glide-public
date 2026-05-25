@@ -15,6 +15,12 @@ interface ParsedSegment {
     color?: string;
 }
 
+interface FlattenedBaseTextStyle extends TextStyle {
+    fontFamily?: string;
+    fontWeight?: TextStyle['fontWeight'];
+    fontStyle?: TextStyle['fontStyle'];
+}
+
 
 /**
  * Represents a style state during parsing
@@ -33,6 +39,52 @@ interface StyleState {
  * Handles: SRT, WebVTT, and ASS subtitle formatting
  */
 export class SubtitleHtmlParser {
+    static resolveSegmentTextStyle(
+        segment: ParsedSegment,
+        baseStyle: FlattenedBaseTextStyle
+    ): TextStyle {
+        const segmentStyle: TextStyle = {};
+        const baseFontFamily = baseStyle.fontFamily;
+        const baseFontWeight = baseStyle.fontWeight;
+
+        if (baseFontFamily) {
+            segmentStyle.fontFamily = baseFontFamily;
+        }
+
+        if (baseFontWeight) {
+            segmentStyle.fontWeight = baseFontWeight;
+        }
+
+        if (baseStyle.fontStyle) {
+            segmentStyle.fontStyle = baseStyle.fontStyle;
+        }
+
+        if (segment.bold) {
+            if (baseFontFamily?.startsWith('NetflixSans-')) {
+                segmentStyle.fontFamily = 'NetflixSans-Bold';
+                segmentStyle.fontWeight = 'normal';
+            } else if (!baseFontFamily) {
+                segmentStyle.fontWeight = 'bold';
+            }
+        }
+
+        if (segment.italic) {
+            segmentStyle.fontStyle = 'italic';
+        }
+
+        if (segment.underline) {
+            segmentStyle.textDecorationLine = 'underline';
+        }
+
+        if (segment.color) {
+            segmentStyle.color = segment.color;
+        } else if (Platform.OS === 'android' && baseStyle.color) {
+            segmentStyle.color = baseStyle.color;
+        }
+
+        return segmentStyle;
+    }
+
     /**
      * Parse HTML-formatted subtitle text into styled segments
      * @param html - Raw subtitle text with HTML tags
@@ -234,7 +286,7 @@ export const FormattedSubtitleText: React.FC<FormattedSubtitleTextProps> = ({
     }
 
     // Extract base style properties for fallback
-    const baseStyleFlat = StyleSheet.flatten(baseStyle) || {};
+    const baseStyleFlat = (StyleSheet.flatten(baseStyle) || {}) as FlattenedBaseTextStyle;
 
     return (
         <Animated.Text
@@ -245,32 +297,7 @@ export const FormattedSubtitleText: React.FC<FormattedSubtitleTextProps> = ({
             numberOfLines={maxLines}
         >
             {segments.map((segment, index) => {
-                // Build segment-specific style
-                const segmentStyle: TextStyle = {};
-
-                // CRITICAL: Apply styles explicitly, don't rely on inheritance for these
-                if (segment.bold) {
-                    segmentStyle.fontWeight = 'bold';
-                }
-
-                if (segment.italic) {
-                    segmentStyle.fontStyle = 'italic';
-                }
-
-                if (segment.underline) {
-                    segmentStyle.textDecorationLine = 'underline';
-                }
-
-                // Apply custom color if specified
-                if (segment.color) {
-                    segmentStyle.color = segment.color;
-                }
-
-                // For Android: explicitly inherit base color if no segment color
-                // fontSize is inherited from parent Animated.Text
-                if (Platform.OS === 'android' && !segment.color) {
-                    segmentStyle.color = baseStyleFlat.color;
-                }
+                const segmentStyle = SubtitleHtmlParser.resolveSegmentTextStyle(segment, baseStyleFlat);
 
                 return (
                     <Text key={`seg-${index}`} style={segmentStyle}>

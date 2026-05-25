@@ -151,6 +151,17 @@ export default function VideoPlayerScreen({ route }: Props) {
 
     // Brightness tracking
     const brightnessRef = useRef<number | undefined>(undefined);
+    const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+
+    const handleBrightnessChange = useCallback((val: number) => {
+        brightnessRef.current = val;
+    }, []);
+
+    const handleBrightnessSave = useCallback((val: number) => {
+        if (settings.brightnessMode === 'global') {
+            updateSettings({ globalBrightness: val });
+        }
+    }, [settings.brightnessMode, updateSettings]);
 
     // Inactivity tracking for Recap
     const lastPauseTimeRef = useRef<number | null>(null);
@@ -372,14 +383,8 @@ export default function VideoPlayerScreen({ route }: Props) {
         basePlaybackRate,
         onTemporarySpeedChange: setTemporaryHoldRate,
         initialBrightness: startBrightness,
-        onBrightnessChange: (val) => {
-            brightnessRef.current = val;
-        },
-        onBrightnessSave: (val) => {
-            if (settings.brightnessMode === 'global') {
-                updateSettings({ globalBrightness: val });
-            }
-        },
+        onBrightnessChange: handleBrightnessChange,
+        onBrightnessSave: handleBrightnessSave,
     });
 
     // Tracks hook
@@ -1062,14 +1067,25 @@ export default function VideoPlayerScreen({ route }: Props) {
     // App state handling - respect background play setting
     useEffect(() => {
         const subscription = AppState.addEventListener('change', (nextState: AppStateStatus) => {
+            const wasBackgrounded = appStateRef.current === 'background' || appStateRef.current === 'inactive';
+
+            if (nextState === 'active' && wasBackgrounded && !isInPipMode) {
+                const brightnessToRestore = brightnessRef.current;
+                if (brightnessToRestore !== undefined) {
+                    AudioControlModule.setBrightnessSync?.(brightnessToRestore);
+                }
+            }
+
             if (nextState === 'background' || nextState === 'inactive') {
                 // We rely on the native player's onHostPause to handle background behavior.
                 // But we MUST save progress synchronously here to prevent data loss if app is killed.
                 forceSave();
             }
+
+            appStateRef.current = nextState;
         });
         return () => subscription.remove();
-    }, [forceSave]);
+    }, [forceSave, isInPipMode]);
 
     // Increment view count on first play
     useEffect(() => {

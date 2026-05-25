@@ -9,6 +9,7 @@ import android.database.ContentObserver;
 import android.media.AudioDeviceCallback;
 import android.media.AudioDeviceInfo;
 import android.media.AudioManager;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -27,6 +28,8 @@ import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
 import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.modules.core.DeviceEventManagerModule;
+
+import java.util.Locale;
 
 /**
  * Unified Audio Control Module for Glide.
@@ -88,6 +91,7 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
     // Timing constants
     private static final long APP_CHANGE_DEBOUNCE_MS = 200;
     private static final long VOLUME_FLAG_CLEAR_DELAY_MS = 50;
+    private static final long DUPLICATE_VOLUME_EVENT_DEBOUNCE_MS = 400;
 
     // Brightness constants
     private static final float BRIGHTNESS_RELEASE_VALUE = -1.0f;
@@ -105,10 +109,14 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
 
     // Lifecycle state
     private volatile boolean isListening = false;
+    private volatile boolean shouldRestoreBrightness = false;
+    private volatile float lastRequestedBrightness = BRIGHTNESS_RELEASE_VALUE;
 
     // Volume change detection (prevents feedback loops)
     private volatile boolean isAppChangingVolume = false;
     private volatile long lastAppVolumeChangeTime = 0;
+    private volatile int lastEmittedVolumePercentage = -1;
+    private volatile long lastEmittedVolumeEventTime = 0;
 
     // Observers and callbacks
     private ContentObserver volumeObserver;
@@ -609,7 +617,12 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
             volumeObserver = new ContentObserver(mainHandler) {
                 @Override
                 public void onChange(boolean selfChange) {
-                    handleVolumeObserverChange();
+                    handleVolumeObserverChange(null);
+                }
+
+                @Override
+                public void onChange(boolean selfChange, @Nullable Uri uri) {
+                    handleVolumeObserverChange(uri);
                 }
             };
 
@@ -627,7 +640,11 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
     /**
      * Handles volume observer changes (filters out app-initiated changes).
      */
-    private void handleVolumeObserverChange() {
+    private void handleVolumeObserverChange(@Nullable Uri uri) {
+        if (uri != null && !isVolumeRelatedSettingsUri(uri)) {
+            return;
+        }
+
         // Filter out app-initiated changes
         synchronized (this) {
             long now = System.currentTimeMillis();
@@ -664,9 +681,18 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
         }
 
         try {
+            long now = System.currentTimeMillis();
             int currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
             int maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
             int percentage = maxVolume > 0 ? Math.round((currentVolume / (float) maxVolume) * 100) : 0;
+
+            if (percentage == lastEmittedVolumePercentage
+                    && (now - lastEmittedVolumeEventTime) < DUPLICATE_VOLUME_EVENT_DEBOUNCE_MS) {
+                return;
+            }
+
+            lastEmittedVolumePercentage = percentage;
+            lastEmittedVolumeEventTime = now;
 
             Log.d(TAG, "Hardware volume change detected: " + percentage + "%");
 
@@ -871,8 +897,20 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
 
     @Override
     public void onHostResume() {
-        // No action needed - listening state is managed by startListening/stopListening
         Log.d(TAG, "onHostResume");
+
+        if (isListening && shouldRestoreBrightness && lastRequestedBrightness >= 0f) {
+            applyBrightness(lastRequestedBrightness, false, null, false);
+        }
+    }
+
+    private boolean isVolumeRelatedSettingsUri(@NonNull Uri uri) {
+        String uriString = uri.toString().toLowerCase(Locale.US);
+        return uriString.contains("volume_music")
+                || uriString.contains("volume_ring")
+                || uriString.contains("volume_alarm")
+                || uriString.contains("stream_volume")
+                || uriString.contains("/volume");
     }
 
     @Override
@@ -944,50 +982,9 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
     @ReactMethod
     public void setBrightness(float brightness, Promise promise) {
         final float finalBrightness = Math.max(0f, Math.min(1f, brightness));
-        android.app.Activity activity = getCurrentActivity();
-
-        // 1. SYSTEM BRIGHTNESS (Requires WRITE_SETTINGS)
-        // This is the "Nuclear" option for devices like iQOO/MIUI
-        boolean systemUpdated = false;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.System.canWrite(reactContext)) {
-            try {
-                int systemValue = Math.round(finalBrightness * SYSTEM_BRIGHTNESS_MAX);
-                Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, systemValue);
-                systemUpdated = true;
-                Log.d(TAG, "System brightness updated to: " + systemValue);
-            } catch (Exception e) {
-                Log.w(TAG, "Failed to update system brightness despite permission", e);
-            }
-        }
-
-        // 2. WINDOW BRIGHTNESS (Always applied as fallback/complement)
-        if (activity != null) {
-            final boolean finalSystemUpdated = systemUpdated;
-            activity.runOnUiThread(() -> {
-                try {
-                    android.view.Window window = activity.getWindow();
-                    android.view.WindowManager.LayoutParams params = window.getAttributes();
-
-                    // Android 15 HDR Headroom Control
-                    if (Build.VERSION.SDK_INT >= 35) { // Android 15
-                        // Prevent SDR UI from being too bright when HDR video is playing
-                        params.setDesiredHdrHeadroom(1.0f);
-                    }
-
-                    // If we updated system settings, we release window control to avoid conflict
-                    params.screenBrightness = finalSystemUpdated ? BRIGHTNESS_RELEASE_VALUE : finalBrightness;
-                    window.setAttributes(params);
-
-                    Log.d(TAG, "Window brightness set to: " + params.screenBrightness);
-                    promise.resolve(finalBrightness);
-                } catch (Exception e) {
-                    Log.e(TAG, "Error setting brightness", e);
-                    promise.reject("ERROR", e.getMessage());
-                }
-            });
-        } else {
-            promise.resolve(finalBrightness);
-        }
+        shouldRestoreBrightness = true;
+        lastRequestedBrightness = finalBrightness;
+        applyBrightness(finalBrightness, true, promise, true);
     }
 
     /**
@@ -1008,40 +1005,9 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
     @ReactMethod
     public void setBrightnessSync(float brightness) {
         final float finalBrightness = Math.max(0f, Math.min(1f, brightness));
-        android.app.Activity activity = getCurrentActivity();
-
-        // System update if permitted
-        boolean systemUpdated = false;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.System.canWrite(reactContext)) {
-            try {
-                int systemValue = Math.round(finalBrightness * SYSTEM_BRIGHTNESS_MAX);
-                Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, systemValue);
-                systemUpdated = true;
-            } catch (Exception e) {
-                // Silent intended for sync gesture
-            }
-        }
-
-        // Window update
-        if (activity != null) {
-            final boolean finalSystemUpdated = systemUpdated;
-            activity.runOnUiThread(() -> {
-                try {
-                    android.view.Window window = activity.getWindow();
-                    android.view.WindowManager.LayoutParams params = window.getAttributes();
-
-                    // Android 15 HDR Headroom
-                    if (Build.VERSION.SDK_INT >= 35) {
-                        params.setDesiredHdrHeadroom(1.0f);
-                    }
-
-                    params.screenBrightness = finalSystemUpdated ? BRIGHTNESS_RELEASE_VALUE : finalBrightness;
-                    window.setAttributes(params);
-                } catch (Exception e) {
-                    // Silent
-                }
-            });
-        }
+        shouldRestoreBrightness = true;
+        lastRequestedBrightness = finalBrightness;
+        applyBrightness(finalBrightness, false, null, false);
     }
 
     /**
@@ -1092,6 +1058,8 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
      */
     @ReactMethod
     public void resetBrightness(Promise promise) {
+        shouldRestoreBrightness = false;
+        lastRequestedBrightness = BRIGHTNESS_RELEASE_VALUE;
         android.app.Activity activity = getCurrentActivity();
         if (activity == null) {
             promise.reject("ERROR", "No activity available");
@@ -1119,6 +1087,8 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
      */
     @ReactMethod
     public void resetBrightnessSync() {
+        shouldRestoreBrightness = false;
+        lastRequestedBrightness = BRIGHTNESS_RELEASE_VALUE;
         android.app.Activity activity = getCurrentActivity();
         if (activity == null) {
             return;
@@ -1134,6 +1104,63 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
                 Log.i(TAG, "Brightness control released (sync)");
             } catch (Exception e) {
                 Log.e(TAG, "Error in resetBrightnessSync", e);
+            }
+        });
+    }
+
+    private void applyBrightness(float brightness, boolean logFailures, @Nullable Promise promise, boolean allowSystemUpdate) {
+        final float finalBrightness = Math.max(0f, Math.min(1f, brightness));
+        android.app.Activity activity = getCurrentActivity();
+
+        boolean systemUpdated = false;
+        if (allowSystemUpdate && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.System.canWrite(reactContext)) {
+            try {
+                int systemValue = Math.round(finalBrightness * SYSTEM_BRIGHTNESS_MAX);
+                Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, systemValue);
+                systemUpdated = true;
+                if (logFailures) {
+                    Log.d(TAG, "System brightness updated to: " + systemValue);
+                }
+            } catch (Exception e) {
+                if (logFailures) {
+                    Log.w(TAG, "Failed to update system brightness despite permission", e);
+                }
+            }
+        }
+
+        if (activity == null) {
+            if (promise != null) {
+                promise.resolve(finalBrightness);
+            }
+            return;
+        }
+
+        final boolean finalSystemUpdated = systemUpdated;
+        activity.runOnUiThread(() -> {
+            try {
+                android.view.Window window = activity.getWindow();
+                android.view.WindowManager.LayoutParams params = window.getAttributes();
+
+                if (Build.VERSION.SDK_INT >= 35) {
+                    params.setDesiredHdrHeadroom(1.0f);
+                }
+
+                params.screenBrightness = finalSystemUpdated ? BRIGHTNESS_RELEASE_VALUE : finalBrightness;
+                window.setAttributes(params);
+
+                if (logFailures) {
+                    Log.d(TAG, "Window brightness set to: " + params.screenBrightness);
+                }
+                if (promise != null) {
+                    promise.resolve(finalBrightness);
+                }
+            } catch (Exception e) {
+                if (logFailures) {
+                    Log.e(TAG, "Error setting brightness", e);
+                }
+                if (promise != null) {
+                    promise.reject("ERROR", e.getMessage());
+                }
             }
         });
     }

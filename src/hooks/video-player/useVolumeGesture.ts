@@ -75,11 +75,15 @@ export function useVolumeGesture(options: UseVolumeGestureOptions) {
                 top: 0,
                 bottom: 0,
             })
-            .onStart(() => {
+            .onStart((event) => {
                 'worklet';
 
                 if (isLockedShared.value) {
                     runOnJS(onLockTap)();
+                    return;
+                }
+
+                if (event.x < screenWidth - rightZoneWidth) {
                     return;
                 }
 
@@ -97,7 +101,7 @@ export function useVolumeGesture(options: UseVolumeGestureOptions) {
             .onUpdate((event) => {
                 'worklet';
 
-                if (isLockedShared.value) {return;}
+                if (isLockedShared.value || !isGestureActive.value) {return;}
 
                 // Calculate delta - negative Y translation = up = increase
                 const delta = -event.translationY * PLAYER_CONSTANTS.VOLUME_SENSITIVITY;
@@ -130,6 +134,7 @@ export function useVolumeGesture(options: UseVolumeGestureOptions) {
         maxVolume,
         onVolumeChange,
         onVolumeApply,
+        onGestureStart,
         onGestureEnd,
         onLockTap,
     ]);

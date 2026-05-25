@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect } from 'react';
-import { StyleSheet, View, useWindowDimensions } from 'react-native';
+import { StyleSheet, useWindowDimensions } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
     useSharedValue,
@@ -246,6 +246,16 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = React.memo(({
         : {};
 
     const hasSubtitle = currentCue && currentCue.text.trim();
+    const resolvedLineHeight = Math.round(settings.fontSize * 1.28);
+    const minSubtitleHeight = Math.round(resolvedLineHeight + 8);
+    const backgroundColor =
+        settings.backgroundColor === 'transparent'
+            ? 'transparent'
+            : `${settings.backgroundColor}${Math.round(
+                settings.backgroundOpacity * 255
+            )
+                .toString(16)
+                .padStart(2, '0')}`;
 
     return (
         <GestureDetector gesture={composedGesture}>
@@ -270,14 +280,8 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = React.memo(({
                         style={[
                             styles.textContainer,
                             {
-                                backgroundColor:
-                                    settings.backgroundColor === 'transparent'
-                                        ? 'transparent'
-                                        : `${settings.backgroundColor}${Math.round(
-                                            settings.backgroundOpacity * 255
-                                        )
-                                            .toString(16)
-                                            .padStart(2, '0')}`,
+                                backgroundColor,
+                                minHeight: minSubtitleHeight,
                             },
                         ]}
                         onLayout={handleTextLayout}
@@ -288,6 +292,7 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = React.memo(({
                                 color: settings.fontColor,
                                 fontWeight: settings.fontWeight || '600',
                                 fontFamily: settings.fontFamily,
+                                lineHeight: resolvedLineHeight,
                                 textAlign: 'center',
                                 includeFontPadding: false, // Android specific fix for vertical alignment
                                 ...textShadowStyle,
@@ -326,5 +331,6 @@ const styles = StyleSheet.create({
         borderRadius: 4,
         maxWidth: '90%',
         zIndex: 1,
+        justifyContent: 'center',
     },
 });
