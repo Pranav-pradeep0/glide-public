@@ -1,5 +1,5 @@
-import React, { FC } from 'react';
-import { View, Text, Pressable, StyleSheet, TextInput } from 'react-native';
+import React, { FC, useCallback, useEffect, useState } from 'react';
+import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { Feather } from '@react-native-vector-icons/feather';
 import { EdgeInsets } from 'react-native-safe-area-context';
 import LinearGradient from 'react-native-linear-gradient';
@@ -10,12 +10,12 @@ import {
     getResizeModeIcon,
 } from './PlayerIcons';
 import Animated, {
-    useAnimatedProps,
     useSharedValue,
     useAnimatedStyle,
     SharedValue,
     runOnJS,
     useDerivedValue,
+    useAnimatedReaction,
     withTiming,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -24,32 +24,41 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 // REANIMATED TEXT (High Performance Strings)
 // ============================================================================
 
-Animated.addWhitelistedNativeProps({ text: true });
-const AnimatedTextInput = Animated.createAnimatedComponent(TextInput);
-
 interface ReanimatedTextProps {
     value: SharedValue<number>;
     formatter?: (val: number) => string;
     style?: any;
     prefix?: string;
+    fallbackText?: string;
 }
 
-const ReanimatedText: React.FC<ReanimatedTextProps> = ({ value, formatter, style, prefix = '' }) => {
-    const animatedProps = useAnimatedProps(() => {
-        const valStr = formatter ? formatter(value.value) : String(Math.round(value.value));
-        return {
-            text: prefix + valStr,
-        } as any;
-    });
+const ReanimatedText: React.FC<ReanimatedTextProps> = ({ value, formatter, style, prefix = '', fallbackText }) => {
+    const [text, setText] = useState(fallbackText ?? (prefix ? `${prefix}0` : '0'));
+    const updateText = useCallback((nextText: string) => {
+        setText(prev => prev === nextText ? prev : nextText);
+    }, []);
+
+    useEffect(() => {
+        if (fallbackText !== undefined) {
+            updateText(fallbackText);
+        }
+    }, [fallbackText, updateText]);
+
+    useAnimatedReaction(
+        () => {
+            const valStr = formatter ? formatter(value.value) : String(Math.round(value.value));
+            return prefix + valStr;
+        },
+        (nextText, previousText) => {
+            if (nextText !== previousText) {
+                runOnJS(updateText)(nextText);
+            }
+        },
+        [formatter, prefix]
+    );
 
     return (
-        <AnimatedTextInput
-            underlineColorAndroid="transparent"
-            editable={false}
-            value={prefix + (formatter ? formatter(value.value) : String(value.value))}
-            style={[styles.reanimatedText, style]}
-            animatedProps={animatedProps}
-        />
+        <Text style={[styles.reanimatedText, style]}>{text}</Text>
     );
 };
 
@@ -196,6 +205,8 @@ interface PlayerControlsProps {
     onTogglePlayPause: () => void;
     currentTime: SharedValue<number>;
     duration: SharedValue<number>;
+    currentTimeSeconds?: number;
+    durationSeconds?: number;
     seekPreviewTime: SharedValue<number>;
     isScrubbingShared: SharedValue<boolean>;
     onSeekStart: () => void;
@@ -238,7 +249,7 @@ interface PlayerControlsProps {
 export const PlayerControls: FC<PlayerControlsProps> = React.memo(({
     showControls, title, onBack, onToggleAudio, onToggleSubtitle,
     onAddBookmark, paused, onTogglePlayPause, currentTime, duration,
-    seekPreviewTime,
+    currentTimeSeconds = 0, durationSeconds = 0, seekPreviewTime,
     onSeekStart, onSeek, onSeekComplete, errorText, isLandscape, insets,
     audioTrackSelected: _audioTrackSelected, subtitleTrackSelected: _subtitleTrackSelected, isScrubbingShared,
     onToggleBookmarkPanel, onTogglePlaylist, onToggleQuickSettings,
@@ -278,6 +289,10 @@ export const PlayerControls: FC<PlayerControlsProps> = React.memo(({
     const displayTime = useDerivedValue(() => {
         return isScrubbingShared.value ? seekPreviewTime.value : currentTime.value;
     });
+
+    const fallbackDisplayText = timeFormatter(currentTimeSeconds);
+    const fallbackRemainingText = `-${timeFormatter(Math.max(0, durationSeconds - currentTimeSeconds))}`;
+    const fallbackDurationText = timeFormatter(durationSeconds);
 
     // Sync scrubPosition with currentTime when not scrubbing (optional, but good for safety)
     // Actually not needed as we switch source based on flag
@@ -390,6 +405,7 @@ export const PlayerControls: FC<PlayerControlsProps> = React.memo(({
                     <ReanimatedText
                         value={displayTime}
                         formatter={timeFormatter}
+                        fallbackText={fallbackDisplayText}
                         style={styles.timeText}
                     />
                     <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -397,12 +413,14 @@ export const PlayerControls: FC<PlayerControlsProps> = React.memo(({
                             value={remainingTimeValue}
                             formatter={timeFormatter}
                             prefix="-"
+                            fallbackText={fallbackRemainingText}
                             style={[styles.timeText, { color: '#ccc' }]}
                         />
                         <Text style={[styles.timeText, { color: '#ccc' }]}> / </Text>
                         <ReanimatedText
                             value={duration}
                             formatter={timeFormatter}
+                            fallbackText={fallbackDurationText}
                             style={[styles.timeText, { color: '#fff' }]}
                         />
                     </View>

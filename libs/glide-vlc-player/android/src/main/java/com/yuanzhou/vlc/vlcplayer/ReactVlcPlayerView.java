@@ -214,6 +214,9 @@ class ReactVlcPlayerView extends TextureView implements
     private MediaPlayer.Equalizer mEqualizer = null;
     private float[] mEqualizerBands = null;
     private float mLastAppliedRate = Float.NaN;
+    private final Handler mRateHandler = new Handler(Looper.getMainLooper());
+    private Runnable mPendingRateRunnable = null;
+    private float mPendingRate = Float.NaN;
 
     // Guard against concurrent createPlayer() calls
     private volatile boolean mCreatingPlayer = false;
@@ -851,9 +854,11 @@ class ReactVlcPlayerView extends TextureView implements
 
                     // Apply audio track only if changed (avoids decoder re-init silence)
                     if (_audioTrack != -1 && _audioTrack != currentlyAppliedAudioTrack) {
-                        mMediaPlayer.setAudioTrack(_audioTrack);
-                        currentlyAppliedAudioTrack = _audioTrack;
-                        Log.d(TAG, "[VLC_EVENT] Playing: set audio track=" + _audioTrack);
+                        boolean appliedAudio = mMediaPlayer.setAudioTrack(_audioTrack);
+                        if (appliedAudio) {
+                            currentlyAppliedAudioTrack = _audioTrack;
+                            Log.d(TAG, "[VLC_EVENT] Playing: set audio track=" + _audioTrack);
+                        }
                     }
 
                     // Re-apply audio delay
@@ -932,7 +937,7 @@ class ReactVlcPlayerView extends TextureView implements
                         // Post to main thread so VLC's state fully settles before play()
                         mSeekHandler.post(() -> {
                             if (mMediaPlayer != null && !isPaused && mSeekVersion == capturedVersion) {
-                                Log.i(TAG, "[SEEK] buffer=100% → resuming play");
+                                Log.i(TAG, "[SEEK] buffer=100% -> resuming play");
                                 mLastSeekPlayTimestampMs = System.currentTimeMillis();
                                 requestAudioFocusInternal();
                                 mMediaPlayer.play();
@@ -1092,10 +1097,10 @@ class ReactVlcPlayerView extends TextureView implements
             long actualMs = mMediaPlayer.getTime();
             long delta = Math.abs(actualMs - mLastSeekTargetMs);
             if (delta > 500) {
-                Log.w(TAG, "[SEEK_VERIFY] ⚠ drift: target=" + mLastSeekTargetMs
+                Log.w(TAG, "[SEEK_VERIFY] drift: target=" + mLastSeekTargetMs
                         + "ms actual=" + actualMs + "ms delta=" + delta + "ms");
             } else {
-                Log.d(TAG, "[SEEK_VERIFY] ✓ target=" + mLastSeekTargetMs
+                Log.d(TAG, "[SEEK_VERIFY] target=" + mLastSeekTargetMs
                         + "ms actual=" + actualMs + "ms delta=" + delta + "ms");
             }
         }
@@ -1432,6 +1437,11 @@ class ReactVlcPlayerView extends TextureView implements
         mPlayAfterBufferComplete = false;
         mLastSeekPlayTimestampMs = -1L;
         mLastAppliedRate = Float.NaN;
+        if (mPendingRateRunnable != null) {
+            mRateHandler.removeCallbacks(mPendingRateRunnable);
+            mPendingRateRunnable = null;
+        }
+        mPendingRate = Float.NaN;
         mLastPreviewSeekTargetMs = -1L;
         mLastBridgePreviewSeekValue = Float.NaN;
         // mEqualizer intentionally not nulled — it can be reused by the next player.
@@ -1459,11 +1469,9 @@ class ReactVlcPlayerView extends TextureView implements
      */
     public boolean shouldSkipSeek(float seek) {
         if (seek < 0) {
-            Log.d(TAG, "[SEEK_FILTER] seek < 0, skip");
             return true;
         }
         if (seek == mLastBridgeSeekValue) {
-            Log.d(TAG, "[SEEK_FILTER] identical bridge value=" + seek + ", skip");
             return true;
         }
         mLastBridgeSeekValue = seek;
@@ -1520,6 +1528,7 @@ class ReactVlcPlayerView extends TextureView implements
             final long lengthMs = mMediaPlayer.getLength();
             final long targetMs = lengthMs > 0 ? (long) (position * lengthMs) : -1L;
             final boolean nativePlaying = mMediaPlayer.isPlaying();
+            final long currentMsBeforeSeek = mMediaPlayer.getTime();
 
             // ── Duplicate check ───────────────────────────────────────────────
             if (targetMs >= 0) {
@@ -1531,6 +1540,15 @@ class ReactVlcPlayerView extends TextureView implements
                 }
                 mLastSeekTargetMs = targetMs;
             }
+
+            if (targetMs >= 0 && !mNativeStopped
+                    && Math.abs(currentMsBeforeSeek - targetMs) < SEEK_TIME_EPSILON_MS) {
+                emitSeekEvent();
+                return;
+            }
+
+            cancelPendingSeek();
+            final long thisSeekVersion = ++mSeekVersion;
 
             Log.i(TAG, "[SEEK] ► position=" + position
                     + " targetMs=" + targetMs
@@ -1556,14 +1574,6 @@ class ReactVlcPlayerView extends TextureView implements
 
             // ── Case 2: Normal seek — buffer-completion approach ───────────────
             //
-            // Cancel any previous in-flight seek so its Buffering=100% callback
-            // can't fire after this seek has taken over.
-            cancelPendingSeek();
-
-            // Increment version BEFORE everything else so any concurrent
-            // Buffering callback from the cancelled seek self-discards.
-            final long thisSeekVersion = ++mSeekVersion;
-
             final boolean needsCodecFlush = nativePlaying && !isPaused;
 
             // ── ROOT FIX: set mPlayAfterBufferComplete BEFORE pause()+setTime() ──
@@ -1583,7 +1593,7 @@ class ReactVlcPlayerView extends TextureView implements
                 /* sentinel — play() triggered by Buffering=100% or timeout */ };
 
             if (needsCodecFlush) {
-                Log.i(TAG, "[SEEK] playing seek — pausing to flush codec drain");
+                Log.i(TAG, "[SEEK] playing seek -> pausing to flush codec drain");
                 mMediaPlayer.pause();
             }
 
@@ -1605,7 +1615,7 @@ class ReactVlcPlayerView extends TextureView implements
                     if (mSeekVersion == thisSeekVersion && mPlayAfterBufferComplete
                             && mMediaPlayer != null && !isPaused) {
                         Log.w(TAG, "[SEEK] buffer timeout (" + SEEK_BUFFER_TIMEOUT_MS
-                                + "ms) — forcing play()");
+                                + "ms) -> forcing play()");
                         mPlayAfterBufferComplete = false;
                         mLastSeekPlayTimestampMs = System.currentTimeMillis();
                         requestAudioFocusInternal();
@@ -1675,16 +1685,31 @@ class ReactVlcPlayerView extends TextureView implements
     }
 
     public void setRateModifier(float rateModifier) {
-        Log.d(TAG, "[RATE] setRate=" + rateModifier);
         if (mMediaPlayer != null) {
             if (!Float.isNaN(mLastAppliedRate) && Math.abs(mLastAppliedRate - rateModifier) < 0.01f) {
                 return;
             }
-            mMediaPlayer.setRate(rateModifier);
-            mLastAppliedRate = rateModifier;
-            updatePlayPauseState(mMediaPlayer.isPlaying()
-                    ? PlaybackStateCompat.STATE_PLAYING
-                    : PlaybackStateCompat.STATE_PAUSED);
+            mPendingRate = rateModifier;
+            if (mPendingRateRunnable != null) {
+                mRateHandler.removeCallbacks(mPendingRateRunnable);
+            }
+            mPendingRateRunnable = () -> {
+                if (mMediaPlayer == null || Float.isNaN(mPendingRate)) {
+                    return;
+                }
+                float rateToApply = mPendingRate;
+                if (!Float.isNaN(mLastAppliedRate) && Math.abs(mLastAppliedRate - rateToApply) < 0.01f) {
+                    mPendingRateRunnable = null;
+                    return;
+                }
+                mMediaPlayer.setRate(rateToApply);
+                mLastAppliedRate = rateToApply;
+                updatePlayPauseState(mMediaPlayer.isPlaying()
+                        ? PlaybackStateCompat.STATE_PLAYING
+                        : PlaybackStateCompat.STATE_PAUSED);
+                mPendingRateRunnable = null;
+            };
+            mRateHandler.postDelayed(mPendingRateRunnable, 80);
         }
     }
 
@@ -1917,8 +1942,15 @@ class ReactVlcPlayerView extends TextureView implements
     public void setAudioTrack(int track) {
         Log.d(TAG, "[AUDIO_TRACK] set=" + track);
         _audioTrack = track;
-        if (mMediaPlayer != null)
-            mMediaPlayer.setAudioTrack(track);
+        if (mMediaPlayer != null) {
+            if (track == currentlyAppliedAudioTrack) {
+                return;
+            }
+            boolean applied = mMediaPlayer.setAudioTrack(track);
+            if (applied) {
+                currentlyAppliedAudioTrack = track;
+            }
+        }
     }
 
     public void setTextTrack(int track) {

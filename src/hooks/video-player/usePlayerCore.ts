@@ -113,8 +113,13 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
     const playbackRateShared = useSharedValue(options.playbackRate ?? 1.0);
 
     useEffect(() => {
+        const now = Date.now();
+        lastSyncPosition.value = currentTimeRef.current;
+        lastSyncTimestamp.value = now;
+        currentTimeShared.value = currentTimeRef.current;
         playbackRateShared.value = options.playbackRate ?? 1.0;
-    }, [options.playbackRate, playbackRateShared]);
+    }, [options.playbackRate, playbackRateShared, currentTimeShared, lastSyncPosition,
+        lastSyncTimestamp]);
 
     // ── FRAME CALLBACK ────────────────────────────────────────────────────────
 
@@ -144,7 +149,6 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
      */
     const applySeekToVLC = useCallback((timeInSeconds: number, isPreview: boolean = false) => {
         if (!state.isVideoLoaded || !state.duration || state.duration === 0) {
-            if (__DEV__) {console.log('[SEEK] applySeekToVLC skipped — not loaded or no duration');}
             return;
         }
 
@@ -153,9 +157,6 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
 
         const player = videoRef.current;
         if (player && typeof player.seek === 'function') {
-            if (__DEV__) {console.log('[SEEK] applySeekToVLC fraction=' + fraction.toFixed(4)
-                + ' time=' + clamped.toFixed(2) + 's'
-                + ' preview=' + isPreview);}
             if (isPreview && typeof player.previewSeek === 'function') {
                 player.previewSeek(fraction);
             } else {
@@ -182,7 +183,6 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
         const sinceLast = now - lastLivePreviewAtRef.current;
 
         if (sinceLast >= LIVE_PREVIEW_THROTTLE_MS) {
-            if (__DEV__) {console.log('[SEEK] previewSeek immediate t=' + clamped.toFixed(2) + 's');}
             applySeekToVLC(clamped, true);
             lastLivePreviewAtRef.current = now;
             if (livePreviewTimerRef.current) {
@@ -192,7 +192,6 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
         } else {
             if (livePreviewTimerRef.current) {clearTimeout(livePreviewTimerRef.current);}
             const wait = LIVE_PREVIEW_THROTTLE_MS - sinceLast;
-            if (__DEV__) {console.log('[SEEK] previewSeek deferred t=' + clamped.toFixed(2) + 's waitMs=' + wait);}
             livePreviewTimerRef.current = setTimeout(() => {
                 livePreviewTimerRef.current = null;
                 lastLivePreviewAtRef.current = Date.now();
@@ -203,10 +202,6 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
 
 
     const commitSeek = useCallback((timeInSeconds: number) => {
-        if (__DEV__) {console.log('[SEEK] commitSeek requested t=' + timeInSeconds.toFixed(2) + 's'
-            + ' playerStopped=' + state.playerStopped
-            + ' isPaused=' + state.paused);}
-
         if (livePreviewTimerRef.current) {
             clearTimeout(livePreviewTimerRef.current);
             livePreviewTimerRef.current = null;
@@ -214,8 +209,6 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
 
         const duration = state.duration || 0;
         const clamped = Math.max(0, Math.min(duration, timeInSeconds));
-
-        if (__DEV__) {console.log('[SEEK] commitSeek final t=' + clamped.toFixed(2) + 's');}
 
         currentTimeRef.current = clamped;
         currentTimeShared.value = clamped;
@@ -246,7 +239,7 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
         }
 
         isScrubbingShared.value = false;
-    }, [state.duration, state.playerStopped, state.paused, applySeekToVLC, currentTimeShared,
+    }, [state.duration, state.playerStopped, applySeekToVLC, currentTimeShared,
         lastSyncPosition, lastSyncTimestamp, isScrubbingShared, isPlayingShared]);
 
     /** setIsSeeking — marks scrub start/end for UI feedback. */
@@ -427,7 +420,6 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
         const drift = Math.abs(timeSec - predicted);
 
         if (drift > 1.0 || !isPlayingShared.value) {
-            if (__DEV__ && drift > 1.0) {if (__DEV__) {console.log('[SYNC] drift=' + drift.toFixed(2) + 's → resyncing');}}
             lastSyncPosition.value = timeSec;
             lastSyncTimestamp.value = now;
             if (drift > 2.0) {currentTimeShared.value = timeSec;}
@@ -518,8 +510,6 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
             ? event
             : (event?.isBuffering ?? false);
 
-        if (__DEV__) {console.log('[PROGRESS] buffering=' + isBuffering);}
-
         if (bufferingTimeoutRef.current) {clearTimeout(bufferingTimeoutRef.current);}
 
         if (isBuffering) {
@@ -539,12 +529,9 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
 
         const now = Date.now();
         if (lastPauseIntentValueRef.current && (now - lastPauseIntentAtRef.current) < PLAY_PAUSE_INTENT_GUARD_MS) {
-            if (__DEV__) {console.log('[PLAYING] handlePlaying ignored - local pause intent guard');}
             return;
         }
 
-        if (__DEV__) {console.log('[PLAYING] handlePlaying | isPaused=' + state.paused
-            + ' isPlaying=' + state.isPlaying);}
         isPlayingShared.value = true;
         lastSyncTimestamp.value = now;
         lastSyncPosition.value = currentTimeRef.current;
@@ -559,8 +546,7 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
                 playerStopped: false,
             };
         });
-    }, [isPlayingShared, lastSyncTimestamp, lastSyncPosition, isScrubbingShared,
-        state.paused, state.isPlaying]);
+    }, [isPlayingShared, lastSyncTimestamp, lastSyncPosition, isScrubbingShared]);
 
     const handlePaused = useCallback(() => {
         if (isScrubbingShared.value) {
@@ -570,12 +556,8 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
 
         const now = Date.now();
         if (!lastPauseIntentValueRef.current && (now - lastPauseIntentAtRef.current) < PLAY_PAUSE_INTENT_GUARD_MS) {
-            if (__DEV__) {console.log('[PLAYING] handlePaused ignored - local play intent guard');}
             return;
         }
-
-        if (__DEV__) {console.log('[PLAYING] handlePaused | isPaused=' + state.paused
-            + ' isPlaying=' + state.isPlaying);}
 
         isPlayingShared.value = false;
 
@@ -585,7 +567,7 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
         });
 
         onProgressSave?.();
-    }, [onProgressSave, isPlayingShared, isScrubbingShared, state.paused, state.isPlaying]);
+    }, [onProgressSave, isPlayingShared, isScrubbingShared]);
 
     /**
      * handleStopped — VLC native Stopped event.
@@ -630,8 +612,6 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
                 pendingCommittedSeekRef.current = null;
             }
         }
-
-        if (__DEV__) {console.log('[SEEK] handleSeek (native) t=' + timeSec.toFixed(2) + 's');}
 
         currentTimeRef.current = timeSec;
         currentTimeShared.value = timeSec;

@@ -1,19 +1,16 @@
-import React, { useMemo } from 'react';
-import { View, Text, ActivityIndicator, StyleSheet, TextInput, useWindowDimensions } from 'react-native';
+import React, { useCallback, useMemo, useState } from 'react';
+import { View, Text, ActivityIndicator, StyleSheet, useWindowDimensions } from 'react-native';
 import { Feather } from '@react-native-vector-icons/feather';
 import Animated, {
-    useAnimatedProps,
     useDerivedValue,
     SharedValue,
     useAnimatedStyle,
+    useAnimatedReaction,
+    runOnJS,
     withTiming,
 } from 'react-native-reanimated';
 import { DoubleTapRipple } from './DoubleTapRipple';
 import { getResizeModeIcon, AnimatedVolumeIconStandard, AnimatedBrightnessIcon } from './PlayerIcons';
-
-// Animated TextInput for high-performance text updates
-Animated.addWhitelistedNativeProps({ text: true });
-const AnimatedTextInput = Animated.createAnimatedComponent(TextInput);
 
 interface ReanimatedTextProps {
     value: SharedValue<number>;
@@ -22,20 +19,23 @@ interface ReanimatedTextProps {
 }
 
 const ReanimatedText: React.FC<ReanimatedTextProps> = ({ value, formatter, style }) => {
-    const animatedProps = useAnimatedProps(() => {
-        return {
-            text: formatter ? formatter(value.value) : String(Math.round(value.value)),
-        } as any;
-    });
+    const [text, setText] = useState('0');
+    const updateText = useCallback((nextText: string) => {
+        setText(prev => prev === nextText ? prev : nextText);
+    }, []);
+
+    useAnimatedReaction(
+        () => formatter ? formatter(value.value) : String(Math.round(value.value)),
+        (nextText, previousText) => {
+            if (nextText !== previousText) {
+                runOnJS(updateText)(nextText);
+            }
+        },
+        [formatter]
+    );
 
     return (
-        <AnimatedTextInput
-            underlineColorAndroid="transparent"
-            editable={false}
-            value={formatter ? formatter(value.value) : String(value.value)} // Initial value
-            style={[styles.reanimatedText, style]}
-            animatedProps={animatedProps}
-        />
+        <Text style={[styles.reanimatedText, style]}>{text}</Text>
     );
 };
 

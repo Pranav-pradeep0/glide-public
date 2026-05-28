@@ -1245,7 +1245,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                     volumeHUD={gestures.sharedValues.currentVolume}
                     showSpeedHUD={hud.state.speed.show}
                     playbackRate={effectivePlaybackRate}
-                    zoomActive={gestures.sharedValues.zoomActive.value}
+                    zoomActive={hud.state.zoom.scale > 1}
                     zoomHUDScale={hud.state.zoom.scale}
                     shouldShowBuffer={shouldShowBuffer}
                     formatTime={formatTime}
@@ -1273,6 +1273,8 @@ export default function VideoPlayerScreen({ route }: Props) {
                     onTogglePlayPause={handleTogglePlayPause}
                     currentTime={player.currentTimeShared}
                     duration={player.durationShared}
+                    currentTimeSeconds={player.state.currentTime}
+                    durationSeconds={player.state.duration}
                     seekPreviewTime={gestures.sharedValues.seekTime}
                     isScrubbingShared={player.isScrubbingShared}
                     onSeekStart={handleSlidingStart}

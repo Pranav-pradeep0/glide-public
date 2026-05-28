@@ -156,9 +156,11 @@ const VLCPlayer = forwardRef<VLCPlayerRef, VLCPlayerProps>((props, ref) => {
     useImperativeHandle(ref, () => ({
         seek: (pos: number) => {
             setNativeProps({ seek: pos });
+            setTimeout(() => setNativeProps({ seek: -1 }), 0);
         },
         previewSeek: (pos: number) => {
             setNativeProps({ previewSeek: pos });
+            setTimeout(() => setNativeProps({ previewSeek: -1 }), 0);
         },
         resume: (isResume: boolean) => {
             setNativeProps({ resume: isResume });
