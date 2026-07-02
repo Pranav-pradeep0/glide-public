@@ -31,6 +31,7 @@ interface AppStore {
     setSubtitleBackgroundOpacity: (opacity: number) => void;
     setSubtitleEdgeStyle: (style: 'none' | 'outline' | 'dropShadow') => void;
     setSubtitleFontFamily: (fontFamily: string) => void;
+    setSubtitlePosition: (orientation: 'portrait' | 'landscape', offsetRatio: number) => void;
     resetSubtitleSettings: () => void;
     completeOnboarding: () => void;
     setHapticIntensity: (intensity: number) => void;
@@ -74,6 +75,8 @@ export const useAppStore = create<AppStore>((set) => ({
         subtitleBackgroundOpacity: 0.5,
         subtitleEdgeStyle: 'outline', // Default outline for legibility
         subtitleFontFamily: 'NetflixSans-Medium',
+        subtitlePositionPortrait: 0.42,
+        subtitlePositionLandscape: 0.42,
 
         hasCompletedOnboarding: false,
         brightnessMode: 'video', // Default to video-specific as per original request, or global? Let's stick to video as default for now or user preference. Detailed in plan: "video" default.
@@ -155,6 +158,18 @@ export const useAppStore = create<AppStore>((set) => ({
         set((state) => ({
             settings: { ...state.settings, subtitleFontFamily: fontFamily },
         })),
+    setSubtitlePosition: (orientation, offsetRatio) =>
+        set((state) => {
+            const clampedOffset = Math.max(-0.45, Math.min(0.45, offsetRatio));
+            return {
+                settings: {
+                    ...state.settings,
+                    ...(orientation === 'landscape'
+                        ? { subtitlePositionLandscape: clampedOffset }
+                        : { subtitlePositionPortrait: clampedOffset }),
+                },
+            };
+        }),
     resetSubtitleSettings: () =>
         set((state) => ({
             settings: {
@@ -167,6 +182,8 @@ export const useAppStore = create<AppStore>((set) => ({
                 subtitleBackgroundOpacity: 0.5,
                 subtitleEdgeStyle: 'outline',
                 subtitleFontFamily: 'NetflixSans-Medium',
+                subtitlePositionPortrait: 0.42,
+                subtitlePositionLandscape: 0.42,
             },
         })),
     completeOnboarding: () =>

@@ -21,6 +21,7 @@ export interface SubtitleSettings {
     position: 'top' | 'bottom' | 'middle';
     fontFamily?: string;
     fontWeight?: '400' | '600' | '700' | 'bold' | 'normal';
+    positionOffsetRatio?: number;
 }
 
 
@@ -77,6 +78,11 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = React.memo(({
 
     // Calculate initial offset based on settings position
     const getInitialOffset = useCallback(() => {
+        if (typeof settings.positionOffsetRatio === 'number') {
+            const clampedRatio = Math.max(-0.45, Math.min(0.45, settings.positionOffsetRatio));
+            return height * clampedRatio;
+        }
+
         switch (settings.position) {
             case 'top':
                 return -height * 0.4; // Push closer to top
@@ -84,27 +90,27 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = React.memo(({
                 return 0;
             case 'bottom':
             default:
-                return height * 0.4; // Push closer to bottom
+                return height * 0.42; // Push closer to bottom
         }
-    }, [settings.position, height]);
+    }, [settings.position, settings.positionOffsetRatio, height]);
 
     // Initialize position based on settings
     useEffect(() => {
         translateY.value = getInitialOffset();
-    }, [settings.position, height]);
+    }, [getInitialOffset, translateY]);
 
     // Sync fontSize shared value when settings change
     useEffect(() => {
         fontSize.value = settings.fontSize;
         savedFontSize.value = settings.fontSize;
-    }, [settings.fontSize]);
+    }, [fontSize, savedFontSize, settings.fontSize]);
 
     // Handle text container layout changes
     const handleTextLayout = useCallback((event: any) => {
         const { width, height: layoutHeight } = event.nativeEvent.layout;
         textWidth.value = width;
         textHeight.value = layoutHeight;
-    }, []);
+    }, [textHeight, textWidth]);
 
     // Pan gesture for vertical dragging
     const panGesture = Gesture.Pan()

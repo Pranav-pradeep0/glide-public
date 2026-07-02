@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import { GestureDetector } from 'react-native-gesture-handler';
 import { useSafeAreaInsets, initialWindowMetrics } from 'react-native-safe-area-context';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { SystemBars } from 'react-native-edge-to-edge';
 import { PlayerResizeMode } from '@glide/vlc-player';
@@ -134,7 +134,7 @@ export default function VideoPlayerScreen({ route }: Props) {
     const persistNow = useVideoHistoryStore(state => state.persistNow);
 
     // Global settings
-    const { settings, updateSettings } = useAppStore();
+    const { settings, updateSettings, setSubtitlePosition } = useAppStore();
 
     // Track if view has been counted
     const hasIncrementedView = useRef(false);
@@ -480,7 +480,7 @@ export default function VideoPlayerScreen({ route }: Props) {
 
     useHapticFeedback({
         enabled: playMode === 'with-haptics' && hapticsEnabled,
-        currentTime: player.currentTimeRef.current,
+        currentTimeRef: player.currentTimeRef,
         // Use displayed subtitles if available (WYSIWYG), otherwise fallback to pre-loaded haptic cues
         subtitleCues: tracksHook.subtitleCues.length > 0 ? tracksHook.subtitleCues : tracksHook.hapticCues,
         isPlaying: player.state.isPlaying,
@@ -538,8 +538,16 @@ export default function VideoPlayerScreen({ route }: Props) {
             // Use outlineWidth from settings when outline is enabled
             outlineWidth: settings.subtitleEdgeStyle === 'none' ? 0 : settings.subtitleOutlineWidth,
             position: 'bottom',
+            positionOffsetRatio: isLandscape
+                ? settings.subtitlePositionLandscape ?? 0.42
+                : settings.subtitlePositionPortrait ?? 0.42,
         };
-    }, [settings]);
+    }, [settings, isLandscape]);
+
+    const handleSubtitlePositionChange = useCallback((yOffset: number) => {
+        const orientation = isLandscape ? 'landscape' : 'portrait';
+        setSubtitlePosition(orientation, yOffset / height);
+    }, [height, isLandscape, setSubtitlePosition]);
 
     const shouldShowBuffer = useMemo(() =>
         player.state.isVideoLoaded && player.state.isBuffering && !player.state.isSeeking,
@@ -1434,6 +1442,7 @@ export default function VideoPlayerScreen({ route }: Props) {
             <SubtitleOverlay
                 currentCue={tracksHook.currentSubtitleCue}
                 settings={subtitleSettings}
+                onPositionChange={handleSubtitlePositionChange}
             />
 
             {/* Bookmark toast */}

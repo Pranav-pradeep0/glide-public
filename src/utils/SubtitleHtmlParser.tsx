@@ -1,11 +1,10 @@
 // utils/SubtitleHtmlParser.tsx
 import React, { useMemo } from 'react';
-import { Text, TextStyle, StyleProp, Platform } from 'react-native';
+import { Platform, StyleProp, StyleSheet, Text, TextStyle } from 'react-native';
 import Animated from 'react-native-reanimated';
 
-
 /**
- * Represents a parsed text segment with styling information
+ * Represents a parsed text segment with styling information.
  */
 interface ParsedSegment {
     text: string;
@@ -21,22 +20,51 @@ interface FlattenedBaseTextStyle extends TextStyle {
     fontStyle?: TextStyle['fontStyle'];
 }
 
-
-/**
- * Represents a style state during parsing
- */
 interface StyleState {
     bold: boolean;
     italic: boolean;
     underline: boolean;
     color?: string;
+    skipText: boolean;
 }
 
+type TagToken = {
+    raw: string;
+    name: string;
+    closing: boolean;
+    selfClosing: boolean;
+    attributes: string;
+};
+
+const ENTITY_MAP: Record<string, string> = {
+    amp: '&',
+    apos: "'",
+    gt: '>',
+    lt: '<',
+    nbsp: ' ',
+    quot: '"',
+    lrm: '\u200E',
+    rlm: '\u200F',
+    ndash: '-',
+    mdash: '-',
+    hellip: '...',
+    lsquo: "'",
+    rsquo: "'",
+    ldquo: '"',
+    rdquo: '"',
+};
+
+const SUPPORTED_STYLE_TAGS = new Set(['b', 'strong', 'i', 'em', 'u', 'font']);
+const STRUCTURAL_TAGS = new Set(['c', 'v', 'lang', 'ruby']);
+const SKIP_TEXT_TAGS = new Set(['rt', 'rp']);
 
 /**
- * Production-ready HTML parser for subtitle text formatting
- * Supports: <b>, <i>, <u>, <font color="">, and nested combinations
- * Handles: SRT, WebVTT, and ASS subtitle formatting
+ * Subtitle-specific markup parser.
+ *
+ * This deliberately avoids a full HTML parser. Subtitle cues commonly contain
+ * small, sometimes malformed markup fragments from SRT, WebVTT, ASS/SSA, and
+ * DVD/stream conversions. A forgiving tokenizer gives more predictable results
+ * on-device than trying to render raw HTML-like text.
  */
 export class SubtitleHtmlParser {
     static resolveSegmentTextStyle(
@@ -46,8 +74,9 @@ export class SubtitleHtmlParser {
         const segmentStyle: TextStyle = {};
         const baseFontFamily = baseStyle.fontFamily;
         const baseFontWeight = baseStyle.fontWeight;
+        const useCustomFont = !!baseFontFamily && this.canUseCustomFont(segment.text);
 
-        if (baseFontFamily) {
+        if (baseFontFamily && useCustomFont) {
             segmentStyle.fontFamily = baseFontFamily;
         }
 
@@ -59,11 +88,31 @@ export class SubtitleHtmlParser {
             segmentStyle.fontStyle = baseStyle.fontStyle;
         }
 
+        if (baseStyle.lineHeight) {
+            segmentStyle.lineHeight = baseStyle.lineHeight;
+        }
+
+        if (baseStyle.textShadowColor) {
+            segmentStyle.textShadowColor = baseStyle.textShadowColor;
+        }
+
+        if (baseStyle.textShadowOffset) {
+            segmentStyle.textShadowOffset = baseStyle.textShadowOffset;
+        }
+
+        if (baseStyle.textShadowRadius !== undefined) {
+            segmentStyle.textShadowRadius = baseStyle.textShadowRadius;
+        }
+
+        if (baseStyle.includeFontPadding !== undefined) {
+            segmentStyle.includeFontPadding = baseStyle.includeFontPadding;
+        }
+
         if (segment.bold) {
-            if (baseFontFamily?.startsWith('NetflixSans-')) {
+            if (baseFontFamily?.startsWith('NetflixSans-') && useCustomFont) {
                 segmentStyle.fontFamily = 'NetflixSans-Bold';
                 segmentStyle.fontWeight = 'normal';
-            } else if (!baseFontFamily) {
+            } else {
                 segmentStyle.fontWeight = 'bold';
             }
         }
@@ -76,20 +125,13 @@ export class SubtitleHtmlParser {
             segmentStyle.textDecorationLine = 'underline';
         }
 
-        if (segment.color) {
-            segmentStyle.color = segment.color;
-        } else if (Platform.OS === 'android' && baseStyle.color) {
-            segmentStyle.color = baseStyle.color;
-        }
+        // Always set color on nested Text. Android in particular can fail to
+        // inherit text color consistently across nested styled Text nodes.
+        segmentStyle.color = segment.color || baseStyle.color;
 
         return segmentStyle;
     }
 
-    /**
-     * Parse HTML-formatted subtitle text into styled segments
-     * @param html - Raw subtitle text with HTML tags
-     * @returns Array of parsed segments with style information
-     */
     static parse(html: string): ParsedSegment[] {
         if (!html || typeof html !== 'string') {
             return [];
@@ -102,203 +144,310 @@ export class SubtitleHtmlParser {
             italic: false,
             underline: false,
             color: undefined,
+            skipText: false,
         };
 
-        // Normalize line breaks from different formats
-        let normalizedText = html
-            .replace(/\\N/g, '\n')           // ASS format line breaks
-            .replace(/<br\s*\/?>/gi, '\n')   // HTML line breaks
-            .replace(/\r\n/g, '\n')          // Windows line breaks
-            .replace(/\r/g, '\n');           // Mac line breaks
-
-        // Regular expression to match supported HTML tags
-        const tagRegex = /<\/?([biu]|font[^>]*)>/gi;
+        const normalizedText = this.normalizeSubtitleText(html);
+        const tagRegex = /<[^>\n]*>/g;
         let lastIndex = 0;
         let match: RegExpExecArray | null;
 
-        // Reset regex index
-        tagRegex.lastIndex = 0;
-
         while ((match = tagRegex.exec(normalizedText)) !== null) {
-            // Extract text before the current tag
-            if (match.index > lastIndex) {
-                const textSegment = normalizedText.substring(lastIndex, match.index);
-                if (textSegment) {
-                    segments.push({
-                        text: textSegment,
-                        bold: currentStyle.bold,
-                        italic: currentStyle.italic,
-                        underline: currentStyle.underline,
-                        color: currentStyle.color,
-                    });
-                }
-            }
+            this.pushTextSegment(
+                segments,
+                normalizedText.substring(lastIndex, match.index),
+                currentStyle
+            );
 
-            const fullTag = match[0];
-            const tagName = match[1].toLowerCase();
-            const isClosingTag = fullTag.startsWith('</');
-
-            if (isClosingTag) {
-                // Restore previous style state from stack
-                const previousStyle = styleStack.pop();
-                if (previousStyle) {
-                    currentStyle = { ...previousStyle };
-                }
+            const tag = this.parseTag(match[0]);
+            if (tag) {
+                currentStyle = this.applyTag(tag, currentStyle, styleStack);
             } else {
-                // Save current style to stack before modifying
-                styleStack.push({ ...currentStyle });
-
-                // Apply new style based on tag type
-                if (tagName === 'b') {
-                    currentStyle.bold = true;
-                } else if (tagName === 'i') {
-                    currentStyle.italic = true;
-                } else if (tagName === 'u') {
-                    currentStyle.underline = true;
-                } else if (tagName.startsWith('font')) {
-                    // Extract color from font tag
-                    const colorMatch = fullTag.match(/color\s*=\s*["']?([^"'>]+)["']?/i);
-                    if (colorMatch) {
-                        currentStyle.color = this.normalizeColor(colorMatch[1]);
-                    }
-                }
+                this.pushTextSegment(segments, match[0], currentStyle);
             }
 
             lastIndex = tagRegex.lastIndex;
         }
 
-        // Add any remaining text after the last tag
-        if (lastIndex < normalizedText.length) {
-            const remainingText = normalizedText.substring(lastIndex);
-            if (remainingText) {
-                segments.push({
-                    text: remainingText,
-                    bold: currentStyle.bold,
-                    italic: currentStyle.italic,
-                    underline: currentStyle.underline,
-                    color: currentStyle.color,
-                });
-            }
-        }
+        this.pushTextSegment(
+            segments,
+            normalizedText.substring(lastIndex),
+            currentStyle
+        );
 
-        // If no segments were created (no tags found), return the original text
-        if (segments.length === 0 && normalizedText) {
-            segments.push({
-                text: normalizedText,
-                bold: false,
-                italic: false,
-                underline: false,
-            });
-        }
-
-        return segments;
+        return this.mergeAdjacentSegments(segments);
     }
 
-    /**
-     * Normalize color values to valid React Native format
-     * Supports: hex (#FFF, #FFFFFF), named colors, rgb/rgba
-     */
-    private static normalizeColor(color: string): string {
-        if (!color) {return '';}
-
-        const trimmed = color.trim().toLowerCase();
-
-        // Already valid hex color
-        if (/^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(trimmed)) {
-            return trimmed;
-        }
-
-        // Convert shorthand hex
-        if (/^[0-9a-f]{3}$/i.test(trimmed)) {
-            return `#${trimmed}`;
-        }
-
-        // Handle rgb/rgba (return as-is, React Native supports it)
-        if (trimmed.startsWith('rgb')) {
-            return trimmed;
-        }
-
-        // Named colors - pass through (React Native supports basic named colors)
-        return trimmed;
-    }
-
-    /**
-     * Remove all HTML tags from subtitle text
-     * Useful for accessibility or plain text extraction
-     */
     static stripTags(html: string): string {
         if (!html || typeof html !== 'string') {
             return '';
         }
 
-        return html
-            .replace(/<\/?[^>]+(>|$)/g, '')  // Remove all HTML tags
-            .replace(/\\N/g, '\n')           // ASS line breaks
-            .replace(/&nbsp;/g, ' ')         // HTML spaces
-            .replace(/&amp;/g, '&')          // HTML ampersand
-            .replace(/&lt;/g, '<')           // HTML less than
-            .replace(/&gt;/g, '>')           // HTML greater than
-            .replace(/&quot;/g, '"')         // HTML quote
+        const normalizedText = this.normalizeSubtitleText(html);
+        return normalizedText
+            .replace(/<\s*(br)\s*\/?\s*>/gi, '\n')
+            .replace(/<\s*(rt|rp)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, '')
+            .replace(/<\s*\/?\s*(rt|rp)[^>]*>/gi, '')
+            .replace(/<[^>\n]*>/g, '')
             .trim();
     }
 
-    /**
-     * Check if text contains any HTML formatting tags
-     */
     static hasHtmlTags(text: string): boolean {
         if (!text || typeof text !== 'string') {
             return false;
         }
-        return /<\/?[biu]|<\/?font[^>]*>/i.test(text);
+        return /<[^>\n]*>/.test(text) || /&(?:[a-z][a-z0-9]+|#\d+|#x[0-9a-f]+);/i.test(text);
+    }
+
+    static decodeEntities(text: string): string {
+        if (!text || text.indexOf('&') === -1) {
+            return text;
+        }
+
+        return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z][a-z0-9]+);/gi, (entity, body) => {
+            const normalized = String(body).toLowerCase();
+
+            if (normalized.startsWith('#x')) {
+                const codePoint = parseInt(normalized.slice(2), 16);
+                return Number.isFinite(codePoint) ? this.fromCodePoint(codePoint, entity) : entity;
+            }
+
+            if (normalized.startsWith('#')) {
+                const codePoint = parseInt(normalized.slice(1), 10);
+                return Number.isFinite(codePoint) ? this.fromCodePoint(codePoint, entity) : entity;
+            }
+
+            return ENTITY_MAP[normalized] ?? entity;
+        });
+    }
+
+    static normalizeSubtitleText(text: string): string {
+        return this.decodeEntities(text)
+            .replace(/\{\\an\d\}/gi, '')
+            .replace(/\\N/g, '\n')
+            .replace(/\\n/g, '\n')
+            .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+            .replace(/\r\n/g, '\n')
+            .replace(/\r/g, '\n');
+    }
+
+    static resolveContainerTextStyle(baseStyle: FlattenedBaseTextStyle): TextStyle {
+        const containerStyle: TextStyle = { ...baseStyle };
+        delete containerStyle.color;
+        delete containerStyle.fontFamily;
+        delete containerStyle.fontStyle;
+        delete containerStyle.fontWeight;
+        delete containerStyle.lineHeight;
+        delete containerStyle.textShadowColor;
+        delete containerStyle.textShadowOffset;
+        delete containerStyle.textShadowRadius;
+        delete containerStyle.includeFontPadding;
+        return containerStyle;
+    }
+
+    private static applyTag(
+        tag: TagToken,
+        currentStyle: StyleState,
+        styleStack: StyleState[]
+    ): StyleState {
+        if (tag.selfClosing || tag.name === 'br') {
+            return currentStyle;
+        }
+
+        const isKnownOpeningTag =
+            SUPPORTED_STYLE_TAGS.has(tag.name) ||
+            STRUCTURAL_TAGS.has(tag.name) ||
+            SKIP_TEXT_TAGS.has(tag.name);
+
+        if (tag.closing) {
+            if (!isKnownOpeningTag) {
+                return currentStyle;
+            }
+
+            const previousStyle = styleStack.pop();
+            return previousStyle ? { ...previousStyle } : currentStyle;
+        }
+
+        if (!isKnownOpeningTag) {
+            return currentStyle;
+        }
+
+        styleStack.push({ ...currentStyle });
+
+        const nextStyle = { ...currentStyle };
+        if (tag.name === 'b' || tag.name === 'strong') {
+            nextStyle.bold = true;
+        } else if (tag.name === 'i' || tag.name === 'em') {
+            nextStyle.italic = true;
+        } else if (tag.name === 'u') {
+            nextStyle.underline = true;
+        } else if (tag.name === 'font') {
+            const color = this.extractAttribute(tag.raw, 'color');
+            if (color) {
+                nextStyle.color = this.normalizeColor(color);
+            }
+        } else if (SKIP_TEXT_TAGS.has(tag.name)) {
+            nextStyle.skipText = true;
+        }
+
+        return nextStyle;
+    }
+
+    private static parseTag(rawTag: string): TagToken | null {
+        if (/^<\s*\d{1,2}:\d{2}(?::\d{2})?[.,]\d{3}\s*>$/.test(rawTag)) {
+            return {
+                raw: rawTag,
+                closing: false,
+                name: 'timestamp',
+                attributes: '',
+                selfClosing: true,
+            };
+        }
+
+        const match = rawTag.match(/^<\s*(\/?)\s*([a-z][a-z0-9]*)([^>]*)>$/i);
+        if (!match) {
+            return null;
+        }
+
+        return {
+            raw: rawTag,
+            closing: match[1] === '/',
+            name: match[2].toLowerCase(),
+            attributes: match[3] ?? '',
+            selfClosing: /\/\s*>$/.test(rawTag),
+        };
+    }
+
+    private static pushTextSegment(
+        segments: ParsedSegment[],
+        rawText: string,
+        style: StyleState
+    ) {
+        if (!rawText || style.skipText) {
+            return;
+        }
+
+        const text = this.decodeEntities(rawText);
+        if (!text) {
+            return;
+        }
+
+        segments.push({
+            text,
+            bold: style.bold,
+            italic: style.italic,
+            underline: style.underline,
+            color: style.color,
+        });
+    }
+
+    private static mergeAdjacentSegments(segments: ParsedSegment[]): ParsedSegment[] {
+        const merged: ParsedSegment[] = [];
+
+        for (const segment of segments) {
+            const previous = merged[merged.length - 1];
+            if (
+                previous &&
+                previous.bold === segment.bold &&
+                previous.italic === segment.italic &&
+                previous.underline === segment.underline &&
+                previous.color === segment.color
+            ) {
+                previous.text += segment.text;
+            } else {
+                merged.push({ ...segment });
+            }
+        }
+
+        return merged;
+    }
+
+    private static extractAttribute(tag: string, attributeName: string): string | undefined {
+        const escapedName = attributeName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const attrRegex = new RegExp(`${escapedName}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i');
+        const match = tag.match(attrRegex);
+        return match?.[1] ?? match?.[2] ?? match?.[3];
+    }
+
+    private static normalizeColor(color: string): string {
+        if (!color) {
+            return '';
+        }
+
+        const trimmed = this.decodeEntities(color).trim().toLowerCase();
+
+        if (/^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(trimmed)) {
+            return trimmed;
+        }
+
+        if (/^[0-9a-f]{3}([0-9a-f]{3})?$/i.test(trimmed)) {
+            return `#${trimmed}`;
+        }
+
+        if (trimmed.startsWith('rgb')) {
+            return trimmed;
+        }
+
+        return trimmed;
+    }
+
+    private static canUseCustomFont(text: string): boolean {
+        if (!text) {
+            return true;
+        }
+
+        // NetflixSans bundled in the app is Latin-focused. Applying it to CJK,
+        // Arabic, Indic, Thai, Hebrew, etc. can cause missing glyphs or force
+        // the platform into inconsistent fallback. For those scripts, keep the
+        // app's color/weight/outline but let the system choose a glyph-complete font.
+        if (Platform.OS !== 'android') {
+            return true;
+        }
+
+        return !/[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0B00-\u0B7F\u0C00-\u0C7F\u0D00-\u0D7F\u0E00-\u0E7F\u1000-\u109F\u1780-\u17FF\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(text);
+    }
+
+    private static fromCodePoint(codePoint: number, fallback: string): string {
+        try {
+            return String.fromCodePoint(codePoint);
+        } catch {
+            return fallback;
+        }
     }
 }
 
-
-/**
- * Props for FormattedSubtitleText component
- */
 interface FormattedSubtitleTextProps {
     text: string;
     baseStyle?: StyleProp<TextStyle>;
-    animatedStyle?: any; // Reanimated AnimatedStyle
+    animatedStyle?: any;
     maxLines?: number;
 }
 
-
-/**
- * React component that renders formatted subtitle text with animation support
- * Supports nested styling, HTML tags, and Reanimated animated styles
- */
 export const FormattedSubtitleText: React.FC<FormattedSubtitleTextProps> = ({
     text,
     baseStyle,
     animatedStyle,
     maxLines = 2,
 }) => {
-    // Memoize parsed segments for performance
-    const segments = useMemo(() => {
-        return SubtitleHtmlParser.parse(text);
-    }, [text]);
+    const segments = useMemo(() => SubtitleHtmlParser.parse(text), [text]);
 
-    // If no segments or empty text, render nothing
     if (segments.length === 0) {
         return null;
     }
 
-    // Extract base style properties for fallback
     const baseStyleFlat = (StyleSheet.flatten(baseStyle) || {}) as FlattenedBaseTextStyle;
+    const containerTextStyle = SubtitleHtmlParser.resolveContainerTextStyle(baseStyleFlat);
 
     return (
         <Animated.Text
             style={[
-                baseStyle,
-                animatedStyle, // Animated fontSize will cascade to nested Text
+                containerTextStyle,
+                animatedStyle,
             ]}
             numberOfLines={maxLines}
         >
             {segments.map((segment, index) => {
                 const segmentStyle = SubtitleHtmlParser.resolveSegmentTextStyle(segment, baseStyleFlat);
-
                 return (
                     <Text key={`seg-${index}`} style={segmentStyle}>
                         {segment.text}
@@ -309,20 +458,10 @@ export const FormattedSubtitleText: React.FC<FormattedSubtitleTextProps> = ({
     );
 };
 
-
-/**
- * Hook for using formatted subtitle text with memoization
- */
 export const useFormattedSubtitle = (text: string) => {
-    return useMemo(() => {
-        return {
-            segments: SubtitleHtmlParser.parse(text),
-            plainText: SubtitleHtmlParser.stripTags(text),
-            hasFormatting: SubtitleHtmlParser.hasHtmlTags(text),
-        };
-    }, [text]);
+    return useMemo(() => ({
+        segments: SubtitleHtmlParser.parse(text),
+        plainText: SubtitleHtmlParser.stripTags(text),
+        hasFormatting: SubtitleHtmlParser.hasHtmlTags(text),
+    }), [text]);
 };
-
-
-// Re-export StyleSheet for convenience
-import { StyleSheet } from 'react-native';

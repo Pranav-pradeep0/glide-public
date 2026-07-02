@@ -306,7 +306,7 @@ const VLCPlayer = forwardRef<VLCPlayerRef, VLCPlayerProps>((props, ref) => {
             autoplay: props.autoplay ?? true,
         },
         src: src,
-        progressUpdateInterval: props.onProgress ? 120 : 0,
+        progressUpdateInterval: props.onProgress ? 250 : 0,
     };
 
     return (

@@ -1,11 +1,11 @@
-import { useEffect, useRef } from 'react';
+import { MutableRefObject, useEffect, useRef } from 'react';
 import { SubtitleCue } from '../types';
 import { HapticEngineService } from '../services/HapticEngineService';
 import { HapticPatternGenerator } from '../services/HapticPatternGenerator';
 
 interface UseHapticFeedbackProps {
     enabled: boolean;
-    currentTime: number;
+    currentTimeRef: MutableRefObject<number>;
     subtitleCues: SubtitleCue[];
     isPlaying: boolean;
     subtitleDelay?: number; // in milliseconds
@@ -13,53 +13,89 @@ interface UseHapticFeedbackProps {
 
 export function useHapticFeedback({
     enabled,
-    currentTime,
+    currentTimeRef,
     subtitleCues,
     isPlaying,
     subtitleDelay = 0,
 }: UseHapticFeedbackProps) {
     const lastProcessedCueIndex = useRef<number>(-1);
+    const lastEffectiveTimeRef = useRef<number>(0);
+    const cueCursorRef = useRef<number>(0);
     const engine = HapticEngineService.getInstance();
 
     // Enable/Disable engine
     useEffect(() => {
         engine.setEnabled(enabled);
-    }, [enabled]);
+    }, [enabled, engine]);
 
-    // Main loop
     useEffect(() => {
         if (!enabled || !isPlaying || subtitleCues.length === 0) {
             return;
         }
 
-        // Find active cue
-        // Apply subtitle delay offset (convert ms to seconds)
-        const effectiveTime = currentTime - (subtitleDelay / 1000);
+        const findNextCue = (effectiveTime: number): SubtitleCue | null => {
+            let cursor = cueCursorRef.current;
 
-        // We use a slightly wider window to catch cues that might have just started
-        const activeCue = subtitleCues.find(cue =>
-            effectiveTime >= cue.startTime &&
-            effectiveTime <= cue.startTime + 0.5 // Check within 500ms of start
-        );
+            if (
+                cursor >= subtitleCues.length ||
+                (cursor > 0 && effectiveTime < subtitleCues[cursor - 1].startTime)
+            ) {
+                cursor = lowerBoundCue(subtitleCues, effectiveTime);
+            }
 
-        if (activeCue) {
-            // Avoid re-triggering the same cue
-            if (lastProcessedCueIndex.current === activeCue.index) {
+            while (
+                cursor < subtitleCues.length &&
+                effectiveTime > subtitleCues[cursor].startTime + 0.5
+            ) {
+                cursor++;
+            }
+
+            cueCursorRef.current = cursor;
+
+            for (let i = Math.max(0, cursor - 1); i < Math.min(subtitleCues.length, cursor + 3); i++) {
+                const cue = subtitleCues[i];
+                if (effectiveTime >= cue.startTime && effectiveTime <= cue.startTime + 0.5) {
+                    return cue;
+                }
+            }
+
+            return null;
+        };
+
+        const intervalId = setInterval(() => {
+            const effectiveTime = currentTimeRef.current - (subtitleDelay / 1000);
+
+            if (Math.abs(effectiveTime - lastEffectiveTimeRef.current) > 2) {
+                cueCursorRef.current = lowerBoundCue(subtitleCues, effectiveTime);
+                lastProcessedCueIndex.current = -1;
+            }
+            lastEffectiveTimeRef.current = effectiveTime;
+
+            const activeCue = findNextCue(effectiveTime);
+
+            if (!activeCue || lastProcessedCueIndex.current === activeCue.index) {
                 return;
             }
 
-            // Generate pattern
             const pattern = HapticPatternGenerator.generateFromCue(activeCue);
+            lastProcessedCueIndex.current = activeCue.index;
 
-            if (pattern) {
-                if (__DEV__) {
-                    if (__DEV__) {console.log(`[Haptic] Triggering: ${pattern.soundEffect} (${pattern.category})`);}
-                }
-                engine.triggerHaptic(pattern);
-                lastProcessedCueIndex.current = activeCue.index;
+            if (!pattern) {
+                return;
             }
-        }
-    }, [currentTime, enabled, isPlaying, subtitleCues, subtitleDelay]);
+
+            if (__DEV__) {console.log(`[Haptic] Triggering: ${pattern.soundEffect} (${pattern.category})`);}
+            engine.triggerHaptic(pattern);
+        }, 125);
+
+        return () => clearInterval(intervalId);
+    }, [currentTimeRef, enabled, engine, isPlaying, subtitleCues, subtitleDelay]);
+
+    useEffect(() => {
+        cueCursorRef.current = 0;
+        lastEffectiveTimeRef.current = 0;
+        lastProcessedCueIndex.current = -1;
+    }, [subtitleCues]);
 
     // Debug: Log all detected haptics when subtitles load
     useEffect(() => {
@@ -74,4 +110,19 @@ export function useHapticFeedback({
     return {};
 }
 
+function lowerBoundCue(cues: SubtitleCue[], time: number): number {
+    let left = 0;
+    let right = cues.length;
+
+    while (left < right) {
+        const mid = Math.floor((left + right) / 2);
+        if (cues[mid].startTime < time) {
+            left = mid + 1;
+        } else {
+            right = mid;
+        }
+    }
+
+    return left;
+}
 

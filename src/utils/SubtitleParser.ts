@@ -1,4 +1,5 @@
 import { SubtitleCue } from '../types';
+import { SubtitleHtmlParser } from './SubtitleHtmlParser';
 
 export class SubtitleParser {
     // Parse SRT format
@@ -29,7 +30,7 @@ export class SubtitleParser {
                 parseInt(timeMatch[7], 10) +
                 parseInt(timeMatch[8], 10) / 1000;
 
-            const text = lines.slice(2).join('\n');
+            const text = SubtitleHtmlParser.normalizeSubtitleText(lines.slice(2).join('\n'));
             const soundEffect = SubtitleParser.extractSoundEffect(text);
 
             cues.push({ index, startTime, endTime, text, soundEffect });
@@ -78,6 +79,7 @@ export class SubtitleParser {
                         i++;
                     }
 
+                    text = SubtitleHtmlParser.normalizeSubtitleText(text);
                     const soundEffect = SubtitleParser.extractSoundEffect(text);
                     cues.push({ index: index++, startTime, endTime, text, soundEffect });
                 }
@@ -118,7 +120,9 @@ export class SubtitleParser {
                     parseInt(endParts[1], 10) * 60 +
                     parseFloat(endParts[2]);
 
-                const text = parts.slice(9).join(',').replace(/\\N/g, '\n').replace(/{[^}]*}/g, '');
+                const text = SubtitleHtmlParser.normalizeSubtitleText(
+                    SubtitleParser.convertAssOverrides(parts.slice(9).join(','))
+                );
                 const soundEffect = SubtitleParser.extractSoundEffect(text);
 
                 cues.push({ index: index++, startTime, endTime, text, soundEffect });
@@ -188,15 +192,80 @@ export class SubtitleParser {
      * e.g., "[Explosion]" -> "Explosion"
      */
     private static extractSoundEffect(text: string): string | undefined {
+        const plainText = SubtitleHtmlParser.stripTags(text);
+
         // Match [Sound]
-        const bracketMatch = text.match(/\[(.*?)\]/);
+        const bracketMatch = plainText.match(/\[(.*?)\]/);
         if (bracketMatch) { return bracketMatch[1]; }
 
         // Match (Sound) - typically used for speaker names but sometimes sounds
         // We prioritize brackets as they are standard for SDH sound effects
-        const parenMatch = text.match(/\((.*?)\)/);
+        const parenMatch = plainText.match(/\((.*?)\)/);
         if (parenMatch) { return parenMatch[1]; }
 
         return undefined;
+    }
+
+    private static convertAssOverrides(text: string): string {
+        let result = '';
+        let bold = false;
+        let italic = false;
+        let underline = false;
+
+        const closeUntil = (target: { bold?: boolean; italic?: boolean; underline?: boolean }) => {
+            if (target.bold === false && bold) {
+                result += '</b>';
+                bold = false;
+            }
+            if (target.italic === false && italic) {
+                result += '</i>';
+                italic = false;
+            }
+            if (target.underline === false && underline) {
+                result += '</u>';
+                underline = false;
+            }
+        };
+
+        const openTag = (tag: 'b' | 'i' | 'u') => {
+            result += `<${tag}>`;
+        };
+
+        const closeTag = (tag: 'b' | 'i' | 'u') => {
+            result += `</${tag}>`;
+        };
+
+        const overrideRegex = /\{\\[^}]*\}/g;
+        let lastIndex = 0;
+        let match: RegExpExecArray | null;
+
+        while ((match = overrideRegex.exec(text)) !== null) {
+            result += text.substring(lastIndex, match.index);
+            const block = match[0];
+            const commands = block.match(/\\[ibu][01]/gi) || [];
+
+            commands.forEach(command => {
+                const type = command[1].toLowerCase();
+                const enabled = command[2] === '1';
+
+                if (type === 'b' && enabled !== bold) {
+                    enabled ? openTag('b') : closeTag('b');
+                    bold = enabled;
+                } else if (type === 'i' && enabled !== italic) {
+                    enabled ? openTag('i') : closeTag('i');
+                    italic = enabled;
+                } else if (type === 'u' && enabled !== underline) {
+                    enabled ? openTag('u') : closeTag('u');
+                    underline = enabled;
+                }
+            });
+
+            lastIndex = overrideRegex.lastIndex;
+        }
+
+        result += text.substring(lastIndex);
+        closeUntil({ bold: false, italic: false, underline: false });
+
+        return result;
     }
 }

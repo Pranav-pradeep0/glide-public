@@ -62,6 +62,8 @@ export interface AppSettings {
     subtitleBackgroundOpacity: number;
     subtitleEdgeStyle: 'none' | 'outline' | 'dropShadow';
     subtitleFontFamily?: string;
+    subtitlePositionPortrait: number;
+    subtitlePositionLandscape: number;
 
     hasCompletedOnboarding: boolean;
     brightnessMode: 'global' | 'video';
