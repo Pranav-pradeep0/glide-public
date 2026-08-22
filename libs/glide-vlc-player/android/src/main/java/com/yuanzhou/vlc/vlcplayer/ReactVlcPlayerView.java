@@ -124,7 +124,8 @@ class ReactVlcPlayerView extends TextureView implements
     private boolean autoAspectRatio = false;
     private boolean acceptInvalidCertificates = false;
     private boolean playInBackground = false;
-    private boolean mPipAutoEnterEnabled = false;
+    private boolean mPipEnabled = false;
+    private final VlcPipController mPipController = new VlcPipController(this);
     private String resizeMode = "contain";
     private long mAudioDelay = 0;
 
@@ -151,7 +152,6 @@ class ReactVlcPlayerView extends TextureView implements
     private volatile boolean isPaused = true;
     private volatile boolean mNativeStopped = true;
     private boolean isHostPaused = false;
-    private boolean isInPipMode = false;
     private boolean wasPlayingBeforeHostPause = false;
     private boolean mPausedForHostPause = false;
     private boolean mPausedForAudioFocus = false;
@@ -234,7 +234,6 @@ class ReactVlcPlayerView extends TextureView implements
     private Runnable mPendingAudioTrackRunnable = null;
     private final Handler mPipTransitionHandler = new Handler(Looper.getMainLooper());
     private Runnable mPendingPipBackgroundPause = null;
-    private Runnable mPendingPipResizeSync = null;
     private boolean mAwaitingPipAutoEnter = false;
 
     // Guard against concurrent createPlayer() calls
@@ -335,11 +334,13 @@ class ReactVlcPlayerView extends TextureView implements
     @Override
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
+        mPipController.attach();
     }
 
     @Override
     protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
+        mPipController.detach();
         cleanUpResources();
     }
 
@@ -382,20 +383,8 @@ class ReactVlcPlayerView extends TextureView implements
         Log.d(TAG, "[LIFECYCLE] onHostPause | wasPlaying=" + wasPlayingBeforeHostPause
                 + " playInBackground=" + playInBackground);
 
-        boolean currentIsInPipMode = false;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            try {
-                android.app.Activity activity = themedReactContext.getCurrentActivity();
-                if (activity != null)
-                    currentIsInPipMode = activity.isInPictureInPictureMode();
-            } catch (Exception e) {
-                Log.w(TAG, "[LIFECYCLE] Failed to check PIP mode: " + e.getMessage());
-            }
-        }
-        this.isInPipMode = currentIsInPipMode;
-
-        if (!playInBackground && !currentIsInPipMode) {
-            boolean shouldAwaitPipAutoEnter = mPipAutoEnterEnabled && wasPlayingBeforeHostPause && !isPaused;
+        if (!playInBackground && !isInPipMode()) {
+            boolean shouldAwaitPipAutoEnter = mPipEnabled && wasPlayingBeforeHostPause && !isPaused;
             if (shouldAwaitPipAutoEnter) {
                 schedulePendingPipBackgroundPause();
                 Log.i(TAG, "[LIFECYCLE] onHostPause: awaiting PiP auto-enter before pausing");
@@ -413,29 +402,10 @@ class ReactVlcPlayerView extends TextureView implements
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
-        boolean newIsInPipMode = false;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            try {
-                android.app.Activity activity = themedReactContext.getCurrentActivity();
-                if (activity != null)
-                    newIsInPipMode = activity.isInPictureInPictureMode();
-            } catch (Exception ignored) {
-            }
-        }
-        if (this.isInPipMode && !newIsInPipMode) {
-            cancelPendingPipBackgroundPause();
-            mAwaitingPipAutoEnter = false;
-            if (isHostPaused && !playInBackground) {
-                Log.i(TAG, "[LIFECYCLE] PiP exit → background → pausing");
-                pauseForHostBackground("onConfigurationChanged");
-            }
-        } else if (newIsInPipMode) {
-            cancelPendingPipBackgroundPause();
-            mAwaitingPipAutoEnter = false;
-            schedulePipResizeSync("configurationChanged");
-        }
-        this.isInPipMode = newIsInPipMode;
-        post(() -> forceResizeMode("configurationChanged"));
+        // PiP enter/exit is handled by VlcPipController; this only needs to refit the
+        // video to whatever bounds the window now has.
+        isResizeModeApplied = false;
+        post(this::applyResizeMode);
     }
 
     @Override
@@ -729,11 +699,7 @@ class ReactVlcPlayerView extends TextureView implements
                     mLastViewWidth = width;
                     mLastViewHeight = height;
                     if (mMediaPlayer != null) {
-                        if (isInPipMode) {
-                            schedulePipResizeSync("layoutChanged");
-                        } else {
-                            requestResizeMode();
-                        }
+                        requestResizeMode();
                     }
                 }
             }
@@ -839,6 +805,19 @@ class ReactVlcPlayerView extends TextureView implements
             // must be declared volatile. All such fields are marked volatile above.
             if (mMediaPlayer == null)
                 return;
+
+            // Auto-enter must only ever be armed while media is actually playing.
+            switch (event.type) {
+                case MediaPlayer.Event.Playing:
+                case MediaPlayer.Event.Paused:
+                case MediaPlayer.Event.Stopped:
+                case MediaPlayer.Event.EndReached:
+                    mPipController.setPlaying(
+                            mMediaPlayer != null && mMediaPlayer.isPlaying());
+                    break;
+                default:
+                    break;
+            }
 
             switch (event.type) {
 
@@ -1099,6 +1078,11 @@ class ReactVlcPlayerView extends TextureView implements
             mVideoVisibleHeight = visibleHeight;
             mSarNum = sarNum;
             mSarDen = sarDen;
+
+            mPipController.setVideoGeometry(
+                    mVideoVisibleWidth > 0 ? mVideoVisibleWidth : mVideoWidth,
+                    mVideoVisibleHeight > 0 ? mVideoVisibleHeight : mVideoHeight,
+                    sarNum, sarDen);
 
             Log.d(TAG, "[VIDEO_LAYOUT] " + width + "x" + height + " visible=" + visibleWidth + "x" + visibleHeight
                     + " SAR=" + sarNum + ":" + sarDen);
@@ -1394,7 +1378,6 @@ class ReactVlcPlayerView extends TextureView implements
         clearPendingResizeRequest();
         cancelPendingSeek();
         cancelPendingPipBackgroundPause();
-        cancelPendingPipResizeSync();
 
         if (pendingBufferingEvent != null) {
             bufferingHandler.removeCallbacks(pendingBufferingEvent);
@@ -2067,32 +2050,53 @@ class ReactVlcPlayerView extends TextureView implements
         Log.i(TAG, "[CONFIG] playInBackground=" + playInBackground);
     }
 
-    public void setPipAutoEnterEnabled(boolean pipAutoEnterEnabled) {
-        this.mPipAutoEnterEnabled = pipAutoEnterEnabled;
-        if (!pipAutoEnterEnabled) {
+    /**
+     * JS states only that PiP is currently allowed (player focused, nothing modal on
+     * top). Geometry, source rect and auto-enter arming are decided natively, where
+     * the video dimensions and view bounds actually live.
+     */
+    public void setPipEnabled(boolean pipEnabled) {
+        this.mPipEnabled = pipEnabled;
+        if (!pipEnabled) {
             cancelPendingPipBackgroundPause();
             mAwaitingPipAutoEnter = false;
         }
-        Log.d(TAG, "[PIP] autoEnterEnabled=" + pipAutoEnterEnabled);
+        mPipController.setEnabled(pipEnabled);
+        Log.d(TAG, "[PIP] enabled=" + pipEnabled);
     }
 
-    public void setIsInPipMode(boolean isInPipMode) {
-        boolean was = this.isInPipMode;
-        this.isInPipMode = isInPipMode;
-        if (isInPipMode) {
-            cancelPendingPipBackgroundPause();
-            mAwaitingPipAutoEnter = false;
-            schedulePipResizeSync("pipEnter");
-            post(() -> forceResizeMode("pipEnter"));
-        } else {
-            cancelPendingPipResizeSync();
+    public void enterPictureInPicture() {
+        mPipController.enter();
+    }
+
+    /** Single source of truth: the hosting Activity. */
+    private boolean isInPipMode() {
+        return mPipController.isInPipMode();
+    }
+
+    /** Called by {@link VlcPipController} once the Activity has changed PiP state. */
+    void onPipModeChangedInternal(boolean inPipMode) {
+        cancelPendingPipBackgroundPause();
+        mAwaitingPipAutoEnter = false;
+
+        if (!inPipMode && isHostPaused && !playInBackground) {
+            Log.i(TAG, "[PIP] PiP closed while host paused → pausing");
+            pauseForHostBackground("pipExit");
         }
-        Log.d(TAG, "[PIP] isInPipMode=" + isInPipMode + " was=" + was);
-        if (was && !isInPipMode && !playInBackground && isHostPaused) {
-            Log.i(TAG, "[PIP] PiP closed, host paused, not background → pausing");
-            pauseForHostBackground("setIsInPipMode");
+
+        // The window changed size; recompute geometry once against the new bounds.
+        isResizeModeApplied = false;
+        post(this::applyResizeMode);
+    }
+
+    android.app.Activity getReactActivity() {
+        try {
+            return themedReactContext.getCurrentActivity();
+        } catch (Exception e) {
+            return null;
         }
     }
+
 
     public void setResizeMode(String mode) {
         String prev = this.resizeMode;
@@ -2206,11 +2210,11 @@ class ReactVlcPlayerView extends TextureView implements
     }
 
     private boolean shouldKeepPlayingWhileHostPaused() {
-        return playInBackground || isInPipMode || mAwaitingPipAutoEnter;
+        return playInBackground || isInPipMode() || mAwaitingPipAutoEnter;
     }
 
     private boolean shouldShowBackgroundNotification() {
-        return playInBackground || (isHostPaused && !isInPipMode && !mAwaitingPipAutoEnter);
+        return playInBackground || (isHostPaused && !isInPipMode() && !mAwaitingPipAutoEnter);
     }
 
     private void pauseForHostBackground(String reason) {
@@ -2227,7 +2231,7 @@ class ReactVlcPlayerView extends TextureView implements
         mAwaitingPipAutoEnter = true;
         mPendingPipBackgroundPause = () -> {
             mPendingPipBackgroundPause = null;
-            if (!isHostPaused || playInBackground || isInPipMode) {
+            if (!isHostPaused || playInBackground || isInPipMode()) {
                 mAwaitingPipAutoEnter = false;
                 return;
             }
@@ -2246,65 +2250,6 @@ class ReactVlcPlayerView extends TextureView implements
         }
     }
 
-    private void schedulePipResizeSync(final String reason) {
-        cancelPendingPipResizeSync();
-
-        final long[] delaysMs = new long[] { 0L, 48L, 128L, 320L };
-        mPendingPipResizeSync = new Runnable() {
-            private int step = 0;
-
-            @Override
-            public void run() {
-                if (mMediaPlayer == null) {
-                    cancelPendingPipResizeSync();
-                    return;
-                }
-
-                forceResizeMode(reason + "#" + step);
-
-                step++;
-                if (step >= delaysMs.length || (!isInPipMode && !mAwaitingPipAutoEnter)) {
-                    cancelPendingPipResizeSync();
-                    return;
-                }
-
-                long nextDelay = delaysMs[step] - delaysMs[step - 1];
-                mPipTransitionHandler.postDelayed(this, nextDelay);
-            }
-        };
-
-        mPipTransitionHandler.post(mPendingPipResizeSync);
-    }
-
-    private void cancelPendingPipResizeSync() {
-        if (mPendingPipResizeSync != null) {
-            mPipTransitionHandler.removeCallbacks(mPendingPipResizeSync);
-            mPendingPipResizeSync = null;
-        }
-    }
-
-    private void forceResizeMode(String reason) {
-        if (mMediaPlayer == null)
-            return;
-
-        int viewWidth = getWidth();
-        int viewHeight = getHeight();
-        if (viewWidth <= 0 || viewHeight <= 0)
-            return;
-
-        try {
-            mMediaPlayer.getVLCVout().setWindowSize(viewWidth, viewHeight);
-        } catch (Exception e) {
-            Log.w(TAG, "[RESIZE] failed to update VLC window size reason=" + reason + " error=" + e.getMessage());
-        }
-
-        isResizeModeApplied = false;
-        mLastAppliedViewWidth = -1;
-        mLastAppliedViewHeight = -1;
-        requestLayout();
-        invalidate();
-        requestResizeMode();
-    }
 
     private void applyResizeModeInternal(int viewWidth, int viewHeight) {
         IVLCVout vlcOut = mMediaPlayer.getVLCVout();
@@ -2792,7 +2737,6 @@ class ReactVlcPlayerView extends TextureView implements
         clearPendingResizeRequest();
         cancelPendingSeek();
         cancelPendingPipBackgroundPause();
-        cancelPendingPipResizeSync();
 
         if (seekExecutor != null && !seekExecutor.isShutdown()) {
             seekExecutor.shutdownNow();
@@ -2853,11 +2797,8 @@ class ReactVlcPlayerView extends TextureView implements
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
         if (w != oldw || h != oldh) {
-            if (isInPipMode) {
-                schedulePipResizeSync("viewSizeChanged");
-            } else {
-                post(() -> forceResizeMode("viewSizeChanged"));
-            }
+            isResizeModeApplied = false;
+            post(this::applyResizeMode);
         }
     }
 

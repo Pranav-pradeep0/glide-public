@@ -51,6 +51,10 @@ repositories {
 }
 
 dependencies {
+    // The PiP controller needs ComponentActivity.addOnPictureInPictureModeChangedListener,
+    // which landed in androidx.activity 1.8.0. React Native pins the app to the same
+    // version, so this does not change what ships.
+    implementation 'androidx.activity:activity:1.8.0'
     implementation fileTree(dir: 'libs', include: ['*.jar'])
     implementation "com.facebook.react:react-native:+"
     implementation 'org.videolan.android:libvlc-all:3.6.5'

@@ -16,7 +16,6 @@ import {
     VLCBufferingEvent,
     getOptimizedInitOptions,
 } from '@/hooks/video-player/types';
-import { usePipModeListener } from '@/native/PipModule';
 
 // ============================================================================
 // TYPES
@@ -37,6 +36,8 @@ interface AnimatedVideoViewProps {
     repeat: boolean;
     resizeMode: PlayerResizeMode;
     playInBackground: boolean;
+    pipEnabled: boolean;
+    pipPresentationActive: boolean;
     currentTime: number;
     duration: number;
 
@@ -90,6 +91,8 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
             repeat,
             resizeMode,
             playInBackground,
+            pipEnabled,
+            pipPresentationActive,
             currentTime,
             duration,
             audioTrack,
@@ -109,8 +112,6 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
             onStopped,
             onSeek,
         } = props;
-
-        const isInPipMode = usePipModeListener();
 
         // Calculate resume time when playerKey changes (component is remounting for decoder/enhancement change)
         // We'll use VLC's --start-time option for seamless resume without visible seek
@@ -163,7 +164,10 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
         }
 
         return (
-            <Animated.View style={[styles.container, animatedStyle]}>
+            <Animated.View style={[
+                styles.container,
+                pipPresentationActive ? styles.pipContainer : animatedStyle,
+            ]}>
                 <VLCPlayer
                     key={playerKey}
                     ref={ref}
@@ -193,7 +197,7 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
                     onStopped={onStopped}
                     onSeek={onSeek}
                     playInBackground={playInBackground}
-                    isInPipMode={isInPipMode}
+                    pipEnabled={pipEnabled}
                 />
             </Animated.View>
         );
@@ -219,6 +223,8 @@ function areEqual(prevProps: AnimatedVideoViewProps, nextProps: AnimatedVideoVie
     if (prevProps.resizeMode !== nextProps.resizeMode) {return false;}
     if (prevProps.decoder !== nextProps.decoder) {return false;}
     if (prevProps.videoEnhancement !== nextProps.videoEnhancement) {return false;}
+    if (prevProps.pipEnabled !== nextProps.pipEnabled) {return false;}
+    if (prevProps.pipPresentationActive !== nextProps.pipPresentationActive) {return false;}
     if (prevProps.audioTrack !== nextProps.audioTrack) {return false;}
     if (prevProps.textTrack !== nextProps.textTrack) {return false;}
     if (prevProps.title !== nextProps.title) {return false;}
@@ -253,6 +259,9 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         overflow: 'hidden',
+    },
+    pipContainer: {
+        transform: [],
     },
     video: {
         flex: 1,

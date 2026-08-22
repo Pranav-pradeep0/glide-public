@@ -42,11 +42,10 @@ public class ReactVlcPlayerViewManager extends SimpleViewManager<ReactVlcPlayerV
     private static final String PROP_ACCEPT_INVALID_CERTIFICATES = "acceptInvalidCertificates";
     private static final String PROP_RESIZE_MODE = "resizeMode";
     private static final String PROP_PLAY_IN_BACKGROUND = "playInBackground";
-    private static final String PROP_PIP_AUTO_ENTER_ENABLED = "pipAutoEnterEnabled";
+    private static final String PROP_PIP_ENABLED = "pipEnabled";
     private static final String PROP_TITLE = "title";
     private static final String PROP_ARTIST = "artist";
     private static final String PROP_AUDIO_EQUALIZER = "audioEqualizer";
-    private static final String PROP_IS_IN_PIP_MODE = "isInPipMode";
 
     @Override
     public String getName() {
@@ -190,9 +189,9 @@ public class ReactVlcPlayerViewManager extends SimpleViewManager<ReactVlcPlayerV
         videoView.setPlayInBackground(playInBackground);
     }
 
-    @ReactProp(name = PROP_PIP_AUTO_ENTER_ENABLED, defaultBoolean = false)
-    public void setPipAutoEnterEnabled(final ReactVlcPlayerView videoView, final boolean pipAutoEnterEnabled) {
-        videoView.setPipAutoEnterEnabled(pipAutoEnterEnabled);
+    @ReactProp(name = PROP_PIP_ENABLED, defaultBoolean = false)
+    public void setPipEnabled(final ReactVlcPlayerView videoView, final boolean pipEnabled) {
+        videoView.setPipEnabled(pipEnabled);
     }
 
     @ReactProp(name = PROP_TITLE)
@@ -213,11 +212,6 @@ public class ReactVlcPlayerViewManager extends SimpleViewManager<ReactVlcPlayerV
     @ReactProp(name = "audioDelay", defaultFloat = 0f)
     public void setAudioDelay(final ReactVlcPlayerView videoView, final float delayMs) {
         videoView.setAudioDelay((long) delayMs);
-    }
-
-    @ReactProp(name = PROP_IS_IN_PIP_MODE, defaultBoolean = false)
-    public void setIsInPipMode(final ReactVlcPlayerView videoView, final boolean isInPipMode) {
-        videoView.setIsInPipMode(isInPipMode);
     }
 
     public void startRecording(final ReactVlcPlayerView videoView, final String recordingPath) {
@@ -247,7 +241,8 @@ public class ReactVlcPlayerViewManager extends SimpleViewManager<ReactVlcPlayerV
                 "stopRecording", 2,
                 "snapshot", 3,
                 "pausePlayer", 4,
-                "stopPlayer", 5);
+                "stopPlayer", 5,
+                "enterPictureInPicture", 6);
     }
 
     @Override
@@ -276,6 +271,9 @@ public class ReactVlcPlayerViewManager extends SimpleViewManager<ReactVlcPlayerV
                 break;
             case 5:
                 root.stopPlayer();
+                break;
+            case 6:
+                root.enterPictureInPicture();
                 break;
 
             default:

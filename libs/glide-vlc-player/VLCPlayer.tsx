@@ -147,6 +147,7 @@ export interface VLCPlayerRef {
     changeVideoAspectRatio: (ratio: string) => void;
     autoAspectRatio: (isAuto: boolean) => void;
     setVolume: (vol: number) => void;
+    enterPictureInPicture: () => void;
 }
 
 const VLCPlayer = forwardRef<VLCPlayerRef, VLCPlayerProps>((props, ref) => {
@@ -191,6 +192,9 @@ const VLCPlayer = forwardRef<VLCPlayerRef, VLCPlayerProps>((props, ref) => {
         },
         setVolume: (vol: number) => {
             setNativeProps({ volume: vol });
+        },
+        enterPictureInPicture: () => {
+            dispatchCommand('enterPictureInPicture', []);
         },
     }));
 

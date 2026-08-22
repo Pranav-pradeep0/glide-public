@@ -303,18 +303,12 @@ export type VLCPlayerProps = VLCPlayerCallbackProps & {
   playInBackground?: boolean;
 
   /**
-   * Set to `true` when Android PiP auto-enter is currently eligible.
-   * This lets the native player defer background pausing briefly while PiP is taking over.
+   * Set to `true` while Picture-in-Picture is allowed (the player is focused and
+   * nothing modal is on top). The native player owns everything else about PiP:
+   * window aspect ratio, source rect hint and auto-enter arming.
    * @default false
    */
-  pipAutoEnterEnabled?: boolean;
-
-  /**
-   * Set to `true` if the app is currently in PiP mode.
-   * This is used to handle PiP to Background transitions properly.
-   * @default false
-   */
-  isInPipMode?: boolean;
+  pipEnabled?: boolean;
 
   /**
    * Video aspect ratio
@@ -387,6 +381,12 @@ export type VLCPlayerProps = VLCPlayerCallbackProps & {
 };
 
 declare class PlaybackMethods<T> extends Component<T> {
+  /**
+   * Ask the hosting Activity to enter Picture-in-Picture. Geometry is decided
+   * natively from the current video, so no arguments are needed.
+   */
+  enterPictureInPicture();
+
   /**
    * Start a new recording session at the given path
    * @param path Directory to create new recording in

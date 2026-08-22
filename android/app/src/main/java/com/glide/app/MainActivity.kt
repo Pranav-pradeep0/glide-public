@@ -64,21 +64,18 @@ class MainActivity : ReactActivity() {
   }
 
   /**
-   * Called when the activity enters or exits PIP mode
+   * PiP is owned natively by the video view; the Activity only relays the mode change
+   * so the React tree can hide what does not belong in a PiP window.
    */
   override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
     super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
-    
-    // Notify the React Native module about PIP state change
+
     try {
       val reactApplication = application as? com.facebook.react.ReactApplication
       val reactContext = reactApplication?.reactNativeHost?.reactInstanceManager?.currentReactContext
-      if (reactContext != null) {
-        val pipModule = reactContext.getNativeModule(PipModule::class.java)
-        pipModule?.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
-      }
+      reactContext?.getNativeModule(PipModule::class.java)
+          ?.onPictureInPictureModeChanged(isInPictureInPictureMode)
     } catch (e: Exception) {
-      // Silently ignore - PIP mode will still work, just without event notification
       android.util.Log.w("MainActivity", "Failed to notify PIP state change: ${e.message}")
     }
   }
@@ -137,4 +134,5 @@ class MainActivity : ReactActivity() {
     
     return super.onKeyDown(keyCode, event)
   }
+
 }

@@ -1,145 +1,97 @@
 package com.glide.app.pip
 
-import android.app.Activity
-import android.app.PictureInPictureParams
-import android.content.res.Configuration
-import android.os.Build
-import android.util.Rational
-import com.facebook.react.bridge.*
+import com.facebook.react.bridge.Promise
+import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.bridge.ReactContextBaseJavaModule
+import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.WritableMap
+import com.facebook.react.bridge.Arguments
 import com.facebook.react.modules.core.DeviceEventManagerModule
 
+/**
+ * Reports Picture-in-Picture state to JavaScript.
+ *
+ * PiP itself is owned natively by the video view (see VlcPipController in the VLC
+ * player module), because that is the only place that knows the video's dimensions,
+ * the surface bounds and whether playback is live. This module is only the event
+ * channel that lets the React tree react to a mode change, plus the one activity
+ * action the external-open flow needs.
+ *
+ * It deliberately holds no PiP configuration. The previous version tracked aspect
+ * ratio, source rect, auto-enter and a per-activity ownership map pushed down from
+ * JS; clearing that state never reached the Activity, so auto-enter stayed armed
+ * after the player was gone and Android would put an unrelated screen into PiP.
+ */
 class PipModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
 
     companion object {
         const val NAME = "PipModule"
         const val PIP_MODE_CHANGED_EVENT = "onPipModeChanged"
-        
-        // Store the last known PIP state to avoid duplicate events
-        private var lastPipState: Boolean = false
     }
 
     override fun getName(): String = NAME
 
-    /**
-     * Required by NativeEventEmitter - called when adding a listener
-     */
+    /** Required by RN's built-in NativeEventEmitter. */
     @ReactMethod
-    fun addListener(eventName: String) {
-        // Keep: Required for RN built-in NativeEventEmitter
-    }
+    fun addListener(eventName: String) = Unit
 
-    /**
-     * Required by NativeEventEmitter - called when removing listeners
-     */
+    /** Required by RN's built-in NativeEventEmitter. */
     @ReactMethod
-    fun removeListeners(count: Int) {
-        // Keep: Required for RN built-in NativeEventEmitter
-    }
+    fun removeListeners(count: Int) = Unit
 
-    /**
-     * Enter Picture-in-Picture mode with the given aspect ratio.
-     * Defaults to 16:9 if not specified.
-     */
-    @ReactMethod
-    fun enterPipMode(aspectRatioWidth: Int?, aspectRatioHeight: Int?, promise: Promise) {
-        val activity = currentActivity
-        
-        if (activity == null) {
-            promise.reject("NO_ACTIVITY", "No current activity")
-            return
-        }
-
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            promise.reject("UNSUPPORTED", "PIP requires Android 8.0 (API 26) or higher")
-            return
-        }
-
-        try {
-            val width = aspectRatioWidth ?: 16
-            val height = aspectRatioHeight ?: 9
-            
-            val params = PictureInPictureParams.Builder()
-                .setAspectRatio(Rational(width, height))
-                .build()
-            
-            val entered = activity.enterPictureInPictureMode(params)
-            promise.resolve(entered)
-        } catch (e: Exception) {
-            promise.reject("PIP_ERROR", "Failed to enter PIP mode: ${e.message}", e)
-        }
-    }
-
-    /**
-     * Check if the app is currently in PIP mode.
-     */
     @ReactMethod
     fun isInPipMode(promise: Promise) {
         val activity = currentActivity
-        
+        promise.resolve(activity != null && activity.isInPictureInPictureMode)
+    }
+
+    @ReactMethod
+    fun isPipSupported(promise: Promise) {
+        val activity = currentActivity
         if (activity == null) {
             promise.resolve(false)
             return
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            promise.resolve(activity.isInPictureInPictureMode)
-        } else {
-            promise.resolve(false)
-        }
+        promise.resolve(
+            activity.packageManager.hasSystemFeature(
+                android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE
+            )
+        )
     }
 
     /**
-     * Check if PIP is supported on this device.
+     * Close the Activity hosting the player. Used when playback was opened from
+     * outside the app, where going "back" should dismiss this Activity rather than
+     * exit the whole process.
      */
     @ReactMethod
-    fun isPipSupported(promise: Promise) {
+    fun finishCurrentActivity(promise: Promise) {
         val activity = currentActivity
-        
-        if (activity == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+        if (activity == null) {
             promise.resolve(false)
             return
         }
 
-        try {
-            val packageManager = activity.packageManager
-            promise.resolve(packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE))
-        } catch (e: Exception) {
-            promise.resolve(false)
-        }
+        activity.finish()
+        promise.resolve(true)
     }
 
-    /**
-     * Called by the Activity when PIP mode changes.
-     * This method is called from Activity.onPictureInPictureModeChanged()
-     */
-    fun onPictureInPictureModeChanged(isInPipMode: Boolean, newConfig: Configuration?) {
-        // Avoid sending duplicate events
-        if (lastPipState == isInPipMode) {
-            return
+    /** Called from the host Activity's onPictureInPictureModeChanged. */
+    fun onPictureInPictureModeChanged(isInPipMode: Boolean) {
+        val params = Arguments.createMap().apply {
+            putBoolean("isInPipMode", isInPipMode)
         }
-        lastPipState = isInPipMode
-
-        try {
-            val params = Arguments.createMap().apply {
-                putBoolean("isInPipMode", isInPipMode)
-            }
-            sendEvent(PIP_MODE_CHANGED_EVENT, params)
-        } catch (e: Exception) {
-            android.util.Log.w("PipModule", "Failed to send PIP event: ${e.message}")
-        }
+        sendEvent(PIP_MODE_CHANGED_EVENT, params)
     }
 
     private fun sendEvent(eventName: String, params: WritableMap?) {
-        if (!reactApplicationContext.hasActiveCatalystInstance()) {
-            return
-        }
-        
         try {
             reactApplicationContext
                 .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                 ?.emit(eventName, params)
         } catch (e: Exception) {
-            android.util.Log.w("PipModule", "Failed to emit event: ${e.message}")
+            android.util.Log.w(NAME, "Failed to emit $eventName: ${e.message}")
         }
     }
 }

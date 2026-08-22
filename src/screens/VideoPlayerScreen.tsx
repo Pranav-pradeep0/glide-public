@@ -12,14 +12,14 @@ import {
 } from 'react-native';
 import { GestureDetector } from 'react-native-gesture-handler';
 import { useSafeAreaInsets, initialWindowMetrics } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { SystemBars } from 'react-native-edge-to-edge';
 import { PlayerResizeMode } from '@glide/vlc-player';
 
 // Native Modules
 const { AudioControlModule } = NativeModules;
-import { enterPipMode, usePipModeListener } from '@/native/PipModule';
+import { finishCurrentActivity, usePipModeListener } from '@/native/PipModule';
 
 // Components
 import AnimatedVideoView from '@/components/VideoPlayer/AnimatedVideoView';
@@ -123,6 +123,7 @@ export default function VideoPlayerScreen({ route }: Props) {
     };
 
     const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+    const isScreenFocused = useIsFocused();
     const { width, height } = useWindowDimensions();
     const insets = useSafeAreaInsets();
     const theme = useTheme();
@@ -352,6 +353,14 @@ export default function VideoPlayerScreen({ route }: Props) {
 
     // PIP Mode State from native listener
     const isInPipMode = usePipModeListener();
+    // Auto-enter eligibility only. Whether overlays are on screen no longer
+    // matters: the native controller hides everything except the video surface
+    // when PiP opens, so blocking PiP while the controls are up would just mean
+    // swipe-to-home does nothing for a few seconds after the user taps.
+    const pipEnabled = isScreenFocused
+        && player.state.isPlaying
+        && !player.state.paused;
+    const pipPresentationActive = isInPipMode;
 
     // Hide controls when entering PIP mode (simple effect, no state toggling)
     useEffect(() => {
@@ -385,6 +394,8 @@ export default function VideoPlayerScreen({ route }: Props) {
         initialBrightness: startBrightness,
         onBrightnessChange: handleBrightnessChange,
         onBrightnessSave: handleBrightnessSave,
+        resizeMode: settingsHook.settings.resizeMode,
+        isInPipMode,
     });
 
     // Tracks hook
@@ -564,7 +575,13 @@ export default function VideoPlayerScreen({ route }: Props) {
         VideoOrientationService.release();
 
         if (isExternalOpen) {
-            BackHandler.exitApp();
+            finishCurrentActivity().then((finished) => {
+                if (!finished) {
+                    BackHandler.exitApp();
+                }
+            }).catch(() => {
+                BackHandler.exitApp();
+            });
         } else {
             navigation.goBack();
         }
@@ -613,8 +630,10 @@ export default function VideoPlayerScreen({ route }: Props) {
     }, [bookmarksHook, ui]);
 
     const handleEnterPip = useCallback(() => {
-        enterPipMode(16, 9);
-    }, []);
+        ui.closeAllPanels();
+        ui.hideControls();
+        player.videoRef.current?.enterPictureInPicture();
+    }, [player, ui]);
 
     const handleTogglePlayPause = useCallback(() => {
         player.togglePlayPause();
@@ -1186,6 +1205,8 @@ export default function VideoPlayerScreen({ route }: Props) {
                         repeat={settingsHook.settings.repeat}
                         resizeMode={settingsHook.settings.resizeMode}
                         playInBackground={settingsHook.settings.backgroundPlayEnabled}
+                        pipEnabled={pipEnabled}
+                        pipPresentationActive={pipPresentationActive}
                         currentTime={player.currentTimeRef.current}
                         duration={player.state.duration}
                         videoEnhancement={settingsHook.settings.videoEnhancement}
@@ -1212,7 +1233,7 @@ export default function VideoPlayerScreen({ route }: Props) {
 
 
             {/* Floating Sync Panel */}
-            {syncPanelType && (
+            {!pipPresentationActive && syncPanelType && (
                 <FloatingSyncPanel
                     type={syncPanelType}
                     value={syncPanelType === 'audio' ? settingsHook.settings.audioDelay : settingsHook.settings.subtitleDelay}
@@ -1229,7 +1250,7 @@ export default function VideoPlayerScreen({ route }: Props) {
             <SystemBars style="light" />
 
             {/* Night Mode Overlay - Sits between video and controls/HUD */}
-            {nightMode && (
+            {!pipPresentationActive && nightMode && (
                 <View
                     style={[
                         StyleSheet.absoluteFill,
@@ -1240,7 +1261,7 @@ export default function VideoPlayerScreen({ route }: Props) {
             )}
 
             {/* HUD indicators */}
-            {!isInPipMode && (
+            {!pipPresentationActive && (
                 <VideoHUD
                     showSeekHUD={hud.state.seek.show}
                     seekHUDTime={gestures.sharedValues.seekTime}
@@ -1269,7 +1290,7 @@ export default function VideoPlayerScreen({ route }: Props) {
 
 
             {/* Controls - hide in PIP mode */}
-            {ui.state.controlsVisible && !ui.state.locked && !isInPipMode && (
+            {ui.state.controlsVisible && !ui.state.locked && !pipPresentationActive && (
                 <PlayerControls
                     showControls={ui.state.controlsVisible && !ui.state.locked}
                     title={videoName}
@@ -1324,7 +1345,7 @@ export default function VideoPlayerScreen({ route }: Props) {
             )}
 
             {/* Lock button - hide in PIP mode */}
-            {!isInPipMode && ((ui.state.controlsVisible && !ui.state.locked) || (ui.state.locked && ui.state.lockIconVisible)) ? (
+            {!pipPresentationActive && ((ui.state.controlsVisible && !ui.state.locked) || (ui.state.locked && ui.state.lockIconVisible)) ? (
                 <LockButton
                     isLocked={ui.state.locked}
                     showLockIcon={true}
@@ -1333,7 +1354,7 @@ export default function VideoPlayerScreen({ route }: Props) {
             ) : null}
 
             {/* Quick settings panel */}
-            {ui.state.quickSettingsOpen && (
+            {!pipPresentationActive && ui.state.quickSettingsOpen && (
                 <QuickSettingsPanel
                     onClose={handleQSClose}
                     playbackRate={basePlaybackRate}
@@ -1365,7 +1386,7 @@ export default function VideoPlayerScreen({ route }: Props) {
             )}
 
             {/* Playlist panel */}
-            {!isNetworkStream && (
+            {!pipPresentationActive && !isNetworkStream && (
                 <PlaylistPanel
                     visible={ui.state.playlistOpen}
                     onClose={() => ui.closePanel('playlist')}
@@ -1378,7 +1399,7 @@ export default function VideoPlayerScreen({ route }: Props) {
 
             {/* Track selectors */}
             <View style={styles.modalPortalWrapper} pointerEvents="box-none">
-                {ui.state.audioSelectorOpen && (
+                {!pipPresentationActive && ui.state.audioSelectorOpen && (
                     <TrackSelector
                         visible={ui.state.audioSelectorOpen}
                         onClose={() => ui.closePanel('audioSelector')}
@@ -1397,7 +1418,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                         }}
                     />
                 )}
-                {ui.state.subtitleSelectorOpen && (
+                {!pipPresentationActive && ui.state.subtitleSelectorOpen && (
                     <TrackSelector
                         visible={ui.state.subtitleSelectorOpen}
                         onClose={() => ui.closePanel('subtitleSelector')}
@@ -1423,7 +1444,7 @@ export default function VideoPlayerScreen({ route }: Props) {
             {/* Equalizer modal - rendered LAST so it appears on top of TrackSelector */}
             <View style={styles.modalPortalWrapper} pointerEvents="box-none">
                 <EqualizerModal
-                    visible={equalizerVisible}
+                    visible={!pipPresentationActive && equalizerVisible}
                     onClose={() => setEqualizerVisible(false)}
                     activePresetId={settingsHook.settings.equalizerPreset}
                     customBands={settingsHook.settings.customEqualizerBands}
@@ -1439,15 +1460,17 @@ export default function VideoPlayerScreen({ route }: Props) {
             </View>
 
             {/* Subtitle overlay */}
-            <SubtitleOverlay
-                currentCue={tracksHook.currentSubtitleCue}
-                settings={subtitleSettings}
-                onPositionChange={handleSubtitlePositionChange}
-            />
+            {!pipPresentationActive && (
+                <SubtitleOverlay
+                    currentCue={tracksHook.currentSubtitleCue}
+                    settings={subtitleSettings}
+                    onPositionChange={handleSubtitlePositionChange}
+                />
+            )}
 
             {/* Bookmark toast */}
             {
-                !isNetworkStream && bookmarksHook.showToast && !isInPipMode && (
+                !isNetworkStream && bookmarksHook.showToast && !pipPresentationActive && (
                     <BookmarkToast
                         key={bookmarksHook.toastKey}
                         visible={bookmarksHook.showToast}
@@ -1460,7 +1483,7 @@ export default function VideoPlayerScreen({ route }: Props) {
             }
 
             {/* Bookmark panel */}
-            {!isNetworkStream && (
+            {!pipPresentationActive && !isNetworkStream && (
                 <BookmarkPanel
                     visible={ui.state.bookmarkPanelOpen}
                     bookmarks={bookmarksHook.bookmarks}
@@ -1473,7 +1496,7 @@ export default function VideoPlayerScreen({ route }: Props) {
             )}
 
             {/* AI Recap Modal */}
-            {!isNetworkStream && (
+            {!pipPresentationActive && !isNetworkStream && (
                 <View style={styles.modalPortalWrapper} pointerEvents="box-none">
                     <RecapModal
                         visible={recapVisible}
@@ -1492,7 +1515,7 @@ export default function VideoPlayerScreen({ route }: Props) {
             )}
 
             {/* Resume Modal */}
-            {!isNetworkStream && (
+            {!pipPresentationActive && !isNetworkStream && (
                 <View style={styles.modalPortalWrapper} pointerEvents="box-none">
                     <ResumeModal
                         visible={resumeModalVisible}
