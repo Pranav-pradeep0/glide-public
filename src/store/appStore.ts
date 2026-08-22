@@ -2,9 +2,34 @@ import { create } from 'zustand';
 import { AppSettings, HapticSettings } from '../types';
 
 // Default haptic settings
-const DEFAULT_HAPTIC_SETTINGS: HapticSettings = {
+export const DEFAULT_HAPTIC_SETTINGS: HapticSettings = {
     enabled: true,
     intensity: 128, // Middle value (1-255)
+};
+
+export const DEFAULT_APP_SETTINGS: AppSettings = {
+    darkMode: false,
+    hapticSettings: DEFAULT_HAPTIC_SETTINGS,
+    autoDownloadSubtitles: true,
+    subtitleFontSize: 20,
+    subtitleColor: '#FFFFFF',
+    subtitleFontWeight: 600,
+    subtitleOutlineWidth: 2,
+    subtitleBackgroundColor: 'transparent',
+    subtitleBackgroundOpacity: 0.5,
+    subtitleEdgeStyle: 'outline',
+    subtitleFontFamily: 'NetflixSans-Medium',
+    subtitlePositionPortrait: 0.42,
+    subtitlePositionLandscape: 0.42,
+    hasCompletedOnboarding: false,
+    brightnessMode: 'video',
+    pipBrightnessMode: 'system',
+    globalBrightness: 0.5,
+    showSeekButtons: false,
+    seekDuration: 30,
+    autoPlayNext: false,
+    defaultAudioLanguage: null,
+    shakeThreshold: 1.2,
 };
 
 interface AppStore {
@@ -63,34 +88,7 @@ interface AppStore {
 }
 
 export const useAppStore = create<AppStore>((set) => ({
-    settings: {
-        darkMode: false,
-        hapticSettings: DEFAULT_HAPTIC_SETTINGS,
-        autoDownloadSubtitles: true,
-        subtitleFontSize: 20,
-        subtitleColor: '#FFFFFF',
-        subtitleFontWeight: 600,
-        subtitleOutlineWidth: 2,
-        subtitleBackgroundColor: 'transparent', // Default transparent
-        subtitleBackgroundOpacity: 0.5,
-        subtitleEdgeStyle: 'outline', // Default outline for legibility
-        subtitleFontFamily: 'NetflixSans-Medium',
-        subtitlePositionPortrait: 0.42,
-        subtitlePositionLandscape: 0.42,
-
-        hasCompletedOnboarding: false,
-        brightnessMode: 'video', // Default to video-specific as per original request, or global? Let's stick to video as default for now or user preference. Detailed in plan: "video" default.
-        pipBrightnessMode: 'system', // Default to system brightness for PiP
-        globalBrightness: 0.5,
-
-        // Playback settings
-        showSeekButtons: false,
-        seekDuration: 30,
-
-        autoPlayNext: false,
-        defaultAudioLanguage: null,
-        shakeThreshold: 1.2,
-    },
+    settings: DEFAULT_APP_SETTINGS,
     updateStatus: {
         available: false,
         latestVersion: null,

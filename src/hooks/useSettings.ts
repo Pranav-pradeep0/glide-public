@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef } from 'react';
 import { useColorScheme } from 'react-native';
-import { useAppStore } from '../store/appStore';
+import { DEFAULT_APP_SETTINGS, DEFAULT_HAPTIC_SETTINGS, useAppStore } from '../store/appStore';
 import { storage } from '@/storage/storage';
 import { AppSettings } from '@/types';
 
@@ -45,13 +45,22 @@ export function useSettings() {
 }
 
 function migrateSettings(settings: AppSettings): AppSettings {
-    return {
+    const merged = {
+        ...DEFAULT_APP_SETTINGS,
         ...settings,
-        subtitlePositionPortrait: typeof settings.subtitlePositionPortrait === 'number'
-            ? settings.subtitlePositionPortrait
+        hapticSettings: {
+            ...DEFAULT_HAPTIC_SETTINGS,
+            ...(settings?.hapticSettings ?? {}),
+        },
+    };
+
+    return {
+        ...merged,
+        subtitlePositionPortrait: typeof merged.subtitlePositionPortrait === 'number'
+            ? merged.subtitlePositionPortrait
             : 0.42,
-        subtitlePositionLandscape: typeof settings.subtitlePositionLandscape === 'number'
-            ? settings.subtitlePositionLandscape
+        subtitlePositionLandscape: typeof merged.subtitlePositionLandscape === 'number'
+            ? merged.subtitlePositionLandscape
             : 0.42,
     };
 }
