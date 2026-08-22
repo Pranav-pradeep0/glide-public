@@ -173,8 +173,8 @@ export default function UpdateModal({
                     >
                         <Markdown
                             style={{
-                                body: [styles.notesText, { color: textSecondaryColor }],
-                                heading3: [styles.notesHeading, { color: textColor }],
+                                body: { ...styles.notesText, color: textSecondaryColor },
+                                heading3: { ...styles.notesHeading, color: textColor },
                                 list_item: styles.notesListItem,
                                 bullet_list: styles.notesList,
                                 ordered_list: styles.notesList,
