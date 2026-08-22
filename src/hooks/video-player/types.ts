@@ -58,6 +58,7 @@ export interface VLCPlayingData {
 
 export interface VLCBufferingEvent {
     isBuffering?: boolean;
+    bufferRate?: number;
 }
 
 export interface VLCSeekEvent {

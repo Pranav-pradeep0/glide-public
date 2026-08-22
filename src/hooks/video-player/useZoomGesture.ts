@@ -28,6 +28,7 @@ interface UseZoomGestureOptions {
     panStartX: SharedValue<number>;
     panStartY: SharedValue<number>;
     zoomActive: SharedValue<boolean>;
+    enabled: boolean;
 
     // Callbacks
     onZoomStart: () => void;
@@ -58,6 +59,7 @@ export function useZoomGesture(options: UseZoomGestureOptions) {
         panStartX,
         panStartY,
         zoomActive,
+        enabled,
         onZoomStart,
         onZoomUpdate,
         onZoomReset,
@@ -77,6 +79,7 @@ export function useZoomGesture(options: UseZoomGestureOptions) {
                     runOnJS(onLockTap)();
                     return;
                 }
+                if (!enabled) {return;}
 
                 pinchActive.value = true;
                 zoomActive.value = true;
@@ -87,7 +90,7 @@ export function useZoomGesture(options: UseZoomGestureOptions) {
             .onUpdate((event) => {
                 'worklet';
 
-                if (isLockedShared.value || !pinchActive.value) {return;}
+                if (isLockedShared.value || !enabled || !pinchActive.value) {return;}
 
                 const newScale = Math.max(
                     PLAYER_CONSTANTS.ZOOM_MIN,
@@ -151,7 +154,7 @@ export function useZoomGesture(options: UseZoomGestureOptions) {
             .onStart(() => {
                 'worklet';
 
-                if (isLockedShared.value) {return;}
+                if (isLockedShared.value || !enabled) {return;}
 
                 panStartX.value = panX.value;
                 panStartY.value = panY.value;
@@ -160,22 +163,23 @@ export function useZoomGesture(options: UseZoomGestureOptions) {
                 'worklet';
 
                 // Only pan when zoomed and not locked
-                if (isLockedShared.value) {return;}
+                if (isLockedShared.value || !enabled) {return;}
                 if (!zoomActive.value && pinchScale.value <= 1) {return;}
 
-                // Calculate max pan based on zoom level
-                const maxPan = ((pinchScale.value - 1) * Math.min(screenWidth, screenHeight)) / 2;
+                const maxPanX = ((pinchScale.value - 1) * screenWidth) / 2;
+                const maxPanY = ((pinchScale.value - 1) * screenHeight) / 2;
 
                 panX.value = Math.max(
-                    -maxPan,
-                    Math.min(maxPan, panStartX.value + event.translationX)
+                    -maxPanX,
+                    Math.min(maxPanX, panStartX.value + event.translationX)
                 );
                 panY.value = Math.max(
-                    -maxPan,
-                    Math.min(maxPan, panStartY.value + event.translationY)
+                    -maxPanY,
+                    Math.min(maxPanY, panStartY.value + event.translationY)
                 );
             });
     }, [
+        enabled,
         screenWidth,
         screenHeight,
         pinchScale,

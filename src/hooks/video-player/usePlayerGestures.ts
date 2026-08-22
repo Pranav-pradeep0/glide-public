@@ -18,6 +18,7 @@ import {
     SharedValue,
     runOnJS,
 } from 'react-native-reanimated';
+import type { PlayerResizeMode } from '@glide/vlc-player';
 
 const { AudioControlModule } = NativeModules;
 
@@ -45,6 +46,8 @@ interface UsePlayerGesturesOptions {
     onBrightnessChange?: (value: number) => void;
     onBrightnessSave?: (value: number) => void;
     initialBrightness?: number;
+    resizeMode?: PlayerResizeMode;
+    isInPipMode?: boolean;
 }
 
 interface UsePlayerGesturesReturn {
@@ -100,6 +103,8 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
         initialBrightness,
         onBrightnessChange,
         onBrightnessSave,
+        resizeMode = 'contain',
+        isInPipMode = false,
     } = options;
 
     const { width, height } = useWindowDimensions();
@@ -157,6 +162,7 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
     const ZONE_RATIO = 0.15;
     const leftZoneWidth = width * ZONE_RATIO;
     const rightZoneWidth = width * ZONE_RATIO;
+    const allowVideoTransform = resizeMode === 'contain' && !isInPipMode;
 
 
 
@@ -227,6 +233,12 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
         zoomActive.value = false;
         hud.updateZoom(1);
     }, [pinchScale, panX, panY, zoomActive, hud]);
+
+    useEffect(() => {
+        if (!allowVideoTransform) {
+            resetZoom();
+        }
+    }, [allowVideoTransform, resetZoom]);
 
     // ========================================================================
     // GESTURE CALLBACKS
@@ -400,6 +412,7 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
         panStartX,
         panStartY,
         zoomActive,
+        enabled: allowVideoTransform,
         onZoomStart: handleZoomStart,
         onZoomUpdate: handleZoomUpdate,
         onZoomReset: resetZoom,
@@ -458,12 +471,12 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
     const videoAnimatedStyle = useAnimatedStyle(() => {
         return {
             transform: [
-                { scale: pinchScale.value },
-                { translateX: panX.value },
-                { translateY: panY.value },
+                { scale: allowVideoTransform ? pinchScale.value : 1 },
+                { translateX: allowVideoTransform ? panX.value : 0 },
+                { translateY: allowVideoTransform ? panY.value : 0 },
             ],
         };
-    }, []);
+    }, [allowVideoTransform]);
 
     // ========================================================================
     // RETURN

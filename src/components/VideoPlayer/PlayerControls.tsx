@@ -300,10 +300,11 @@ export const PlayerControls: FC<PlayerControlsProps> = React.memo(({
     // Get the appropriate icon for current resize mode
     const ResizeModeIcon = getResizeModeIcon(resizeMode);
 
-    if (!showControls) {return null;}
-
     return (
-        <View style={styles.controlsOverlay} pointerEvents="box-none">
+        <View
+            style={[styles.controlsOverlay, !showControls && styles.controlsOverlayHidden]}
+            pointerEvents={showControls ? 'box-none' : 'none'}
+        >
             {/* Header */}
             <LinearGradient
                 colors={['rgba(0,0,0,0.8)', 'rgba(0,0,0,0.4)', 'transparent']}
@@ -543,6 +544,9 @@ const styles = StyleSheet.create({
         top: 0, bottom: 0, left: 0, right: 0,
         justifyContent: 'space-between',
         zIndex: 10,
+    },
+    controlsOverlayHidden: {
+        opacity: 0,
     },
     header: {
         flexDirection: 'row',

@@ -85,6 +85,7 @@ class ReactVlcPlayerView extends TextureView implements
 
     // Buffering debounce for UI indicator
     private static final int BUFFERING_DEBOUNCE_MS = 200;
+    private static final long PIP_HOST_PAUSE_GRACE_MS = 800L;
 
     // Resize debounce
     private static final int RESIZE_DEBOUNCE_MS = 50;
@@ -123,6 +124,7 @@ class ReactVlcPlayerView extends TextureView implements
     private boolean autoAspectRatio = false;
     private boolean acceptInvalidCertificates = false;
     private boolean playInBackground = false;
+    private boolean mPipAutoEnterEnabled = false;
     private String resizeMode = "contain";
     private long mAudioDelay = 0;
 
@@ -135,6 +137,14 @@ class ReactVlcPlayerView extends TextureView implements
     private int mSarDen = 0;
     private int mLastViewWidth = 0;
     private int mLastViewHeight = 0;
+    private int mLastAppliedViewWidth = -1;
+    private int mLastAppliedViewHeight = -1;
+    private int mLastAppliedVideoWidth = -1;
+    private int mLastAppliedVideoHeight = -1;
+    private int mLastAppliedSarNum = -1;
+    private int mLastAppliedSarDen = -1;
+    private boolean mLastAppliedAutoAspectRatio = false;
+    private String mLastAppliedResizeMode = null;
     private Boolean mBestFitUsingCover = null;
 
     // Playback state — volatile because VLC events arrive on VLC's internal thread
@@ -143,6 +153,9 @@ class ReactVlcPlayerView extends TextureView implements
     private boolean isHostPaused = false;
     private boolean isInPipMode = false;
     private boolean wasPlayingBeforeHostPause = false;
+    private boolean mPausedForHostPause = false;
+    private boolean mPausedForAudioFocus = false;
+    private boolean mPausedForNoisyEvent = false;
     private boolean isResizeModeApplied = false;
 
     // Saved position for resume after releasePlayer
@@ -217,6 +230,12 @@ class ReactVlcPlayerView extends TextureView implements
     private final Handler mRateHandler = new Handler(Looper.getMainLooper());
     private Runnable mPendingRateRunnable = null;
     private float mPendingRate = Float.NaN;
+    private final Handler mAudioTrackHandler = new Handler(Looper.getMainLooper());
+    private Runnable mPendingAudioTrackRunnable = null;
+    private final Handler mPipTransitionHandler = new Handler(Looper.getMainLooper());
+    private Runnable mPendingPipBackgroundPause = null;
+    private Runnable mPendingPipResizeSync = null;
+    private boolean mAwaitingPipAutoEnter = false;
 
     // Guard against concurrent createPlayer() calls
     private volatile boolean mCreatingPlayer = false;
@@ -342,15 +361,16 @@ class ReactVlcPlayerView extends TextureView implements
                 isSurfaceViewDestroyed = false;
                 Log.d(TAG, "[LIFECYCLE] onHostResume: re-attached VLC views");
             }
-            // FIX C2: only resume if user intent is to play (isPaused tracks explicit user
-            // intent)
-            if (wasPlayingBeforeHostPause && !isPaused) {
+            if (wasPlayingBeforeHostPause && mPausedForHostPause && !isPaused) {
                 if (requestAudioFocusInternal()) {
                     mMediaPlayer.play();
                     Log.i(TAG, "[LIFECYCLE] onHostResume: resumed playback");
                 }
             }
         }
+        cancelPendingPipBackgroundPause();
+        mAwaitingPipAutoEnter = false;
+        mPausedForHostPause = false;
         isHostPaused = false;
     }
 
@@ -375,12 +395,18 @@ class ReactVlcPlayerView extends TextureView implements
         this.isInPipMode = currentIsInPipMode;
 
         if (!playInBackground && !currentIsInPipMode) {
-            if (mMediaPlayer != null && mMediaPlayer.isPlaying()) {
-                isPaused = true;
-                mMediaPlayer.pause();
-                emitPausedEvent(Arguments.createMap());
-                Log.i(TAG, "[LIFECYCLE] onHostPause: paused (background)");
+            boolean shouldAwaitPipAutoEnter = mPipAutoEnterEnabled && wasPlayingBeforeHostPause && !isPaused;
+            if (shouldAwaitPipAutoEnter) {
+                schedulePendingPipBackgroundPause();
+                Log.i(TAG, "[LIFECYCLE] onHostPause: awaiting PiP auto-enter before pausing");
+            } else {
+                cancelPendingPipBackgroundPause();
+                mAwaitingPipAutoEnter = false;
+                pauseForHostBackground("onHostPause");
             }
+        } else {
+            cancelPendingPipBackgroundPause();
+            mAwaitingPipAutoEnter = false;
         }
     }
 
@@ -397,17 +423,19 @@ class ReactVlcPlayerView extends TextureView implements
             }
         }
         if (this.isInPipMode && !newIsInPipMode) {
+            cancelPendingPipBackgroundPause();
+            mAwaitingPipAutoEnter = false;
             if (isHostPaused && !playInBackground) {
                 Log.i(TAG, "[LIFECYCLE] PiP exit → background → pausing");
-                if (mMediaPlayer != null && mMediaPlayer.isPlaying()) {
-                    isPaused = true;
-                    mMediaPlayer.pause();
-                    setKeepScreenOn(false);
-                    emitPausedEvent(Arguments.createMap());
-                }
+                pauseForHostBackground("onConfigurationChanged");
             }
+        } else if (newIsInPipMode) {
+            cancelPendingPipBackgroundPause();
+            mAwaitingPipAutoEnter = false;
+            schedulePipResizeSync("configurationChanged");
         }
         this.isInPipMode = newIsInPipMode;
+        post(() -> forceResizeMode("configurationChanged"));
     }
 
     @Override
@@ -432,13 +460,8 @@ class ReactVlcPlayerView extends TextureView implements
             Log.d(TAG, "[SURFACE] onSurfacesDestroyed | isHostPaused=" + isHostPaused + " playInBackground="
                     + playInBackground);
 
-            if (isHostPaused && !playInBackground) {
-                if (mMediaPlayer != null && mMediaPlayer.isPlaying()) {
-                    isPaused = true;
-                    mMediaPlayer.pause();
-                    emitPausedEvent(Arguments.createMap());
-                    Log.i(TAG, "[SURFACE] paused playback on surface destroy");
-                }
+            if (isHostPaused && !shouldKeepPlayingWhileHostPaused()) {
+                pauseForHostBackground("onSurfacesDestroyed");
             }
         }
     };
@@ -459,10 +482,9 @@ class ReactVlcPlayerView extends TextureView implements
                         mMediaPlayer.setVolume(mVolumeBeforeDuck);
                         mVolumeBeforeDuck = -1;
                     }
-                    if (mResumeOnFocusGain) {
-                        boolean allowResume = !isHostPaused || playInBackground || isInPipMode;
-                        if (allowResume) {
-                            isPaused = false;
+                    if (mResumeOnFocusGain && mPausedForAudioFocus) {
+                        boolean allowResume = !isHostPaused || shouldKeepPlayingWhileHostPaused();
+                        if (allowResume && !isPaused) {
                             mMediaPlayer.play();
                             setKeepScreenOn(true);
                             Log.i(TAG, "[AUDIO_FOCUS] GAIN → resumed playback");
@@ -474,6 +496,7 @@ class ReactVlcPlayerView extends TextureView implements
                         }
                     }
                 }
+                mPausedForAudioFocus = false;
                 mResumeOnFocusGain = false;
                 break;
 
@@ -481,7 +504,7 @@ class ReactVlcPlayerView extends TextureView implements
                 mHasAudioFocus = false;
                 mResumeOnFocusGain = false;
                 if (mMediaPlayer != null && mMediaPlayer.isPlaying()) {
-                    isPaused = true;
+                    mPausedForAudioFocus = true;
                     mMediaPlayer.pause();
                     setKeepScreenOn(false);
                     Log.i(TAG, "[AUDIO_FOCUS] LOSS → paused");
@@ -495,7 +518,7 @@ class ReactVlcPlayerView extends TextureView implements
                 if (mMediaPlayer != null) {
                     mResumeOnFocusGain = mMediaPlayer.isPlaying();
                     if (mMediaPlayer.isPlaying()) {
-                        isPaused = true;
+                        mPausedForAudioFocus = true;
                         mMediaPlayer.pause();
                         setKeepScreenOn(false);
                         Log.i(TAG, "[AUDIO_FOCUS] LOSS_TRANSIENT → paused");
@@ -525,7 +548,7 @@ class ReactVlcPlayerView extends TextureView implements
                 public void onReceive(Context context, Intent intent) {
                     if (AudioManager.ACTION_AUDIO_BECOMING_NOISY.equals(intent.getAction())) {
                         if (mMediaPlayer != null && mMediaPlayer.isPlaying()) {
-                            isPaused = true;
+                            mPausedForNoisyEvent = true;
                             mResumeOnFocusGain = false;
                             mMediaPlayer.pause();
                             setKeepScreenOn(false);
@@ -705,8 +728,13 @@ class ReactVlcPlayerView extends TextureView implements
                     Log.d(TAG, "[LAYOUT] size changed → " + width + "x" + height);
                     mLastViewWidth = width;
                     mLastViewHeight = height;
-                    if (mMediaPlayer != null)
-                        requestResizeMode();
+                    if (mMediaPlayer != null) {
+                        if (isInPipMode) {
+                            schedulePipResizeSync("layoutChanged");
+                        } else {
+                            requestResizeMode();
+                        }
+                    }
                 }
             }
         }
@@ -825,6 +853,8 @@ class ReactVlcPlayerView extends TextureView implements
                         Log.d(TAG, "[VLC_EVENT] Playing: cleared seek suppression sentinel");
                     }
                     mLastSeekPlayTimestampMs = -1L;
+                    mPausedForAudioFocus = false;
+                    mPausedForNoisyEvent = false;
 
                     Log.i(TAG, "[VLC_EVENT] Playing | isPaused=" + isPaused + " pos=" + mMediaPlayer.getPosition()
                             + " time=" + mMediaPlayer.getTime() + " duration=" + mMediaPlayer.getLength());
@@ -852,14 +882,8 @@ class ReactVlcPlayerView extends TextureView implements
                         mMediaPlayer.setSpuTrack(_textTrack);
                     }
 
-                    // Apply audio track only if changed (avoids decoder re-init silence)
-                    if (_audioTrack != -1 && _audioTrack != currentlyAppliedAudioTrack) {
-                        boolean appliedAudio = mMediaPlayer.setAudioTrack(_audioTrack);
-                        if (appliedAudio) {
-                            currentlyAppliedAudioTrack = _audioTrack;
-                            Log.d(TAG, "[VLC_EVENT] Playing: set audio track=" + _audioTrack);
-                        }
-                    }
+                    // Apply pending audio-track change after the player is in a stable playing state.
+                    applyRequestedAudioTrack("playing", false);
 
                     // Re-apply audio delay
                     if (mAudioDelay != 0) {
@@ -914,6 +938,11 @@ class ReactVlcPlayerView extends TextureView implements
                     Log.i(TAG, "[VLC_EVENT] Paused | isPaused=" + isPaused + " pos=" + mMediaPlayer.getPosition()
                             + " time=" + mMediaPlayer.getTime());
 
+                    if (mPausedForHostPause && !isPaused) {
+                        Log.d(TAG, "[VLC_EVENT] Paused suppressed — host lifecycle pause");
+                        break;
+                    }
+
                     WritableMap map = createEventMap();
                     if (map == null)
                         return;
@@ -955,6 +984,7 @@ class ReactVlcPlayerView extends TextureView implements
                         @Override
                         public void run() {
                             WritableMap bufferMap = Arguments.createMap();
+                            bufferMap.putBoolean("isBuffering", bufferRate < 100f);
                             bufferMap.putDouble("bufferRate", bufferRate);
                             bufferMap.putString("type", "Buffering");
                             eventEmitter.sendEvent(bufferMap, VideoEventEmitter.EVENT_ON_VIDEO_BUFFERING);
@@ -1363,6 +1393,8 @@ class ReactVlcPlayerView extends TextureView implements
     private void releasePlayer() {
         clearPendingResizeRequest();
         cancelPendingSeek();
+        cancelPendingPipBackgroundPause();
+        cancelPendingPipResizeSync();
 
         if (pendingBufferingEvent != null) {
             bufferingHandler.removeCallbacks(pendingBufferingEvent);
@@ -1432,11 +1464,23 @@ class ReactVlcPlayerView extends TextureView implements
         mVideoVisibleHeight = 0;
         mSarNum = 0;
         mSarDen = 0;
+        mLastAppliedViewWidth = -1;
+        mLastAppliedViewHeight = -1;
+        mLastAppliedVideoWidth = -1;
+        mLastAppliedVideoHeight = -1;
+        mLastAppliedSarNum = -1;
+        mLastAppliedSarDen = -1;
+        mLastAppliedAutoAspectRatio = false;
+        mLastAppliedResizeMode = null;
         currentlyAppliedAudioTrack = -1;
         mBestFitUsingCover = null;
         mPlayAfterBufferComplete = false;
         mLastSeekPlayTimestampMs = -1L;
         mLastAppliedRate = Float.NaN;
+        if (mPendingAudioTrackRunnable != null) {
+            mAudioTrackHandler.removeCallbacks(mPendingAudioTrackRunnable);
+            mPendingAudioTrackRunnable = null;
+        }
         if (mPendingRateRunnable != null) {
             mRateHandler.removeCallbacks(mPendingRateRunnable);
             mPendingRateRunnable = null;
@@ -1709,7 +1753,7 @@ class ReactVlcPlayerView extends TextureView implements
                         : PlaybackStateCompat.STATE_PAUSED);
                 mPendingRateRunnable = null;
             };
-            mRateHandler.postDelayed(mPendingRateRunnable, 80);
+            mRateHandler.post(mPendingRateRunnable);
         }
     }
 
@@ -1822,6 +1866,11 @@ class ReactVlcPlayerView extends TextureView implements
                 + " mNativeStopped=" + mNativeStopped);
 
         isPaused = paused;
+        if (paused) {
+            mPausedForHostPause = false;
+            mPausedForAudioFocus = false;
+            mPausedForNoisyEvent = false;
+        }
 
         if (mMediaPlayer == null) {
             Log.i(TAG, "[PAUSE_MOD] no player → createPlayer(autoplay=" + !paused + ")");
@@ -1942,15 +1991,7 @@ class ReactVlcPlayerView extends TextureView implements
     public void setAudioTrack(int track) {
         Log.d(TAG, "[AUDIO_TRACK] set=" + track);
         _audioTrack = track;
-        if (mMediaPlayer != null) {
-            if (track == currentlyAppliedAudioTrack) {
-                return;
-            }
-            boolean applied = mMediaPlayer.setAudioTrack(track);
-            if (applied) {
-                currentlyAppliedAudioTrack = track;
-            }
-        }
+        scheduleAudioTrackApply(true);
     }
 
     public void setTextTrack(int track) {
@@ -2019,21 +2060,37 @@ class ReactVlcPlayerView extends TextureView implements
 
     public void setPlayInBackground(boolean playInBackground) {
         this.playInBackground = playInBackground;
+        if (playInBackground) {
+            cancelPendingPipBackgroundPause();
+            mAwaitingPipAutoEnter = false;
+        }
         Log.i(TAG, "[CONFIG] playInBackground=" + playInBackground);
+    }
+
+    public void setPipAutoEnterEnabled(boolean pipAutoEnterEnabled) {
+        this.mPipAutoEnterEnabled = pipAutoEnterEnabled;
+        if (!pipAutoEnterEnabled) {
+            cancelPendingPipBackgroundPause();
+            mAwaitingPipAutoEnter = false;
+        }
+        Log.d(TAG, "[PIP] autoEnterEnabled=" + pipAutoEnterEnabled);
     }
 
     public void setIsInPipMode(boolean isInPipMode) {
         boolean was = this.isInPipMode;
         this.isInPipMode = isInPipMode;
+        if (isInPipMode) {
+            cancelPendingPipBackgroundPause();
+            mAwaitingPipAutoEnter = false;
+            schedulePipResizeSync("pipEnter");
+            post(() -> forceResizeMode("pipEnter"));
+        } else {
+            cancelPendingPipResizeSync();
+        }
         Log.d(TAG, "[PIP] isInPipMode=" + isInPipMode + " was=" + was);
         if (was && !isInPipMode && !playInBackground && isHostPaused) {
             Log.i(TAG, "[PIP] PiP closed, host paused, not background → pausing");
-            if (mMediaPlayer != null && mMediaPlayer.isPlaying()) {
-                isPaused = true;
-                mMediaPlayer.pause();
-                setKeepScreenOn(false);
-                emitPausedEvent(Arguments.createMap());
-            }
+            pauseForHostBackground("setIsInPipMode");
         }
     }
 
@@ -2088,12 +2145,16 @@ class ReactVlcPlayerView extends TextureView implements
         if (viewWidth <= 0 || viewHeight <= 0)
             return;
 
+        if (isResizeConfigurationAlreadyApplied(viewWidth, viewHeight))
+            return;
+
         if (autoAspectRatio) {
             try {
                 mMediaPlayer.setAspectRatio(viewWidth + ":" + viewHeight);
                 mMediaPlayer.setScale(0);
                 mLastViewWidth = viewWidth;
                 mLastViewHeight = viewHeight;
+                recordAppliedResizeState(viewWidth, viewHeight);
                 isResizeModeApplied = true;
                 Log.d(TAG, "[RESIZE] autoAR applied " + viewWidth + ":" + viewHeight);
             } catch (Exception e) {
@@ -2113,10 +2174,136 @@ class ReactVlcPlayerView extends TextureView implements
                     + " view=" + viewWidth + "x" + viewHeight
                     + " video=" + mVideoWidth + "x" + mVideoHeight);
             applyResizeModeInternal(viewWidth, viewHeight);
+            recordAppliedResizeState(viewWidth, viewHeight);
             isResizeModeApplied = true;
         } catch (Exception e) {
             Log.e(TAG, "[RESIZE] error: " + e.getMessage(), e);
         }
+    }
+
+    private boolean isResizeConfigurationAlreadyApplied(int viewWidth, int viewHeight) {
+        return isResizeModeApplied
+                && mLastAppliedViewWidth == viewWidth
+                && mLastAppliedViewHeight == viewHeight
+                && mLastAppliedVideoWidth == getEffectiveVideoWidth()
+                && mLastAppliedVideoHeight == getEffectiveVideoHeight()
+                && mLastAppliedSarNum == mSarNum
+                && mLastAppliedSarDen == mSarDen
+                && mLastAppliedAutoAspectRatio == autoAspectRatio
+                && ((mLastAppliedResizeMode == null && resizeMode == null)
+                        || (mLastAppliedResizeMode != null && mLastAppliedResizeMode.equals(resizeMode)));
+    }
+
+    private void recordAppliedResizeState(int viewWidth, int viewHeight) {
+        mLastAppliedViewWidth = viewWidth;
+        mLastAppliedViewHeight = viewHeight;
+        mLastAppliedVideoWidth = getEffectiveVideoWidth();
+        mLastAppliedVideoHeight = getEffectiveVideoHeight();
+        mLastAppliedSarNum = mSarNum;
+        mLastAppliedSarDen = mSarDen;
+        mLastAppliedAutoAspectRatio = autoAspectRatio;
+        mLastAppliedResizeMode = resizeMode;
+    }
+
+    private boolean shouldKeepPlayingWhileHostPaused() {
+        return playInBackground || isInPipMode || mAwaitingPipAutoEnter;
+    }
+
+    private boolean shouldShowBackgroundNotification() {
+        return playInBackground || (isHostPaused && !isInPipMode && !mAwaitingPipAutoEnter);
+    }
+
+    private void pauseForHostBackground(String reason) {
+        if (mMediaPlayer != null && mMediaPlayer.isPlaying()) {
+            mPausedForHostPause = true;
+            mMediaPlayer.pause();
+            setKeepScreenOn(false);
+            Log.i(TAG, "[LIFECYCLE] paused for host background reason=" + reason);
+        }
+    }
+
+    private void schedulePendingPipBackgroundPause() {
+        cancelPendingPipBackgroundPause();
+        mAwaitingPipAutoEnter = true;
+        mPendingPipBackgroundPause = () -> {
+            mPendingPipBackgroundPause = null;
+            if (!isHostPaused || playInBackground || isInPipMode) {
+                mAwaitingPipAutoEnter = false;
+                return;
+            }
+
+            mAwaitingPipAutoEnter = false;
+            Log.i(TAG, "[LIFECYCLE] PiP auto-enter grace expired → pausing");
+            pauseForHostBackground("pipAutoEnterTimeout");
+        };
+        mPipTransitionHandler.postDelayed(mPendingPipBackgroundPause, PIP_HOST_PAUSE_GRACE_MS);
+    }
+
+    private void cancelPendingPipBackgroundPause() {
+        if (mPendingPipBackgroundPause != null) {
+            mPipTransitionHandler.removeCallbacks(mPendingPipBackgroundPause);
+            mPendingPipBackgroundPause = null;
+        }
+    }
+
+    private void schedulePipResizeSync(final String reason) {
+        cancelPendingPipResizeSync();
+
+        final long[] delaysMs = new long[] { 0L, 48L, 128L, 320L };
+        mPendingPipResizeSync = new Runnable() {
+            private int step = 0;
+
+            @Override
+            public void run() {
+                if (mMediaPlayer == null) {
+                    cancelPendingPipResizeSync();
+                    return;
+                }
+
+                forceResizeMode(reason + "#" + step);
+
+                step++;
+                if (step >= delaysMs.length || (!isInPipMode && !mAwaitingPipAutoEnter)) {
+                    cancelPendingPipResizeSync();
+                    return;
+                }
+
+                long nextDelay = delaysMs[step] - delaysMs[step - 1];
+                mPipTransitionHandler.postDelayed(this, nextDelay);
+            }
+        };
+
+        mPipTransitionHandler.post(mPendingPipResizeSync);
+    }
+
+    private void cancelPendingPipResizeSync() {
+        if (mPendingPipResizeSync != null) {
+            mPipTransitionHandler.removeCallbacks(mPendingPipResizeSync);
+            mPendingPipResizeSync = null;
+        }
+    }
+
+    private void forceResizeMode(String reason) {
+        if (mMediaPlayer == null)
+            return;
+
+        int viewWidth = getWidth();
+        int viewHeight = getHeight();
+        if (viewWidth <= 0 || viewHeight <= 0)
+            return;
+
+        try {
+            mMediaPlayer.getVLCVout().setWindowSize(viewWidth, viewHeight);
+        } catch (Exception e) {
+            Log.w(TAG, "[RESIZE] failed to update VLC window size reason=" + reason + " error=" + e.getMessage());
+        }
+
+        isResizeModeApplied = false;
+        mLastAppliedViewWidth = -1;
+        mLastAppliedViewHeight = -1;
+        requestLayout();
+        invalidate();
+        requestResizeMode();
     }
 
     private void applyResizeModeInternal(int viewWidth, int viewHeight) {
@@ -2604,6 +2791,8 @@ class ReactVlcPlayerView extends TextureView implements
 
         clearPendingResizeRequest();
         cancelPendingSeek();
+        cancelPendingPipBackgroundPause();
+        cancelPendingPipResizeSync();
 
         if (seekExecutor != null && !seekExecutor.isShutdown()) {
             seekExecutor.shutdownNow();
@@ -2647,8 +2836,28 @@ class ReactVlcPlayerView extends TextureView implements
     @Override
     public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {
         Log.d(TAG, "[SURFACE] size changed " + width + "x" + height);
+        if (mMediaPlayer != null) {
+            try {
+                mMediaPlayer.getVLCVout().setWindowSize(width, height);
+            } catch (Exception e) {
+                Log.w(TAG, "[SURFACE] failed to update VLC window size: " + e.getMessage());
+            }
+            isResizeModeApplied = false;
+        }
         if (mMediaPlayer != null && (autoAspectRatio || (mVideoWidth > 0 && mVideoHeight > 0))) {
             applyResizeMode();
+        }
+    }
+
+    @Override
+    protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        super.onSizeChanged(w, h, oldw, oldh);
+        if (w != oldw || h != oldh) {
+            if (isInPipMode) {
+                schedulePipResizeSync("viewSizeChanged");
+            } else {
+                post(() -> forceResizeMode("viewSizeChanged"));
+            }
         }
     }
 
@@ -2831,7 +3040,7 @@ class ReactVlcPlayerView extends TextureView implements
         mMediaSession.setMetadata(b.build());
         // FIX S4: only show notification when appropriate
         if (mMediaPlayer != null && mMediaPlayer.isPlaying()
-                && (playInBackground || isHostPaused)) {
+                && shouldShowBackgroundNotification()) {
             showNotification(PlaybackStateCompat.STATE_PLAYING);
         }
     }
@@ -2860,7 +3069,7 @@ class ReactVlcPlayerView extends TextureView implements
         mMediaSession.setPlaybackState(sb.build());
 
         // FIX S4: only show notification when in background or background-play mode
-        if (playInBackground || isHostPaused) {
+        if (shouldShowBackgroundNotification()) {
             if (state == PlaybackStateCompat.STATE_PLAYING
                     || state == PlaybackStateCompat.STATE_PAUSED) {
                 showNotification(state);
@@ -2964,5 +3173,75 @@ class ReactVlcPlayerView extends TextureView implements
         } else {
             mMediaPlayer.setEqualizer(null);
         }
+    }
+
+    private void scheduleAudioTrackApply(boolean allowRetryWhenPlaying) {
+        if (mPendingAudioTrackRunnable != null) {
+            mAudioTrackHandler.removeCallbacks(mPendingAudioTrackRunnable);
+        }
+
+        final Runnable applyRunnable = new Runnable() {
+            @Override
+            public void run() {
+                applyRequestedAudioTrack("prop", allowRetryWhenPlaying);
+                if (mPendingAudioTrackRunnable == this) {
+                    mPendingAudioTrackRunnable = null;
+                }
+            }
+        };
+
+        mPendingAudioTrackRunnable = applyRunnable;
+        mAudioTrackHandler.post(applyRunnable);
+    }
+
+    private boolean applyRequestedAudioTrack(String reason, boolean allowRetryWhenPlaying) {
+        if (mMediaPlayer == null || _audioTrack == -1) {
+            return false;
+        }
+
+        if (_audioTrack == currentlyAppliedAudioTrack) {
+            return true;
+        }
+
+        final int requestedTrack = _audioTrack;
+        boolean applied = mMediaPlayer.setAudioTrack(requestedTrack);
+        if (applied) {
+            currentlyAppliedAudioTrack = requestedTrack;
+            Log.d(TAG, "[AUDIO_TRACK] applied track=" + requestedTrack + " reason=" + reason);
+            return true;
+        }
+
+        Log.w(TAG, "[AUDIO_TRACK] apply failed for track=" + requestedTrack + " reason=" + reason);
+
+        if (allowRetryWhenPlaying && mMediaPlayer.isPlaying()) {
+            final Runnable retryRunnable = new Runnable() {
+                @Override
+                public void run() {
+                    if (mMediaPlayer == null || _audioTrack != requestedTrack || currentlyAppliedAudioTrack == requestedTrack) {
+                        if (mPendingAudioTrackRunnable == this) {
+                            mPendingAudioTrackRunnable = null;
+                        }
+                        return;
+                    }
+
+                    boolean retryApplied = mMediaPlayer.setAudioTrack(requestedTrack);
+                    if (retryApplied) {
+                        currentlyAppliedAudioTrack = requestedTrack;
+                        Log.d(TAG, "[AUDIO_TRACK] retry applied track=" + requestedTrack);
+                    } else {
+                        Log.w(TAG, "[AUDIO_TRACK] retry failed for track=" + requestedTrack);
+                    }
+
+                    if (mPendingAudioTrackRunnable == this) {
+                        mPendingAudioTrackRunnable = null;
+                    }
+                }
+            };
+
+            mPendingAudioTrackRunnable = retryRunnable;
+            mAudioTrackHandler.postDelayed(retryRunnable, 150);
+        }
+
+        return false;
     }
 }

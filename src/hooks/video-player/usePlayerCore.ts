@@ -508,7 +508,9 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
     const handleBuffering = useCallback((event: VLCBufferingEvent | any) => {
         const isBuffering = typeof event === 'boolean'
             ? event
-            : (event?.isBuffering ?? false);
+            : (typeof event?.isBuffering === 'boolean'
+                ? event.isBuffering
+                : ((typeof event?.bufferRate === 'number') ? event.bufferRate < 100 : false));
 
         if (bufferingTimeoutRef.current) {clearTimeout(bufferingTimeoutRef.current);}
 

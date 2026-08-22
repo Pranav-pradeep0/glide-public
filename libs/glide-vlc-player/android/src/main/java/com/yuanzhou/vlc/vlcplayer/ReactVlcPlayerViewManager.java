@@ -42,6 +42,7 @@ public class ReactVlcPlayerViewManager extends SimpleViewManager<ReactVlcPlayerV
     private static final String PROP_ACCEPT_INVALID_CERTIFICATES = "acceptInvalidCertificates";
     private static final String PROP_RESIZE_MODE = "resizeMode";
     private static final String PROP_PLAY_IN_BACKGROUND = "playInBackground";
+    private static final String PROP_PIP_AUTO_ENTER_ENABLED = "pipAutoEnterEnabled";
     private static final String PROP_TITLE = "title";
     private static final String PROP_ARTIST = "artist";
     private static final String PROP_AUDIO_EQUALIZER = "audioEqualizer";
@@ -187,6 +188,11 @@ public class ReactVlcPlayerViewManager extends SimpleViewManager<ReactVlcPlayerV
     @ReactProp(name = PROP_PLAY_IN_BACKGROUND, defaultBoolean = false)
     public void setPlayInBackground(final ReactVlcPlayerView videoView, final boolean playInBackground) {
         videoView.setPlayInBackground(playInBackground);
+    }
+
+    @ReactProp(name = PROP_PIP_AUTO_ENTER_ENABLED, defaultBoolean = false)
+    public void setPipAutoEnterEnabled(final ReactVlcPlayerView videoView, final boolean pipAutoEnterEnabled) {
+        videoView.setPipAutoEnterEnabled(pipAutoEnterEnabled);
     }
 
     @ReactProp(name = PROP_TITLE)

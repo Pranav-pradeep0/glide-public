@@ -303,6 +303,13 @@ export type VLCPlayerProps = VLCPlayerCallbackProps & {
   playInBackground?: boolean;
 
   /**
+   * Set to `true` when Android PiP auto-enter is currently eligible.
+   * This lets the native player defer background pausing briefly while PiP is taking over.
+   * @default false
+   */
+  pipAutoEnterEnabled?: boolean;
+
+  /**
    * Set to `true` if the app is currently in PiP mode.
    * This is used to handle PiP to Background transitions properly.
    * @default false
