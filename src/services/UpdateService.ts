@@ -1,7 +1,9 @@
 import { GITHUB_OWNER, GITHUB_REPO, GITHUB_RELEASES_URL } from '@/utils/constants';
 import { compareVersions, normalizeVersion } from '@/utils/version';
+import { fetchWithTimeout, NetworkTimeoutError } from '@/utils/network';
 import pkg from '../../package.json';
 import { NativeModules, Platform } from 'react-native';
+const UPDATE_CHECK_TIMEOUT_MS = 8000;
 
 export interface UpdateInfo {
     available: boolean;
@@ -83,11 +85,11 @@ export class UpdateService {
         }
 
         try {
-            const response = await fetch(releasesUrl, {
+            const response = await fetchWithTimeout(releasesUrl, {
                 headers: {
                     Accept: 'application/vnd.github+json',
                 },
-            });
+            }, UPDATE_CHECK_TIMEOUT_MS);
 
             if (!response.ok) {
                 if (__DEV__) {
@@ -141,6 +143,19 @@ export class UpdateService {
                 apkUrl: apkUrl || null,
             };
         } catch (error) {
+            if (error instanceof NetworkTimeoutError) {
+                if (__DEV__) {
+                    console.warn('[UpdateService] Update check timed out:', error.timeoutMs);
+                }
+                return {
+                    available: false,
+                    currentVersion,
+                    latestVersion: null,
+                    releaseUrl: null,
+                    releaseNotes: null,
+                    apkUrl: null,
+                };
+            }
             if (__DEV__) {
                 console.warn('[UpdateService] Update check failed:', error);
             }

@@ -22,6 +22,7 @@ import { searchAllSubtitles, downloadSubtitle } from '../utils/subdlApi';
 import { SubtitleParser } from '../utils/SubtitleParser';
 import { SubtitleSelectionService } from '../services/SubtitleSelectionService';
 import { EQUALIZER_PRESETS } from '../config/equalizerPresets';
+import { isAbortError } from '../utils/network';
 
 type SubtitleTab = 'embedded' | 'external' | 'online';
 type AudioTab = 'tracks' | 'effects';
@@ -252,9 +253,10 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
                     const subs = result.subtitles || [];
                     if (__DEV__) {console.log('[TrackSelector] autoSearch - received', subs.length, 'subtitles');}
                     setSearchResults(subs);
-
-                    setSearchResults(subs);
                 } catch (error) {
+                    if (isAbortError(error)) {
+                        return;
+                    }
                     console.error('[TrackSelector] Auto-search error:', error);
                 } finally {
                     setIsSearching(false);
@@ -263,7 +265,7 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
 
             autoSearch();
         }
-    }, [visible, activeTab, videoName, imdbId, isSearching]);
+    }, [visible, activeTab, videoName, imdbId, isSearching, selectedLanguage]);
 
     // Load initial API subtitles
     useEffect(() => {
@@ -363,6 +365,9 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
             if (__DEV__) {console.log('[TrackSelector] handleSearch - received', result.subtitles?.length || 0, 'subtitles');}
             setSearchResults(result.subtitles || []);
         } catch (error) {
+            if (isAbortError(error)) {
+                return;
+            }
             console.error('[TrackSelector] Search error:', error);
             if (searchTokenRef.current !== token) {return;}
             setSearchResults([]);
@@ -371,7 +376,7 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
                 setIsSearching(false);
             }
         }
-    }, [searchQuery, selectedLanguage]);
+    }, [searchQuery, selectedLanguage, manualSeason, manualEpisode, manualYear, preferHI]);
 
     const handleDownloadSubtitle = useCallback(
         async (subtitle: SubtitleResult) => {
@@ -380,7 +385,9 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
             const currentId = subtitle.id;
             try {
                 setDownloadingId(currentId);
-                const content = await downloadSubtitle(subtitle.downloadUrl);
+                abortControllerRef.current?.abort();
+                abortControllerRef.current = new AbortController();
+                const content = await downloadSubtitle(subtitle.downloadUrl, abortControllerRef.current.signal);
 
                 if (!content) {return;}
 
@@ -398,6 +405,9 @@ export const TrackSelector: React.FC<TrackSelectorProps> = React.memo((props) =>
 
                 onClose();
             } catch (error) {
+                if (isAbortError(error)) {
+                    return;
+                }
                 console.error('[TrackSelector] Download error:', error);
             } finally {
                 setDownloadingId((prev) => (prev === currentId ? null : prev));

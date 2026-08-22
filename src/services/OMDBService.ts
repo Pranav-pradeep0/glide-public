@@ -1,7 +1,9 @@
 // src/services/OMDBService.ts
 import { OMDB_API_KEY, OMDB_API_URL } from '../utils/constants';
+import { fetchWithTimeout, NetworkTimeoutError } from '../utils/network';
 
 const LOG_PREFIX = '[OMDBService]';
+const OMDB_TIMEOUT_MS = 8000;
 
 export interface OMDBResult {
     Title: string;
@@ -45,12 +47,12 @@ export class OMDBService {
 
             if (__DEV__) {console.log(`${LOG_PREFIX} Searching:`, { title, year });}
 
-            const response = await fetch(`${OMDB_API_URL}?${params}`, {
+            const response = await fetchWithTimeout(`${OMDB_API_URL}?${params}`, {
                 method: 'GET',
                 headers: {
                     'Accept': 'application/json',
                 },
-            });
+            }, OMDB_TIMEOUT_MS);
 
             if (!response.ok) {
                 console.error(`${LOG_PREFIX} HTTP error:`, response.status);
@@ -73,6 +75,10 @@ export class OMDBService {
 
             return data;
         } catch (error) {
+            if (error instanceof NetworkTimeoutError) {
+                console.warn(`${LOG_PREFIX} Search timed out after ${error.timeoutMs}ms`);
+                return null;
+            }
             console.error(`${LOG_PREFIX} Search error:`, error);
             return null;
         }
@@ -96,7 +102,7 @@ export class OMDBService {
                 params.append('type', type);
             }
 
-            const response = await fetch(`${OMDB_API_URL}?${params}`);
+            const response = await fetchWithTimeout(`${OMDB_API_URL}?${params}`, undefined, OMDB_TIMEOUT_MS);
 
             if (!response.ok) {return [];}
 
@@ -108,6 +114,10 @@ export class OMDBService {
 
             return data.Search;
         } catch (error) {
+            if (error instanceof NetworkTimeoutError) {
+                console.warn(`${LOG_PREFIX} Fuzzy search timed out after ${error.timeoutMs}ms`);
+                return [];
+            }
             console.error(`${LOG_PREFIX} Fuzzy search error:`, error);
             return [];
         }
@@ -124,13 +134,17 @@ export class OMDBService {
                 plot: 'short',
             });
 
-            const response = await fetch(`${OMDB_API_URL}?${params}`);
+            const response = await fetchWithTimeout(`${OMDB_API_URL}?${params}`, undefined, OMDB_TIMEOUT_MS);
 
             if (!response.ok) {return null;}
 
             const data: OMDBResult = await response.json();
             return data.Response === 'True' ? data : null;
         } catch (error) {
+            if (error instanceof NetworkTimeoutError) {
+                console.warn(`${LOG_PREFIX} GetByID timed out after ${error.timeoutMs}ms`);
+                return null;
+            }
             console.error(`${LOG_PREFIX} GetByID error:`, error);
             return null;
         }

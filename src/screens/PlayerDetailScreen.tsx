@@ -35,6 +35,7 @@ import { SubtitlePickerService } from '../services/SubtitlePickerService';
 import { searchSDHSubtitles, downloadSubtitle } from '../utils/subdlApi';
 import { RootStackParamList, SubtitleResult, SubtitleCue } from '../types';
 import { HapticsIcon, ImdbIcon, RottenTomatoesIcon } from '../components/VideoPlayer/PlayerIcons';
+import { isAbortError } from '../utils/network';
 
 type DetailRouteProp = RouteProp<RootStackParamList, 'PlayerDetail'>;
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -90,9 +91,20 @@ export default function PlayerDetailScreen() {
     // Manual picker modal
     const [showManualPicker, setShowManualPicker] = useState(false);
     const [localSubtitles, setLocalSubtitles] = useState<string[]>([]);
+    const networkAbortRef = useRef<AbortController | null>(null);
+
+    useEffect(() => {
+        return () => {
+            networkAbortRef.current?.abort();
+            networkAbortRef.current = null;
+        };
+    }, []);
 
     // Memoized detection logic
     const runSDHDetection = useCallback(async (imdbId?: string) => {
+        networkAbortRef.current?.abort();
+        networkAbortRef.current = new AbortController();
+        const signal = networkAbortRef.current.signal;
         setLoading(true);
         setProcessingStep('Scanning for SDH subtitles...');
 
@@ -138,14 +150,14 @@ export default function PlayerDetailScreen() {
 
             // Step 5: Search API for subtitles
             setProcessingStep('Searching online...');
-            const apiResult = await searchSDHSubtitles(videoName, 'en', imdbId);
+            const apiResult = await searchSDHSubtitles(videoName, 'en', imdbId, signal);
             setApiSubtitles(apiResult.subtitles);
 
             if (apiResult.subtitles.length > 0) {
                 const bestAPI = apiResult.subtitles.find(s => s.hearingImpaired || (s.sdhScore && s.sdhScore > 5));
                 if (bestAPI) {
                     setProcessingStep('Downloading...');
-                    const content = await downloadSubtitle(bestAPI.downloadUrl);
+                    const content = await downloadSubtitle(bestAPI.downloadUrl, signal);
                     if (content) {
                         const cues = SubtitleParser.parse(content, 'srt');
                         if (cues.length > 0) {
@@ -162,6 +174,9 @@ export default function PlayerDetailScreen() {
             setLoading(false);
             setProcessingStep('');
         } catch (error) {
+            if (isAbortError(error)) {
+                return;
+            }
             console.error(`${LOG_PREFIX} Detection error:`, error);
             setLoading(false);
             setProcessingStep('');
@@ -280,10 +295,12 @@ export default function PlayerDetailScreen() {
 
     async function handleSelectAPISubtitle(sub: SubtitleResult) {
         try {
+            networkAbortRef.current?.abort();
+            networkAbortRef.current = new AbortController();
             setLoading(true);
             setProcessingStep('Downloading subtitle...');
 
-            const content = await downloadSubtitle(sub.downloadUrl);
+            const content = await downloadSubtitle(sub.downloadUrl, networkAbortRef.current.signal);
             if (!content) {
                 Alert.alert('Error', 'Could not download subtitle');
                 setLoading(false);
@@ -296,6 +313,9 @@ export default function PlayerDetailScreen() {
             setLoading(false);
             navigateToPlayer(cues);
         } catch (error) {
+            if (isAbortError(error)) {
+                return;
+            }
             Alert.alert('Error', 'Failed to download');
             setLoading(false);
         }
