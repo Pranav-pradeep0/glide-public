@@ -448,9 +448,3 @@ declare class PlaybackMethods<T> extends Component<T> {
  * A component that can be used to show a playback
  */
 declare class VLCPlayer extends PlaybackMethods<VLCPlayerProps> { }
-
-/**
- * A component that renders a playback with additional
- * features like fullscreen, controls, etc.
- */
-declare class VlCPlayerView extends PlaybackMethods<any> { }
