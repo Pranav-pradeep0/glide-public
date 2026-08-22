@@ -35,6 +35,27 @@ class PermissionServiceClass {
             return false;
         }
     }
+
+    /**
+     * Request POST_NOTIFICATIONS (Android 13+). Without it the native player
+     * silently skips the media notification, so background playback has no
+     * lockscreen or notification controls.
+     */
+    async hasNotificationPermission(): Promise<boolean> {
+        if (Platform.OS !== 'android' || Platform.Version < 33) {
+            return true;
+        }
+
+        try {
+            const status = await PermissionsAndroid.request(
+                PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+            );
+            return status === PermissionsAndroid.RESULTS.GRANTED;
+        } catch (error) {
+            console.error('[PermissionService] Notification permission request failed:', error);
+            return false;
+        }
+    }
 }
 
 export const PermissionService = new PermissionServiceClass();

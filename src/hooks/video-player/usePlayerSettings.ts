@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { PlayerResizeMode } from '@glide/vlc-player';
 import { PlayerSettings, UsePlayerSettingsReturn } from './types';
 import { EQUALIZER_PRESETS } from '@/config/equalizerPresets';
+import { PermissionService } from '@/services/PermissionService';
 
 // ============================================================================
 // TYPES
@@ -205,15 +206,20 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
     // ========================================================================
 
     const toggleBackgroundPlay = useCallback(() => {
-        setSettings(prev => {
-            const newValue = !prev.backgroundPlayEnabled;
-            showToast?.(newValue ? 'Background play enabled' : 'Background play disabled', 'background-play');
-            return {
-                ...prev,
-                backgroundPlayEnabled: newValue,
-            };
-        });
-    }, [showToast]);
+        const newValue = !settings.backgroundPlayEnabled;
+
+        // Android 13+ needs POST_NOTIFICATIONS before the native player can show
+        // media controls, otherwise background playback runs with no notification.
+        if (newValue) {
+            PermissionService.hasNotificationPermission();
+        }
+
+        showToast?.(newValue ? 'Background play enabled' : 'Background play disabled', 'background-play');
+        setSettings(prev => ({
+            ...prev,
+            backgroundPlayEnabled: newValue,
+        }));
+    }, [settings.backgroundPlayEnabled, showToast]);
 
     // ========================================================================
     // VIDEO ENHANCEMENT
@@ -247,27 +253,20 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
     }, []);
 
     const setEqualizerPreset = useCallback((presetId: string) => {
-        // Workaround: Briefly disable equalizer to force native player to re-apply settings
-        // This fixes an issue where switching presets might not update the audio immediately
-        setSettings(prev => ({ ...prev, equalizerEnabled: false }));
+        setSettings(prev => {
+            const preset = EQUALIZER_PRESETS.find(p => p.id === presetId);
+            let newCustomBands = prev.customEqualizerBands;
+            if (preset && presetId !== 'custom' && presetId !== 'flat') {
+                newCustomBands = [...preset.values];
+            }
 
-        setTimeout(() => {
-            setSettings(prev => {
-                const preset = EQUALIZER_PRESETS.find(p => p.id === presetId);
-                // If selecting a preset (not custom/flat), sync custom bands to it as a starting point
-                let newCustomBands = prev.customEqualizerBands;
-                if (preset && presetId !== 'custom' && presetId !== 'flat') {
-                    newCustomBands = [...preset.values];
-                }
-
-                return {
-                    ...prev,
-                    equalizerPreset: presetId,
-                    customEqualizerBands: newCustomBands,
-                    equalizerEnabled: presetId !== 'flat' ? true : prev.equalizerEnabled,
-                };
-            });
-        }, 50);
+            return {
+                ...prev,
+                equalizerPreset: presetId,
+                customEqualizerBands: newCustomBands,
+                equalizerEnabled: presetId === 'flat' ? false : true,
+            };
+        });
     }, []);
 
     const setCustomEqualizerBands = useCallback((bands: number[]) => {
