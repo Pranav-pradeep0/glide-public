@@ -81,3 +81,5 @@ ios/tmp.xcconfig
 # Release signing keys (never commit)
 android/app/glide-release.keystore
 android/app/my-upload-key.keystore
+# Agent/session scratch
+.codex-remote-attachments/
