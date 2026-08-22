@@ -6,6 +6,20 @@ Where I could not verify something, it says so.
 
 ---
 
+## Progress
+
+- **Phase 0 — done** (`7adb033`..`48ae9f3`). Good two-thirds of the dirty diff committed;
+  dead code deleted; POST_NOTIFICATIONS declared and requested; release signing can no
+  longer fall back to the debug key silently; jest green and gated in CI alongside tsc
+  and eslint.
+- **Phase 1 — done** (`30a6512`). PiP ownership moved into the native video view. All
+  four screenshot defects addressed at the cause; see the commit body. **Not yet
+  validated on a device** — the §6 must-run list is the acceptance test.
+- **Phase 2 — next.** Geometry via VLCVideoLayout/ScaleType, lifecycle via onStart/onStop
+  (the 800 ms grace timer is still in place), audio-track retry on real VLC events.
+
+---
+
 ## 0. TL;DR
 
 - **The tree is healthier than you think.** It typechecks clean, lints with 0 errors, and the Android
