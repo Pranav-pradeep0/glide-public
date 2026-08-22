@@ -5,6 +5,8 @@ import { SubtitleResult } from '../types';
 const LOG_PREFIX = '[SubtitleCache]';
 const CACHE_DIR = `${RNFS.CachesDirectoryPath}/subtitles`;
 const CACHE_INDEX_FILE = `${CACHE_DIR}/cache_index.json`;
+const CACHE_INDEX_TMP_FILE = `${CACHE_DIR}/cache_index.tmp.json`;
+const CACHE_INDEX_BACKUP_FILE = `${CACHE_DIR}/cache_index.bak.json`;
 const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;  // 7 days
 
 interface CachedSubtitleEntry {
@@ -16,9 +18,93 @@ interface CachedSubtitleEntry {
     downloadedPaths: Record<string, string>;  // subId -> local file path
 }
 
+function sanitizeSubtitleResult(value: unknown): SubtitleResult | null {
+    if (!value || typeof value !== 'object') {
+        return null;
+    }
+
+    const subtitle = value as Partial<SubtitleResult>;
+    if (
+        typeof subtitle.id !== 'string' ||
+        typeof subtitle.name !== 'string' ||
+        typeof subtitle.language !== 'string' ||
+        typeof subtitle.release !== 'string' ||
+        typeof subtitle.downloadUrl !== 'string' ||
+        typeof subtitle.author !== 'string'
+    ) {
+        return null;
+    }
+
+    const numericRating = typeof subtitle.rating === 'number'
+        ? subtitle.rating
+        : Number(subtitle.rating ?? 0);
+
+    return {
+        ...subtitle,
+        id: subtitle.id,
+        name: subtitle.name,
+        language: subtitle.language,
+        release: subtitle.release,
+        downloadUrl: subtitle.downloadUrl,
+        author: subtitle.author,
+        rating: Number.isFinite(numericRating) ? numericRating : 0,
+    };
+}
+
+function sanitizeDownloadedPaths(value: unknown): Record<string, string> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return {};
+    }
+
+    return Object.fromEntries(
+        Object.entries(value).filter(
+            ([key, path]) => typeof key === 'string' && typeof path === 'string' && path.length > 0
+        )
+    );
+}
+
+function sanitizeCacheEntry(imdbId: string, value: unknown): CachedSubtitleEntry | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return null;
+    }
+
+    const entry = value as Partial<CachedSubtitleEntry>;
+    if (typeof entry.fileName !== 'string' || typeof entry.fetchedAt !== 'number') {
+        return null;
+    }
+
+    const subtitles = Array.isArray(entry.subtitles)
+        ? entry.subtitles
+            .map(sanitizeSubtitleResult)
+            .filter((subtitle): subtitle is SubtitleResult => subtitle !== null)
+        : [];
+
+    return {
+        imdbId,
+        fileName: entry.fileName,
+        fetchedAt: entry.fetchedAt,
+        subtitles,
+        sdhSubtitleId: typeof entry.sdhSubtitleId === 'string' ? entry.sdhSubtitleId : undefined,
+        downloadedPaths: sanitizeDownloadedPaths(entry.downloadedPaths),
+    };
+}
+
+function sanitizeCacheIndex(parsed: unknown): Record<string, CachedSubtitleEntry> | null {
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return null;
+    }
+
+    const sanitizedEntries = Object.entries(parsed)
+        .map(([imdbId, entry]) => [imdbId, sanitizeCacheEntry(imdbId, entry)] as const)
+        .filter((entry): entry is readonly [string, CachedSubtitleEntry] => entry[1] !== null);
+
+    return Object.fromEntries(sanitizedEntries);
+}
+
 export class SubtitleCacheService {
     private static cacheIndex: Record<string, CachedSubtitleEntry> = {};
     private static initialized = false;
+    private static saveQueue: Promise<void> = Promise.resolve();
 
     /**
      * Initialize cache - load index from disk
@@ -27,17 +113,12 @@ export class SubtitleCacheService {
         if (this.initialized) {return;}
 
         try {
-            // Ensure cache directory exists
-            const dirExists = await RNFS.exists(CACHE_DIR);
-            if (!dirExists) {
-                await RNFS.mkdir(CACHE_DIR);
-                if (__DEV__) {console.log(`${LOG_PREFIX} Created cache directory`);}
-            }
+            await this.ensureCacheDir();
 
             // Load existing index
-            if (await RNFS.exists(CACHE_INDEX_FILE)) {
-                const indexContent = await RNFS.readFile(CACHE_INDEX_FILE, 'utf8');
-                this.cacheIndex = JSON.parse(indexContent);
+            const loadedIndex = await this.loadIndexWithRecovery();
+            if (loadedIndex) {
+                this.cacheIndex = loadedIndex;
                 if (__DEV__) {console.log(`${LOG_PREFIX} Loaded cache index with ${Object.keys(this.cacheIndex).length} entries`);}
 
                 // Clean expired entries
@@ -215,15 +296,31 @@ export class SubtitleCacheService {
     }
 
     private static async saveIndex(): Promise<void> {
-        try {
-            await RNFS.writeFile(
-                CACHE_INDEX_FILE,
-                JSON.stringify(this.cacheIndex, null, 2),
-                'utf8'
-            );
-        } catch (error) {
-            console.error(`${LOG_PREFIX} Failed to save index:`, error);
-        }
+        const payload = JSON.stringify(this.cacheIndex, null, 2);
+        this.saveQueue = this.saveQueue.then(async () => {
+            try {
+                await this.ensureCacheDir();
+                await RNFS.writeFile(CACHE_INDEX_TMP_FILE, payload, 'utf8');
+
+                if (await RNFS.exists(CACHE_INDEX_FILE)) {
+                    await RNFS.copyFile(CACHE_INDEX_FILE, CACHE_INDEX_BACKUP_FILE);
+                    await RNFS.unlink(CACHE_INDEX_FILE);
+                }
+
+                await RNFS.moveFile(CACHE_INDEX_TMP_FILE, CACHE_INDEX_FILE);
+            } catch (error) {
+                console.error(`${LOG_PREFIX} Failed to save index:`, error);
+                try {
+                    if (await RNFS.exists(CACHE_INDEX_TMP_FILE)) {
+                        await RNFS.unlink(CACHE_INDEX_TMP_FILE);
+                    }
+                } catch (cleanupError) {
+                    console.warn(`${LOG_PREFIX} Failed to clean temp index file:`, cleanupError);
+                }
+            }
+        });
+
+        await this.saveQueue;
     }
 
     /**
@@ -232,6 +329,7 @@ export class SubtitleCacheService {
     static async clearAll(): Promise<void> {
         if (__DEV__) {console.log(`${LOG_PREFIX} Clearing all cache`);}
         try {
+            await this.saveQueue;
             if (await RNFS.exists(CACHE_DIR)) {
                 await RNFS.unlink(CACHE_DIR);
             }
@@ -241,6 +339,40 @@ export class SubtitleCacheService {
         } catch (error) {
             console.error(`${LOG_PREFIX} Failed to clear cache:`, error);
         }
+    }
+
+    private static async ensureCacheDir(): Promise<void> {
+        const dirExists = await RNFS.exists(CACHE_DIR);
+        if (!dirExists) {
+            await RNFS.mkdir(CACHE_DIR);
+            if (__DEV__) {console.log(`${LOG_PREFIX} Created cache directory`);}
+        }
+    }
+
+    private static async loadIndexWithRecovery(): Promise<Record<string, CachedSubtitleEntry> | null> {
+        const candidateFiles = [CACHE_INDEX_FILE, CACHE_INDEX_BACKUP_FILE];
+
+        for (const filePath of candidateFiles) {
+            try {
+                if (!(await RNFS.exists(filePath))) {
+                    continue;
+                }
+
+                const indexContent = await RNFS.readFile(filePath, 'utf8');
+                const parsed = JSON.parse(indexContent);
+                const sanitized = sanitizeCacheIndex(parsed);
+                if (sanitized) {
+                    if (filePath === CACHE_INDEX_BACKUP_FILE) {
+                        await RNFS.copyFile(CACHE_INDEX_BACKUP_FILE, CACHE_INDEX_FILE);
+                    }
+                    return sanitized;
+                }
+            } catch (error) {
+                console.warn(`${LOG_PREFIX} Failed to load cache index from ${filePath}:`, error);
+            }
+        }
+
+        return null;
     }
 
     /**
