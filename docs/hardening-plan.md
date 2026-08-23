@@ -12,9 +12,29 @@ Where I could not verify something, it says so.
   dead code deleted; POST_NOTIFICATIONS declared and requested; release signing can no
   longer fall back to the debug key silently; jest green and gated in CI alongside tsc
   and eslint.
-- **Phase 1 — done** (`30a6512`). PiP ownership moved into the native video view. All
-  four screenshot defects addressed at the cause; see the commit body. **Not yet
-  validated on a device** — the §6 must-run list is the acceptance test.
+- **Phase 1 — done** (`30a6512`, follow-up `498cff1`). PiP ownership moved into the
+  native video view. Verified on device: video fills the PiP window on entry without a
+  drag, correct window aspect ratio, no auto-enter leak onto other screens.
+- **Phase 1 follow-up — what device testing actually found.** Three real causes the
+  first attempt missed:
+  1. `updateVideoSurfaces()` is a no-op unless views are attached via
+     `attachViews(VLCVideoLayout, …)` (it only calls through `mVideoHelper`), so none of
+     LibVLC's maintained resize logic ever ran. Confirmed by decompiling the 3.6.5 AAR.
+  2. LibVLC's own `VideoHelper.updateVideoSurfaces` **explicitly skips all custom
+     geometry in PiP** — window size, surface fills, no scale, early return. Our code did
+     the opposite. `applyPipSurfaceGeometry` now mirrors upstream.
+  3. The real cause of the corner-crop: **Fabric never re-lays out this surface during
+     PiP.** A chain dump showed everything down to react-native-screens' `Screen`
+     resizing correctly and everything below it — the Fabric-managed subtree from
+     `ScreenContentWrapper` down — holding pre-PiP bounds indefinitely. `requestLayout()`
+     does nothing there because Fabric writes those bounds from the Yoga tree. Worked
+     around by owning the video surface's bounds natively while PiP is open
+     (`ponytail:` marked). **The underlying gap is not fixed.**
+  Also: `onNewVideoLayout` never fires on real files, so video size comes only from the
+  `Playing`-event fallback; the PiP controller had to be wired to that too, and
+  `mVideoVisibleWidth/Height` stay 0 while SAR arrives as an area (`2073600:2073600`).
+  Both matter for anamorphic sources and belong to the Phase 2 geometry pass.
+
 - **Phase 2 — next.** Geometry via VLCVideoLayout/ScaleType, lifecycle via onStart/onStop
   (the 800 ms grace timer is still in place), audio-track retry on real VLC events.
 
