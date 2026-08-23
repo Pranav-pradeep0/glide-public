@@ -35,6 +35,18 @@ Where I could not verify something, it says so.
   `mVideoVisibleWidth/Height` stay 0 while SAR arrives as an area (`2073600:2073600`).
   Both matter for anamorphic sources and belong to the Phase 2 geometry pass.
 
+- **Root cause of everything PiP-related** (found late, governs all future PiP work):
+  `FabricUIManager.onHostPause()` calls `mDispatchUIFrameCallback.pause()`, which
+  removes the choreographer callback that dispatches mount items. A PiP Activity is
+  **paused for the whole time PiP is open**, so Fabric mounts nothing: no
+  React-managed view can change size or position in PiP, at all. Consequences:
+  the native bounds override and the native sibling-hiding are not workarounds to
+  unwind, they are the only mechanism that works; and moving the player out of the
+  react-native-screens stack would not have helped, because the pause is per-surface.
+  Bounds must be owned for the whole subtree, not just the surface — a parent left at
+  a smaller previous PiP size clips the video to its top-left corner, which is exactly
+  what "resize needs a drag" was.
+
 - **Phase 2 — next.** Geometry via VLCVideoLayout/ScaleType, lifecycle via onStart/onStop
   (the 800 ms grace timer is still in place), audio-track retry on real VLC events.
 
