@@ -876,6 +876,11 @@ class ReactVlcPlayerView extends TextureView implements
                             mVideoWidth = videoTrack.width;
                             mVideoHeight = videoTrack.height;
                             Log.i(TAG, "[VLC_EVENT] Playing: fallback dimensions=" + mVideoWidth + "x" + mVideoHeight);
+                            // onNewVideoLayout never fires on many files, so this is
+                            // the only source of truth for the video size. Without it the
+                            // PiP controller has no aspect ratio to give the window.
+                            mPipController.setVideoGeometry(
+                                    mVideoWidth, mVideoHeight, videoTrack.sarNum, videoTrack.sarDen);
                             requestResizeMode();
                         }
                     }
@@ -2149,6 +2154,16 @@ class ReactVlcPlayerView extends TextureView implements
         if (viewWidth <= 0 || viewHeight <= 0)
             return;
 
+        // In PiP, do exactly what LibVLC's own VideoHelper.updateVideoSurfaces does:
+        // publish the window size, let the surface fill it, and apply NO scale or
+        // aspect ratio. Running the custom geometry here leaves VLC rendering at the
+        // pre-PiP dimensions, so the SurfaceTexture buffer and the vout's window size
+        // disagree and a TextureView shows the top-left crop of an oversized frame.
+        if (isInPipMode()) {
+            applyPipSurfaceGeometry(viewWidth, viewHeight);
+            return;
+        }
+
         if (isResizeConfigurationAlreadyApplied(viewWidth, viewHeight))
             return;
 
@@ -2183,6 +2198,36 @@ class ReactVlcPlayerView extends TextureView implements
         } catch (Exception e) {
             Log.e(TAG, "[RESIZE] error: " + e.getMessage(), e);
         }
+    }
+
+
+    /**
+     * PiP surface geometry, mirroring LibVLC's VideoHelper: window size published to
+     * the vout, no scale, no aspect ratio override, no TextureView transform. Never
+     * recorded as "already applied", because a PiP window can be resized repeatedly
+     * and every one of those has to reach the vout.
+     */
+    private void applyPipSurfaceGeometry(int viewWidth, int viewHeight) {
+        try {
+            mMediaPlayer.getVLCVout().setWindowSize(viewWidth, viewHeight);
+            resetTextureViewTransform();
+            mMediaPlayer.setAspectRatio(null);
+            mMediaPlayer.setScale(0f);
+        } catch (Exception e) {
+            Log.w(TAG, "[PIP_RESIZE] failed: " + e.getMessage());
+            return;
+        }
+
+        isResizeModeApplied = false;
+        mLastAppliedViewWidth = -1;
+        mLastAppliedViewHeight = -1;
+
+        Log.i(TAG, "[PIP_RESIZE] window=" + viewWidth + "x" + viewHeight
+                + " surface=" + getWidth() + "x" + getHeight()
+                + " video=" + mVideoWidth + "x" + mVideoHeight
+                + " visible=" + mVideoVisibleWidth + "x" + mVideoVisibleHeight
+                + " sar=" + mSarNum + ":" + mSarDen
+                + " mode=" + resizeMode);
     }
 
     private boolean isResizeConfigurationAlreadyApplied(int viewWidth, int viewHeight) {

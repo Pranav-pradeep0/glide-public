@@ -51,6 +51,8 @@ final class VlcPipController {
     private final List<SavedTransform> savedTransforms = new ArrayList<>();
 
     private Consumer<PictureInPictureModeChangedInfo> modeChangedListener;
+    private View.OnLayoutChangeListener presentationLayoutListener;
+    private View.OnLayoutChangeListener decorLayoutListener;
     private ComponentActivity listeningActivity;
 
     private boolean enabled = false;
@@ -115,6 +117,7 @@ final class VlcPipController {
 
     void detach() {
         videoView.removeOnLayoutChangeListener(layoutChangeListener);
+        unwatchWindowResize();
 
         if (listeningActivity != null && modeChangedListener != null) {
             listeningActivity.removeOnPictureInPictureModeChangedListener(modeChangedListener);
@@ -286,18 +289,30 @@ final class VlcPipController {
     // =========================================================================
     // Presentation
     // =========================================================================
-
     private void handleModeChanged(boolean isInPipMode) {
         if (this.inPipMode == isInPipMode) {
             return;
         }
         this.inPipMode = isInPipMode;
-        Log.i(TAG, "pip mode changed → " + isInPipMode);
+        Log.i(TAG, "pip mode changed -> " + isInPipMode
+                + " aspect=" + videoAspectRatio()
+                + " sourceRect=" + sourceRectHint()
+                + " video=" + videoWidth + "x" + videoHeight
+                + " sar=" + sarNum + ":" + sarDen);
 
         if (isInPipMode) {
             applyPresentation();
+            watchWindowResize();
         } else {
+            unwatchWindowResize();
             restorePresentation();
+        }
+
+        logViewChain(isInPipMode ? "enter" : "exit");
+        if (isInPipMode) {
+            syncVideoBoundsToWindow("pipEnter");
+        } else {
+            restoreVideoBounds();
         }
 
         videoView.onPipModeChangedInternal(isInPipMode);
@@ -306,18 +321,33 @@ final class VlcPipController {
     /**
      * A PiP window shows the whole Activity, so everything except the video has to go.
      * Doing it here runs on the main thread in the same frame batch as the PiP resize,
-     * which a React re-render cannot match — that timing gap is why the HUD and
-     * transport controls used to appear inside the PiP window.
+     * which a React re-render cannot match.
+     *
+     * This has to stay live for the whole PiP session, not just fire once on entry:
+     * React mounts views while PiP is open (a tap that reveals the controls, a HUD
+     * that appears), and anything mounted after the first pass would otherwise be
+     * visible in the PiP window — correctly laid out to it, which is the giveaway.
      */
     private void applyPresentation() {
-        Activity activity = currentActivity();
-        if (activity == null) {
-            return;
-        }
+        hideNonVideoViews();
 
-        View contentRoot = activity.findViewById(android.R.id.content);
+        ViewGroup contentRoot = contentRoot();
+        if (contentRoot != null && presentationLayoutListener == null) {
+            presentationLayoutListener = (v, l, t, r, b, ol, ot, or, ob) -> {
+                if (inPipMode) {
+                    hideNonVideoViews();
+                }
+            };
+            contentRoot.addOnLayoutChangeListener(presentationLayoutListener);
+        }
+    }
+
+    /** Idempotent: only ever hides views that are currently visible. */
+    private void hideNonVideoViews() {
+        ViewGroup contentRoot = contentRoot();
         View child = videoView;
         ViewGroup parent = parentOf(child);
+        boolean captureTransforms = savedTransforms.isEmpty();
 
         while (parent != null) {
             for (int i = 0; i < parent.getChildCount(); i++) {
@@ -329,7 +359,9 @@ final class VlcPipController {
             }
 
             // Any zoom/pan the user applied to an ancestor would crop the PiP window.
-            savedTransforms.add(new SavedTransform(parent));
+            if (captureTransforms) {
+                savedTransforms.add(new SavedTransform(parent));
+            }
             parent.setScaleX(1f);
             parent.setScaleY(1f);
             parent.setTranslationX(0f);
@@ -341,11 +373,15 @@ final class VlcPipController {
             child = parent;
             parent = parentOf(child);
         }
-
-        Log.d(TAG, "pip presentation: hid " + hiddenViews.size() + " sibling views");
     }
 
     private void restorePresentation() {
+        ViewGroup contentRoot = contentRoot();
+        if (contentRoot != null && presentationLayoutListener != null) {
+            contentRoot.removeOnLayoutChangeListener(presentationLayoutListener);
+        }
+        presentationLayoutListener = null;
+
         for (int i = hiddenViews.size() - 1; i >= 0; i--) {
             hiddenViews.get(i).setVisibility(View.VISIBLE);
         }
@@ -355,6 +391,125 @@ final class VlcPipController {
             savedTransforms.get(i).restore();
         }
         savedTransforms.clear();
+    }
+
+
+    // =========================================================================
+    // Window resize propagation
+    // =========================================================================
+
+    /**
+     * The window resize lands after onPictureInPictureModeChanged, so react to the
+     * decor view actually changing size rather than guessing with a delay.
+     */
+    private void watchWindowResize() {
+        Activity activity = currentActivity();
+        if (activity == null || activity.getWindow() == null || decorLayoutListener != null) {
+            return;
+        }
+
+        decorLayoutListener = (v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+            boolean sizeChanged = (right - left) != (oldRight - oldLeft)
+                    || (bottom - top) != (oldBottom - oldTop);
+            if (sizeChanged) {
+                logViewChain("decorResize");
+                syncVideoBoundsToWindow("decorResize");
+            }
+        };
+        activity.getWindow().getDecorView().addOnLayoutChangeListener(decorLayoutListener);
+    }
+
+    private void unwatchWindowResize() {
+        Activity activity = currentActivity();
+        if (activity != null && activity.getWindow() != null && decorLayoutListener != null) {
+            activity.getWindow().getDecorView().removeOnLayoutChangeListener(decorLayoutListener);
+        }
+        decorLayoutListener = null;
+    }
+
+    /**
+     * ponytail: PiP-only override of Fabric-owned view bounds.
+     *
+     * The chain dump showed everything down to react-native-screens' Screen resizing
+     * correctly on PiP entry, and everything below it — the Fabric-managed subtree,
+     * starting at ScreenContentWrapper — keeping its pre-PiP bounds indefinitely.
+     * Fabric writes those bounds from the Yoga tree, so requestLayout() on them does
+     * nothing; the surface stays fullscreen-sized and the PiP window clips it to a
+     * corner. Dragging the window is what eventually forced a fresh mount.
+     *
+     * So while PiP is open, the video surface's bounds are ours, not Fabric's. Safe
+     * because PiP hides every sibling anyway, and the stale ancestors are larger than
+     * the PiP window so nothing clips. Ceiling: this papers over a Fabric/screens
+     * relayout gap. Upgrade path is finding why that surface never re-mounts in PiP
+     * (or hosting the player outside the screens stack), after which this can go.
+     */
+    private void syncVideoBoundsToWindow(String reason) {
+        Activity activity = currentActivity();
+        if (activity == null || activity.getWindow() == null) {
+            return;
+        }
+
+        View decor = activity.getWindow().getDecorView();
+        int width = decor.getWidth();
+        int height = decor.getHeight();
+        if (width <= 0 || height <= 0) {
+            return;
+        }
+        if (videoView.getWidth() == width && videoView.getHeight() == height) {
+            return;
+        }
+
+        // Triggers onSizeChanged, which re-publishes the window size to LibVLC.
+        videoView.layout(0, 0, width, height);
+        Log.i(TAG, "[PIP_BOUNDS] video surface -> " + width + "x" + height + " reason=" + reason);
+    }
+
+    /** Hand the surface back to whatever size its parent has once PiP is over. */
+    private void restoreVideoBounds() {
+        ViewGroup parent = parentOf(videoView);
+        if (parent == null) {
+            return;
+        }
+        int width = parent.getWidth();
+        int height = parent.getHeight();
+        if (width <= 0 || height <= 0) {
+            return;
+        }
+        videoView.layout(0, 0, width, height);
+        Log.i(TAG, "[PIP_BOUNDS] video surface restored -> " + width + "x" + height);
+    }
+
+    /** Diagnostic: where in the view chain the stale size actually lives. */
+    private void logViewChain(String reason) {
+        Activity activity = currentActivity();
+        if (activity == null) {
+            return;
+        }
+
+        StringBuilder sb = new StringBuilder("[PIP_CHAIN] ").append(reason);
+        View decor = activity.getWindow() != null ? activity.getWindow().getDecorView() : null;
+        if (decor != null) {
+            sb.append(" decor=").append(decor.getWidth()).append('x').append(decor.getHeight());
+        }
+
+        View view = videoView;
+        int depth = 0;
+        while (view != null && depth < 16) {
+            sb.append(" | ").append(view.getClass().getSimpleName())
+                    .append('=').append(view.getWidth()).append('x').append(view.getHeight());
+            view = (view.getParent() instanceof View) ? (View) view.getParent() : null;
+            depth++;
+        }
+        Log.d(TAG, sb.toString());
+    }
+
+    private ViewGroup contentRoot() {
+        Activity activity = currentActivity();
+        if (activity == null) {
+            return null;
+        }
+        View root = activity.findViewById(android.R.id.content);
+        return (root instanceof ViewGroup) ? (ViewGroup) root : null;
     }
 
     private static ViewGroup parentOf(View view) {

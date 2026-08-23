@@ -9,7 +9,7 @@
  * To enter PiP, call `enterPictureInPicture()` on the player ref.
  */
 
-import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
+import { NativeModules, NativeEventEmitter, Platform, AppState } from 'react-native';
 import { useEffect, useState } from 'react';
 
 const { PipModule: NativePipModule } = NativeModules;
@@ -87,17 +87,26 @@ export function usePipModeListener(): boolean {
             (event: PipModeEvent) => setIsInPip(event.isInPipMode)
         );
 
-        // Cover the case where the screen mounts while already in PiP.
         let cancelled = false;
-        isInPipMode().then((inPip) => {
-            if (!cancelled) {
-                setIsInPip(inPip);
-            }
-        });
+        const syncFromNative = () => {
+            isInPipMode().then((inPip) => {
+                if (!cancelled) {
+                    setIsInPip(inPip);
+                }
+            });
+        };
+
+        // The event above is the fast path. This is the safety net: if it is ever
+        // missed, JS would keep rendering overlays that then show up inside the PiP
+        // window. Re-checking on app state transitions costs nothing and covers both
+        // that and mounting while already in PiP.
+        const appStateSubscription = AppState.addEventListener('change', syncFromNative);
+        syncFromNative();
 
         return () => {
             cancelled = true;
             subscription.remove();
+            appStateSubscription.remove();
         };
     }, []);
 
