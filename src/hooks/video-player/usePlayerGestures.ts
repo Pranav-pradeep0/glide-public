@@ -107,6 +107,15 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
         isInPipMode = false,
     } = options;
 
+    // These are stable across progress updates, unlike `player` itself, whose memo
+    // identity changes every time state.currentTime ticks (~2/second). Depending on
+    // the object rebuilt the entire gesture tree on every tick.
+    const { setIsSeeking, previewSeek, commitSeek, currentTimeRef } = player;
+    // resetZoom must not depend on the whole hud object: it calls updateZoom, which
+    // changes hud.state, which would change resetZoom, which re-runs the effect below
+    // that calls resetZoom. updateZoom itself is stable.
+    const { updateZoom: updateHudZoom } = hud;
+
     const { width, height } = useWindowDimensions();
 
     // ========================================================================
@@ -231,8 +240,8 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
         panX.value = 0;
         panY.value = 0;
         zoomActive.value = false;
-        hud.updateZoom(1);
-    }, [pinchScale, panX, panY, zoomActive, hud]);
+        updateHudZoom(1);
+    }, [pinchScale, panX, panY, zoomActive, updateHudZoom]);
 
     useEffect(() => {
         if (!allowVideoTransform) {
@@ -246,28 +255,28 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
 
     // Seek
     const handleSeekStart = useCallback(() => {
-        player.setIsSeeking(true);
+        setIsSeeking(true);
         // Capture initial time when seek begins (for difference display)
-        hud.setSeekStartTime(player.currentTimeRef.current);
+        hud.setSeekStartTime(currentTimeRef.current);
         // Sync shared value
-        seekTimeShared.value = player.currentTimeRef.current;
+        seekTimeShared.value = currentTimeRef.current;
         // Show seeker immediately with current time, gesture active = true
-        hud.showSeekHUD(player.currentTimeRef.current, null, null, true);
-    }, [hud, player, seekTimeShared]);
+        hud.showSeekHUD(currentTimeRef.current, null, null, true);
+    }, [hud, setIsSeeking, currentTimeRef, seekTimeShared]);
 
     const handleSeekUpdate = useCallback((time: number) => {
-        player.previewSeek(time);
+        previewSeek(time);
         hud.showSeekHUD(time, null, null, true);
         onSeekUpdate?.(time, true);
-    }, [player, hud, onSeekUpdate]);
+    }, [previewSeek, hud, onSeekUpdate]);
 
     const handleSeekComplete = useCallback((time: number) => {
-        player.commitSeek(time);
+        commitSeek(time);
         // Show final time with auto-hide (isGestureActive=false)
         hud.showSeekHUD(time, null, null, false);
         ui.showControls();
         ui.scheduleAutoHide();
-    }, [player, hud, ui]);
+    }, [commitSeek, hud, ui]);
 
     // Lock tap
     const handleLockTap = useCallback(() => {
@@ -330,11 +339,11 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
     const handleDoubleTapSeek = useCallback((newTime: number, side: 'left' | 'right', x: number, y: number) => {
         // For double tap, set start time to CURRENT time (before seek) for proper diff display
         // Use forceNewStart=false so rapid taps accumulate (+10 -> +20 -> +30, etc.)
-        hud.setSeekStartTime(player.currentTimeRef.current, false);
+        hud.setSeekStartTime(currentTimeRef.current, false);
 
         // Update the shared value used by VideoHUD for instant feedback
         seekTimeShared.value = newTime;
-        player.commitSeek(newTime);
+        commitSeek(newTime);
 
         // Show seek HUD with direction and side for opposite-side positioning
         const direction = side === 'left' ? 'backward' : 'forward';
@@ -342,7 +351,7 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
 
         // Trigger ripple effect at tap location
         hud.showRipple(x, y, side);
-    }, [player, hud, seekTimeShared]);
+    }, [commitSeek, currentTimeRef, hud, seekTimeShared]);
 
     // ========================================================================
     // CREATE INDIVIDUAL GESTURES

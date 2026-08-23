@@ -17,7 +17,7 @@ import {
 // INITIAL STATE
 // ============================================================================
 
-const initialHUDState: HUDState = {
+export const initialHUDState: HUDState = {
     seek: { show: false, time: 0, startTime: 0, direction: null, side: null },
     brightness: { show: false, value: 0.5 },
     volume: { show: false, value: 0.5 },
@@ -31,7 +31,7 @@ const initialHUDState: HUDState = {
 // REDUCER
 // ============================================================================
 
-function hudReducer(state: HUDState, action: HUDAction): HUDState {
+export function hudReducer(state: HUDState, action: HUDAction): HUDState {
     switch (action.type) {
         case 'SHOW_SEEK':
             // OPTIMIZATION: If already showing with same static props, don't update
@@ -108,6 +108,13 @@ function hudReducer(state: HUDState, action: HUDAction): HUDState {
                 resize: { ...state.resize, show: false },
             };
         case 'UPDATE_ZOOM':
+            // Must return the same state object for the same scale. Fabricating a
+            // new one gave the memoized hud object a new identity, which changed
+            // every callback depending on it, which re-triggered the effect that
+            // called this — an unbounded render loop.
+            if (state.zoom.scale === action.scale) {
+                return state;
+            }
             return {
                 ...state,
                 zoom: { scale: action.scale },
