@@ -64,6 +64,12 @@ final class VlcPipController {
     private int sarNum = 0;
     private int sarDen = 0;
 
+    // Bounds the video surface must hold while PiP is open. Fabric owns these bounds
+    // normally, so anything that re-mounts can stamp the pre-resize size back over the
+    // override; enforcing against a remembered target makes it self-correcting.
+    private int pipTargetWidth = 0;
+    private int pipTargetHeight = 0;
+
     private static final class SavedTransform {
         final View view;
         final float scaleX;
@@ -89,9 +95,11 @@ final class VlcPipController {
 
     private final View.OnLayoutChangeListener layoutChangeListener =
             (v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
-                if (left != oldLeft || top != oldTop || right != oldRight || bottom != oldBottom) {
-                    applyParams();
+                if (left == oldLeft && top == oldTop && right == oldRight && bottom == oldBottom) {
+                    return;
                 }
+                applyParams();
+                enforcePipBounds(right - left, bottom - top);
             };
 
     VlcPipController(ReactVlcPlayerView videoView) {
@@ -455,28 +463,112 @@ final class VlcPipController {
         if (width <= 0 || height <= 0) {
             return;
         }
-        if (videoView.getWidth() == width && videoView.getHeight() == height) {
-            return;
-        }
 
-        // Triggers onSizeChanged, which re-publishes the window size to LibVLC.
-        videoView.layout(0, 0, width, height);
-        Log.i(TAG, "[PIP_BOUNDS] video surface -> " + width + "x" + height + " reason=" + reason);
+        pipTargetWidth = width;
+        pipTargetHeight = height;
+
+        int adjusted = layoutChainToWindow(width, height);
+        if (adjusted > 0) {
+            Log.i(TAG, "[PIP_BOUNDS] " + adjusted + " view(s) -> " + width + "x" + height
+                    + " reason=" + reason);
+        }
     }
 
-    /** Hand the surface back to whatever size its parent has once PiP is over. */
+    /**
+     * Size the video surface <em>and every Fabric-managed ancestor</em> to the window.
+     *
+     * Sizing only the surface is not enough: its ancestors keep whatever bounds the
+     * last mount gave them, and a parent smaller than its child clips the child. That
+     * is why PiP looked correct on entry — the ancestors still held fullscreen bounds,
+     * larger than any PiP window — and broke after a resize, where they hold the
+     * previous, smaller PiP rectangle and clip the video to its top-left corner.
+     *
+     * Ancestors that are already the right size are skipped, which naturally stops the
+     * walk doing anything to the natively-sized views above the React subtree.
+     *
+     * @return how many views actually needed adjusting.
+     */
+    private int layoutChainToWindow(int width, int height) {
+        ViewGroup contentRoot = contentRoot();
+        View view = videoView;
+        int adjusted = 0;
+
+        while (view != null) {
+            if (view.getWidth() != width || view.getHeight() != height) {
+                // ReactViewGroup.onLayout does not reposition children (Fabric places
+                // them directly), so laying out a parent cannot undo the child above it.
+                view.layout(0, 0, width, height);
+                adjusted++;
+            }
+            if (view == contentRoot) {
+                break;
+            }
+            view = (view.getParent() instanceof View) ? (View) view.getParent() : null;
+        }
+
+        return adjusted;
+    }
+
+    /**
+     * Re-assert the PiP bounds if something stamped the old ones back.
+     *
+     * Resizing the PiP window triggers a re-mount, and the mounting layer writes the
+     * bounds it has in the shadow tree — which are the pre-resize ones. That is what
+     * made an enlarged PiP window snap the video back to the previous size until the
+     * window was dragged. Posting rather than laying out inline keeps us out of the
+     * traversal that is currently running.
+     */
+    private void enforcePipBounds(int currentWidth, int currentHeight) {
+        if (!inPipMode || pipTargetWidth <= 0 || pipTargetHeight <= 0) {
+            return;
+        }
+        if (currentWidth == pipTargetWidth && currentHeight == pipTargetHeight) {
+            return;
+        }
+
+        Log.i(TAG, "[PIP_BOUNDS] surface was re-laid out to " + currentWidth + "x" + currentHeight
+                + ", re-asserting " + pipTargetWidth + "x" + pipTargetHeight);
+        videoView.post(() -> {
+            if (inPipMode) {
+                syncVideoBoundsToWindow("enforce");
+            }
+        });
+    }
+
+    /**
+     * Hand the whole subtree back to the fullscreen window once PiP is over.
+     *
+     * Posted, because at the moment the mode-change callback fires the decor view is
+     * still reporting the PiP size — reading it inline "restores" the subtree to the
+     * size it already had. By the time the post runs the window has resized, and
+     * Fabric has usually resumed mounting and fixed things itself, in which case this
+     * finds everything correct and adjusts nothing.
+     */
     private void restoreVideoBounds() {
-        ViewGroup parent = parentOf(videoView);
-        if (parent == null) {
-            return;
-        }
-        int width = parent.getWidth();
-        int height = parent.getHeight();
-        if (width <= 0 || height <= 0) {
-            return;
-        }
-        videoView.layout(0, 0, width, height);
-        Log.i(TAG, "[PIP_BOUNDS] video surface restored -> " + width + "x" + height);
+        pipTargetWidth = 0;
+        pipTargetHeight = 0;
+
+        videoView.post(() -> {
+            if (inPipMode) {
+                return;
+            }
+            Activity activity = currentActivity();
+            if (activity == null || activity.getWindow() == null) {
+                return;
+            }
+            View decor = activity.getWindow().getDecorView();
+            int width = decor.getWidth();
+            int height = decor.getHeight();
+            if (width <= 0 || height <= 0) {
+                return;
+            }
+
+            int adjusted = layoutChainToWindow(width, height);
+            if (adjusted > 0) {
+                Log.i(TAG, "[PIP_BOUNDS] restored " + adjusted + " view(s) -> "
+                        + width + "x" + height);
+            }
+        });
     }
 
     /** Diagnostic: where in the view chain the stale size actually lives. */

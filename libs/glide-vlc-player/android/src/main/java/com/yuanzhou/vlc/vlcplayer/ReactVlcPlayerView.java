@@ -2209,10 +2209,20 @@ class ReactVlcPlayerView extends TextureView implements
      */
     private void applyPipSurfaceGeometry(int viewWidth, int viewHeight) {
         try {
+            // While the Activity is paused — i.e. the whole time PiP is open — Fabric
+            // pauses its mount dispatch, so nothing in React's normal layout/draw path
+            // resizes this TextureView's buffer. Set it explicitly, or LibVLC renders
+            // into a buffer that is still the previous size.
+            SurfaceTexture texture = getSurfaceTexture();
+            if (texture != null) {
+                texture.setDefaultBufferSize(viewWidth, viewHeight);
+            }
+
             mMediaPlayer.getVLCVout().setWindowSize(viewWidth, viewHeight);
             resetTextureViewTransform();
             mMediaPlayer.setAspectRatio(null);
             mMediaPlayer.setScale(0f);
+            invalidate();
         } catch (Exception e) {
             Log.w(TAG, "[PIP_RESIZE] failed: " + e.getMessage());
             return;
@@ -2222,11 +2232,17 @@ class ReactVlcPlayerView extends TextureView implements
         mLastAppliedViewWidth = -1;
         mLastAppliedViewHeight = -1;
 
-        Log.i(TAG, "[PIP_RESIZE] window=" + viewWidth + "x" + viewHeight
-                + " surface=" + getWidth() + "x" + getHeight()
+        android.app.Activity activity = getReactActivity();
+        String decorSize = "?";
+        if (activity != null && activity.getWindow() != null) {
+            View decor = activity.getWindow().getDecorView();
+            decorSize = decor.getWidth() + "x" + decor.getHeight();
+        }
+
+        Log.i(TAG, "[PIP_RESIZE] bounds=" + getWidth() + "x" + getHeight()
+                + " decor=" + decorSize
+                + " buffer<-" + viewWidth + "x" + viewHeight
                 + " video=" + mVideoWidth + "x" + mVideoHeight
-                + " visible=" + mVideoVisibleWidth + "x" + mVideoVisibleHeight
-                + " sar=" + mSarNum + ":" + mSarDen
                 + " mode=" + resizeMode);
     }
 
@@ -2824,7 +2840,7 @@ class ReactVlcPlayerView extends TextureView implements
 
     @Override
     public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {
-        Log.d(TAG, "[SURFACE] size changed " + width + "x" + height);
+        Log.d(TAG, "[SURFACE] buffer size changed " + width + "x" + height);
         if (mMediaPlayer != null) {
             try {
                 mMediaPlayer.getVLCVout().setWindowSize(width, height);
