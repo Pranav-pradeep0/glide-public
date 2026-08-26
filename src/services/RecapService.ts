@@ -1,8 +1,10 @@
-import axios from 'axios';
 import { SubtitleCue } from '../types';
-import { GROQ_API_KEY, GROQ_CHAT_API_URL } from '../utils/constants';
+import { AI_PROXY_URL, RECAP_STT_AVAILABLE } from '../utils/constants';
+import { fetchWithTimeout } from '../utils/network';
 import { SubtitleCueStore } from './SubtitleCueStore';
 import { SubtitleTrack } from '../utils/SubtitleExtractor';
+
+const RECAP_TIMEOUT_MS = 20000;
 
 export class RecapService {
     private static readonly MIN_DIALOGUE_LINES = 4;
@@ -140,74 +142,40 @@ export class RecapService {
         );
     }
 
-    /**
-     * Summarizes the dialogue using Groq Llama 3.
-     */
     static async generateRecap(dialogue: string, videoTitle?: string): Promise<string | null> {
         if (!dialogue) {
-            console.warn('[RecapService] No dialogue provided');
+            if (__DEV__) { console.warn('[RecapService] No dialogue provided'); }
             return null;
         }
 
-        if (!GROQ_API_KEY) {
-            console.error('[RecapService] GROQ_API_KEY is not configured. Please add it to your .env file.');
+        if (!RECAP_STT_AVAILABLE) {
+            if (__DEV__) { console.warn('[RecapService] Recap unavailable: no AI proxy URL configured.'); }
             return null;
         }
 
         try {
-            const contextInput = videoTitle ? `Movie/Show Title: "${videoTitle}"\n\n` : '';
-
-            const response = await axios.post(
-                GROQ_CHAT_API_URL,
+            const response = await fetchWithTimeout(
+                `${AI_PROXY_URL}/v1/recap`,
                 {
-                    model: 'llama-3.3-70b-versatile',
-                    messages: [
-                        {
-                            role: 'system',
-                            content: `You are a cinematic recap expert. Your task is to provide a "Previously on..." style recap based on provided dialogue.
-
-GUIDELINES:
-- Context: Use the movie/show title (if provided) to ground your recap and name characters if they appear in the text.
-- Tone: Dramatic, cinematic, and engaging. 
-- Length: Concise, exactly 2-3 sentences.
-- Focus: Highlight major plot beats, emotional shifts, or impending conflicts. 
-- Sparse Scenes: If the dialogue is generic, summarize the vibe or situation (e.g., "Tensions rise as the group faces an uncertain future").
-- No Meta: Do not mention being an AI or say "Based on the dialogue."`,
-                        },
-                        {
-                            role: 'user',
-                            content: `${contextInput}Dialogue from the last few minutes:\n"${dialogue}"`,
-                        },
-                    ],
-                    temperature: 0.7,
-                    max_tokens: 150,
-                },
-                {
+                    method: 'POST',
                     headers: {
-                        'Authorization': `Bearer ${GROQ_API_KEY}`,
-                        'Content-Type': 'application/json',
+                        'content-type': 'application/json',
                     },
-                    timeout: 15000, // 15s timeout for slower networks
-                }
+                    body: JSON.stringify({ dialogue, title: videoTitle ?? '' }),
+                },
+                RECAP_TIMEOUT_MS
             );
 
-            const recap = response.data.choices[0]?.message?.content?.trim();
-            return recap || null;
-        } catch (error) {
-            if (axios.isAxiosError(error)) {
-                if (error.response) {
-                    // Server responded with error status
-                    console.error('[RecapService] API Error:', error.response.status, error.response.data);
-                } else if (error.request) {
-                    // Request was made but no response received (network error)
-                    console.error('[RecapService] Network Error: No response from server. Check internet connection.');
-                } else {
-                    // Error setting up the request
-                    console.error('[RecapService] Request Error:', error.message);
-                }
-            } else {
-                console.error('[RecapService] Unexpected Error:', error);
+            if (!response.ok) {
+                // Status only; never log dialogue or response bodies.
+                if (__DEV__) { console.warn(`[RecapService] Proxy error ${response.status}`); }
+                return null;
             }
+
+            const data = await response.json() as { recap?: string };
+            return data.recap?.trim() || null;
+        } catch (error) {
+            if (__DEV__) { console.error('[RecapService] Recap request failed:', error); }
             return null;
         }
     }

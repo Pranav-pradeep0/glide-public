@@ -16,6 +16,7 @@ import { SubtitleSyncService, MatchResult } from '../services/SubtitleSyncServic
 import { SmartSyncIcon, AutoListenIcon } from './VideoPlayer/PlayerIcons';
 import { AudioExtractor } from '../utils/AudioExtractor';
 import { SpeechToTextService } from '../services/SpeechToTextService';
+import { RECAP_STT_AVAILABLE } from '../utils/constants';
 import Feather from '@react-native-vector-icons/feather';
 
 interface FloatingSyncPanelProps {
@@ -326,7 +327,7 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
                                 </Pressable>
                             )}
 
-                            {type === 'subtitle' && videoPath && (
+                            {type === 'subtitle' && videoPath && RECAP_STT_AVAILABLE && (
                                 <TouchableOpacity
                                     style={[styles.listenButton, isListening && styles.listenButtonActive]}
                                     onPress={handleAutoListen}

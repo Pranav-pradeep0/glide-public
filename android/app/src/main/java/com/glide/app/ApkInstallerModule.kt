@@ -13,6 +13,11 @@ import java.io.File
 class ApkInstallerModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
     override fun getName(): String = "ApkInstallerModule"
 
+    // React Native exposes no ABI constant, so the update asset picker reads it from here.
+    override fun getConstants(): Map<String, Any> = mapOf(
+        "SUPPORTED_ABIS" to Build.SUPPORTED_ABIS.toList()
+    )
+
     @ReactMethod
     fun install(filePath: String, promise: Promise) {
         try {

@@ -3,16 +3,25 @@ apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 // Apply react-native-config plugin
 apply from: project(':react-native-config').projectDir.getPath() + "/dotenv.gradle"
+import groovy.json.JsonSlurper
 import java.net.URL
-// Read version from package.json (single source of truth)
-def getVersionFromPackageJson() {
-    def packageJsonFile = file("../../package.json")
-    def packageJsonText = packageJsonFile.text
-    def matcher = packageJsonText =~ /"version"\s*:\s*"([^"]+)"/
-    if (matcher.find()) {
-        return matcher.group(1)
-    }
-    return "0.0.0"
+
+def packageVersion = new JsonSlurper().parse(file("../../package.json")).version?.toString()
+def versionMatcher = packageVersion =~ /^(\d+)\.(\d+)\.(\d+)$/
+if (!versionMatcher.matches()) {
+    throw new GradleException("package.json version must use X.Y.Z SemVer")
+}
+
+def versionMajor = versionMatcher.group(1).toLong()
+def versionMinor = versionMatcher.group(2).toLong()
+def versionPatch = versionMatcher.group(3).toLong()
+if (versionMinor > 999 || versionPatch > 999) {
+    throw new GradleException("package.json minor and patch versions must be below 1000")
+}
+
+def packageVersionCode = versionMajor * 1_000_000L + versionMinor * 1_000L + versionPatch
+if (packageVersionCode < 1 || packageVersionCode > 2_100_000_000L) {
+    throw new GradleException("package.json version produces an invalid Android versionCode")
 }
 
 project.ext.vectoricons = [
@@ -129,8 +138,8 @@ android {
         applicationId "com.glide.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName getVersionFromPackageJson()
+        versionCode packageVersionCode as int
+        versionName packageVersion
         
         // Inject Stallion keys from env
         resValue "string", "StallionProjectId", project.env.get("STALLION_PROJECT_ID")

@@ -36,10 +36,9 @@ export const SUBDL_DOWNLOAD_URL = process.env.SUBDL_DOWNLOAD_URL || Config.SUBDL
 export const OMDB_API_KEY = process.env.OMDB_API_KEY || Config.OMDB_API_KEY || '';
 export const OMDB_API_URL = process.env.OMDB_API_URL || Config.OMDB_API_URL || 'https://www.omdbapi.com';
 
-// Groq API (Speech-to-Text & Chat)
-export const GROQ_API_KEY = process.env.GROQ_API_KEY || Config.GROQ_API_KEY || '';
-export const GROQ_API_URL = process.env.GROQ_API_URL || Config.GROQ_API_URL || 'https://api.groq.com/openai/v1/audio/transcriptions';
-export const GROQ_CHAT_API_URL = process.env.GROQ_CHAT_API_URL || Config.GROQ_CHAT_API_URL || 'https://api.groq.com/openai/v1/chat/completions';
+const configuredAiProxyUrl = (process.env.AI_PROXY_URL || Config.AI_PROXY_URL || '').trim().replace(/\/+$/, '');
+export const AI_PROXY_URL = configuredAiProxyUrl.startsWith('https://') ? configuredAiProxyUrl : '';
+export const RECAP_STT_AVAILABLE = AI_PROXY_URL.length > 0;
 
 // GitHub Releases (Update Check)
 export const GITHUB_OWNER = process.env.GITHUB_OWNER || Config.GITHUB_OWNER || '';

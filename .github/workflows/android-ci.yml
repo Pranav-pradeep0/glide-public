@@ -1,38 +1,26 @@
-name: Android CI/CD
-
-permissions:
-  contents: write
+name: Android CI
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main, develop]
   push:
     branches: [main, develop]
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
 
 jobs:
-  build-android:
-    name: Build Android App
+  verify:
+    name: Verify (typecheck, lint, tests, debug build)
+    if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # Fetch all history for proper versioning
-
-      - name: Get version and build info
-        id: build_info
-        run: |
-          # Get version from package.json
-          VERSION=$(node -p "require('./package.json').version")
-          SHORT_SHA=$(git rev-parse --short HEAD)
-          BRANCH="${{ github.ref_name }}"
-          BUILD_DATE=$(date +'%Y-%m-%d')
-          
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
-          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
-          echo "build_date=$BUILD_DATE" >> $GITHUB_OUTPUT
-          echo "tag=v${VERSION}-build.${{ github.run_number }}" >> $GITHUB_OUTPUT
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -40,6 +28,7 @@ jobs:
           node-version: 20
           cache: 'npm'
 
+      # ponytail: --legacy-peer-deps stays until the RN 0.87 dependency alignment (tracker §10.1)
       - name: Install JS dependencies
         run: npm ci --legacy-peer-deps
 
@@ -51,9 +40,6 @@ jobs:
           SUBDL_DOWNLOAD_URL=${{ secrets.SUBDL_DOWNLOAD_URL }}
           OMDB_API_KEY=${{ secrets.OMDB_API_KEY }}
           OMDB_API_URL=${{ secrets.OMDB_API_URL }}
-          GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}
-          GROQ_API_URL=${{ secrets.GROQ_API_URL }}
-          GROQ_CHAT_API_URL=${{ secrets.GROQ_CHAT_API_URL }}
           GITHUB_OWNER=Pranav-pradeep0
           GITHUB_REPO=glide-public
           STALLION_PROJECT_ID=${{ secrets.STALLION_PROJECT_ID }}
@@ -76,82 +62,157 @@ jobs:
           java-version: 17
           cache: gradle
 
-      - name: Cache Gradle
-        uses: actions/cache@v4
+      - name: Compile debug build
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+  release:
+    name: Release (tag-gated)
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    concurrency:
+      group: production-release
+      cancel-in-progress: false
+
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      AI_PROXY_URL: ${{ vars.AI_PROXY_URL }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: ${{ runner.os }}-gradle-
+          fetch-depth: 0
+
+      - name: Validate release tag and version identity
+        run: |
+          set -e
+          TAG="${GITHUB_REF_NAME}"
+
+          if ! echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Tag '$TAG' is not a strict final version (expected vX.Y.Z). Prerelease/build suffixes are rejected."
+            exit 1
+          fi
+
+          # A tag on a develop commit must never publish as a production release.
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Tag '$TAG' points at $GITHUB_SHA, which is not an ancestor of origin/main. Production releases are cut from main only."
+            exit 1
+          fi
+
+          VERSION="${TAG#v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag version '$VERSION' does not equal package.json version '$PKG_VERSION'."
+            exit 1
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::GitHub Release '$TAG' already exists. Never rebuild a public version in place; bump the patch version."
+            exit 1
+          fi
+
+          if [[ "$AI_PROXY_URL" != https://* ]]; then
+            echo "::error::Repository variable AI_PROXY_URL must contain the HTTPS production Worker URL."
+            exit 1
+          fi
+
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install JS dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Create .env file
+        run: |
+          cat << EOF > .env
+          SUBDL_API_KEY=${{ secrets.SUBDL_API_KEY }}
+          SUBDL_API_URL=${{ secrets.SUBDL_API_URL }}
+          SUBDL_DOWNLOAD_URL=${{ secrets.SUBDL_DOWNLOAD_URL }}
+          OMDB_API_KEY=${{ secrets.OMDB_API_KEY }}
+          OMDB_API_URL=${{ secrets.OMDB_API_URL }}
+          AI_PROXY_URL=$AI_PROXY_URL
+          GITHUB_OWNER=Pranav-pradeep0
+          GITHUB_REPO=glide-public
+          STALLION_PROJECT_ID=${{ secrets.STALLION_PROJECT_ID }}
+          STALLION_APP_TOKEN=${{ secrets.STALLION_APP_TOKEN }}
+          EOF
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Test
+        run: npx jest --ci
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
 
       - name: Decode Keystore
         run: |
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/app/glide-release.keystore
-          # Verify file size to ensure it's not empty
           if [ ! -s android/app/glide-release.keystore ]; then
             echo "Error: Decoded keystore is empty"
             exit 1
           fi
 
-      - name: Build APKs
+      - name: Build signed APKs
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew clean assembleRelease \
+          ./gradlew assembleRelease \
             -PMYAPP_UPLOAD_STORE_FILE="glide-release.keystore" \
             -PMYAPP_UPLOAD_KEY_ALIAS="${{ secrets.ANDROID_KEY_ALIAS }}" \
             -PMYAPP_UPLOAD_STORE_PASSWORD="${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
             -PMYAPP_UPLOAD_KEY_PASSWORD="${{ secrets.ANDROID_KEY_PASSWORD }}"
 
-      - name: Rename APKs
-        id: rename_apks
-        run: |
-          VERSION="${{ steps.build_info.outputs.version }}"
-          APK_DIR="android/app/build/outputs/apk/release"
-          
-          ARM_SRC="$APK_DIR/app-armeabi-v7a-release.apk"
-          ARM64_SRC="$APK_DIR/app-arm64-v8a-release.apk"
-          
-          ARM_DEST="$APK_DIR/Glide-v${VERSION}-arm.apk"
-          ARM64_DEST="$APK_DIR/Glide-v${VERSION}-arm64.apk"
-          
-          if [ -f "$ARM_SRC" ]; then
-            mv "$ARM_SRC" "$ARM_DEST"
-            echo "arm_path=$ARM_DEST" >> $GITHUB_OUTPUT
-            echo "arm_name=Glide-v${VERSION}-arm.apk" >> $GITHUB_OUTPUT
-            echo "arm_exists=true" >> $GITHUB_OUTPUT
-          fi
-          
-          if [ -f "$ARM64_SRC" ]; then
-            mv "$ARM64_SRC" "$ARM64_DEST"
-            echo "arm64_path=$ARM64_DEST" >> $GITHUB_OUTPUT
-            echo "arm64_name=Glide-v${VERSION}-arm64.apk" >> $GITHUB_OUTPUT
-            echo "arm64_exists=true" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Get commit message
-        id: commit_msg
-        run: |
-          MSG=$(git log -1 --pretty=%B)
-          echo "message<<EOF" >> $GITHUB_OUTPUT
-          echo "$MSG" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: Generate changelog since last tag
-        id: changelog
+      - name: Collect assets and checksums
         run: |
           set -e
-          LAST_TAG=$(git tag --list "v*" --sort=-creatordate | head -n 1)
+          APK_DIR="android/app/build/outputs/apk/release"
+
+          ARM_SRC="$APK_DIR/app-armeabi-v7a-release.apk"
+          ARM64_SRC="$APK_DIR/app-arm64-v8a-release.apk"
+          ARM_DEST="$APK_DIR/Glide-v${VERSION}-arm.apk"
+          ARM64_DEST="$APK_DIR/Glide-v${VERSION}-arm64.apk"
+
+          mv "$ARM_SRC" "$ARM_DEST"
+          mv "$ARM64_SRC" "$ARM64_DEST"
+
+          sha256sum "$ARM_DEST"  > "${ARM_DEST}.sha256"
+          sha256sum "$ARM64_DEST" > "${ARM64_DEST}.sha256"
+
+          echo "ARM_PATH=$ARM_DEST" >> "$GITHUB_ENV"
+          echo "ARM64_PATH=$ARM64_DEST" >> "$GITHUB_ENV"
+
+      - name: Generate changelog from previous final release
+        run: |
+          set -e
+          LAST_TAG=$(git tag --list --sort=-creatordate | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
           if [ -z "$LAST_TAG" ]; then
             RANGE="HEAD"
-            echo "No previous tag found. Using full history."
+            echo "No previous final tag found. Using full history."
           else
             RANGE="${LAST_TAG}..HEAD"
           fi
-          # Build grouped changelog from commit subjects, excluding merge commits and release chores
+
           RAW_LOG=$(git log --no-merges --pretty=format:"%s" $RANGE)
-          # Keep only user-facing types
           FEATS=$(echo "$RAW_LOG" | sed -nE 's/^(feat)(\([^)]*\))?:\s*/- /p')
           FIXES=$(echo "$RAW_LOG" | sed -nE 's/^(fix)(\([^)]*\))?:\s*/- /p')
           PERFS=$(echo "$RAW_LOG" | sed -nE 's/^(perf)(\([^)]*\))?:\s*/- /p')
@@ -167,7 +228,6 @@ jobs:
             BODY="${BODY}"$'\n'"### Performance"$'\n'"$PERFS"
           fi
 
-          # Fallback to raw list if nothing matched
           if [ -z "$BODY" ]; then
             LOG=$(echo "$RAW_LOG" | sed -nE 's/^/- /p')
             if [ -z "$LOG" ]; then
@@ -175,53 +235,28 @@ jobs:
             fi
             BODY="$LOG"
           else
-            # Trim leading newline
             BODY=$(echo "$BODY" | sed '1{/^$/d}')
           fi
 
-          echo "body<<EOF" >> $GITHUB_OUTPUT
-          echo "$BODY" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          {
+            echo "$BODY"
+            echo ""
+            echo "---"
+            echo "**Build Info**"
+            echo "- Version: \`${VERSION}\`"
+            echo "- Commit: \`$(git rev-parse --short HEAD)\`"
+            echo "- Date: \`$(date +'%Y-%m-%d')\`"
+          } > release_notes.md
 
-      - name: Create Release
-        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
-        id: create_release
-        uses: actions/create-release@v1
-        with:
-          tag_name: ${{ steps.build_info.outputs.tag }}
-          release_name: Glide ${{ steps.build_info.outputs.version }} (Build ${{ github.run_number }})
-          body: |
-            ${{ steps.changelog.outputs.body }}
-            
-            ---
-            **Build Info**
-            - Version: `${{ steps.build_info.outputs.version }}`
-            - Branch: `${{ steps.build_info.outputs.branch }}`
-            - Commit: `${{ steps.build_info.outputs.short_sha }}`
-            - Date: `${{ steps.build_info.outputs.build_date }}`
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create GitHub Release
+        run: |
+          set -e
+          test -f "$ARM_PATH" || { echo "::error::Missing ARM APK"; exit 1; }
+          test -f "$ARM64_PATH" || { echo "::error::Missing ARM64 APK"; exit 1; }
 
-      - name: Upload ARM APK
-        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.rename_apks.outputs.arm_exists == 'true' }}
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ${{ steps.rename_apks.outputs.arm_path }}
-          asset_name: ${{ steps.rename_apks.outputs.arm_name }}
-          asset_content_type: application/vnd.android.package-archive
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload ARM64 APK
-        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.rename_apks.outputs.arm64_exists == 'true' }}
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ${{ steps.rename_apks.outputs.arm64_path }}
-          asset_name: ${{ steps.rename_apks.outputs.arm64_name }}
-          asset_content_type: application/vnd.android.package-archive
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          gh release create "$TAG" \
+            --title "Glide ${VERSION}" \
+            --notes-file release_notes.md \
+            --verify-tag \
+            "$ARM_PATH" "${ARM_PATH}.sha256" \
+            "$ARM64_PATH" "${ARM64_PATH}.sha256"

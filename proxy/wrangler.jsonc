@@ -1,0 +1,33 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "glide-ai-proxy",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-23",
+  // Workers Logs persist by default; keep sampling low and never log request content.
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.05
+  },
+  // GROQ_API_KEY is a Worker secret (`wrangler secret put GROQ_API_KEY`); src/index.ts
+  // refuses every request when it is unset.
+  "ratelimits": [
+    {
+      "name": "AI_RATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": {
+        "limit": 6,
+        "period": 60
+      }
+    },
+    // The proxy URL ships inside the APK and is extractable, so the per-IP limit above
+    // is trivially bypassed. This is the burst ceiling for everyone combined.
+    {
+      "name": "AI_GLOBAL_LIMITER",
+      "namespace_id": "1002",
+      "simple": {
+        "limit": 60,
+        "period": 60
+      }
+    }
+  ]
+}

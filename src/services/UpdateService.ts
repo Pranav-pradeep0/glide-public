@@ -36,36 +36,39 @@ function buildLatestReleaseUrl(): string | null {
     return `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`;
 }
 
-function getPreferredAbi(): 'arm64' | 'arm' | null {
-    if (Platform.OS !== 'android') {return null;}
-    const supportedAbis: string[] | undefined = NativeModules?.PlatformConstants?.supportedAbis;
-    if (!supportedAbis || supportedAbis.length === 0) {return null;}
+// Release assets are named Glide-vX.Y.Z-arm.apk / Glide-vX.Y.Z-arm64.apk by the release workflow.
+const ABI_ASSET_SUFFIX = {
+    arm64: '-arm64.apk',
+    arm: '-arm.apk',
+} as const;
 
-    const lower = supportedAbis.map((abi) => String(abi).toLowerCase());
-    if (lower.some((abi) => abi.includes('arm64'))) {return 'arm64';}
-    if (lower.some((abi) => abi.includes('armeabi') || abi.includes('arm'))) {return 'arm';}
+export function getPreferredAbi(
+    supportedAbis?: string[]
+): keyof typeof ABI_ASSET_SUFFIX | null {
+    if (Platform.OS !== 'android') {return null;}
+    // PlatformConstants has no ABI field; ApkInstallerModule exports Build.SUPPORTED_ABIS.
+    const abis = supportedAbis ?? NativeModules?.ApkInstallerModule?.SUPPORTED_ABIS;
+    if (!Array.isArray(abis) || abis.length === 0) {return null;}
+
+    const lower = abis.map((abi) => String(abi).toLowerCase());
+    if (lower.includes('arm64-v8a')) {return 'arm64';}
+    if (lower.includes('armeabi-v7a')) {return 'arm';}
     return null;
 }
 
-function selectApkForDevice(assets: GitHubReleaseResponse['assets']): string | null {
-    const apkAssets = (assets || []).filter((asset) =>
-        (asset.name || '').toLowerCase().endsWith('.apk')
+export function selectApkForDevice(
+    assets: GitHubReleaseResponse['assets'],
+    supportedAbis?: string[]
+): string | null {
+    const abi = getPreferredAbi(supportedAbis);
+    // Unknown ABI: offer the release page rather than guessing an incompatible APK.
+    if (!abi) {return null;}
+
+    const suffix = ABI_ASSET_SUFFIX[abi];
+    const asset = (assets || []).find((candidate) =>
+        (candidate.name || '').toLowerCase().endsWith(suffix)
     );
-    if (apkAssets.length === 0) {return null;}
-
-    const preferredAbi = getPreferredAbi();
-    if (preferredAbi === 'arm64') {
-        const arm64 = apkAssets.find((asset) => (asset.name || '').toLowerCase().includes('arm64'));
-        if (arm64?.browser_download_url) {return arm64.browser_download_url;}
-    }
-    if (preferredAbi === 'arm') {
-        const arm = apkAssets.find((asset) => (asset.name || '').toLowerCase().includes('arm'));
-        if (arm?.browser_download_url) {return arm.browser_download_url;}
-    }
-
-    // Fallback: prefer arm64 if available, otherwise first apk
-    const fallbackArm64 = apkAssets.find((asset) => (asset.name || '').toLowerCase().includes('arm64'));
-    return fallbackArm64?.browser_download_url || apkAssets[0]?.browser_download_url || null;
+    return asset?.browser_download_url || null;
 }
 
 export class UpdateService {

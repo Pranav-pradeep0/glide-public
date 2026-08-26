@@ -1,77 +1,68 @@
 // src/services/SpeechToTextService.ts
 
-import { GROQ_API_KEY, GROQ_API_URL } from '../utils/constants';
+import { AI_PROXY_URL, RECAP_STT_AVAILABLE } from '../utils/constants';
+import { fetchWithTimeout } from '../utils/network';
 
 const LOG_PREFIX = '[SpeechToTextService]';
+const TRANSCRIBE_TIMEOUT_MS = 30000;
 
 export interface TranscriptionResponse {
     text: string;
 }
 
 export interface TranscribeOptions {
-    language?: string; // ISO-639-1 code (e.g. 'en', 'es', 'hi')
+    language?: string;
     task?: 'transcribe' | 'translate';
 }
 
 export class SpeechToTextService {
-    /**
-     * Transcribes an audio file using Groq Whisper API
-     * @param audioPath Absolute path to the local audio file (.m4a)
-     * @param options Configuration for transcription (language, task)
-     * @returns Transcribed text
-     */
     static async transcribe(audioPath: string, options: TranscribeOptions = {}): Promise<string> {
-        if (__DEV__) {console.log(`${LOG_PREFIX} Starting transcription for: ${audioPath}`, options);}
+        if (!RECAP_STT_AVAILABLE) {
+            throw new Error('Speech-to-text is not available in this build.');
+        }
 
-        try {
-            const formData = new FormData();
+        if (__DEV__) {console.log(`${LOG_PREFIX} Starting transcription`, options);}
 
-            // Create the file object for FormData
-            // In React Native, we use an object with uri, name, and type
-            formData.append('file', {
-                uri: `file://${audioPath}`,
-                name: 'audio.wav',
-                type: 'audio/wav',
-            } as any);
+        const formData = new FormData();
 
-            formData.append('model', 'whisper-large-v3');
-            formData.append('response_format', 'json');
+        formData.append('file', {
+            uri: `file://${audioPath}`,
+            name: 'audio.wav',
+            type: 'audio/wav',
+        } as any);
+        formData.append('task', options.task ?? 'transcribe');
+        if (options.language) {
+            formData.append('language', options.language);
+        }
 
-            // Apply options
-            let apiUrl = GROQ_API_URL;
-
-            if (options.task === 'translate') {
-                // Switch to translations endpoint
-                apiUrl = GROQ_API_URL.replace('/transcriptions', '/translations');
-            } else if (options.language) {
-                // Whisper expects ISO-639-1 code
-                formData.append('language', options.language);
-            }
-
-            const response = await fetch(apiUrl, {
+        const response = await fetchWithTimeout(
+            `${AI_PROXY_URL}/v1/transcribe`,
+            {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${GROQ_API_KEY}`,
-                    'Accept': 'application/json',
+                    'accept': 'application/json',
                 },
                 body: formData,
-            });
+            },
+            TRANSCRIBE_TIMEOUT_MS
+        );
 
-            if (!response.ok) {
-                const errorText = await response.text();
-                console.error(`${LOG_PREFIX} API Error (${response.status}):`, errorText);
-                throw new Error(`Groq API error: ${response.status} ${errorText}`);
+        if (!response.ok) {
+            // Status only; never log audio or response bodies.
+            if (__DEV__) {console.warn(`${LOG_PREFIX} Proxy error ${response.status}`);}
+            if (response.status === 413) {
+                throw new Error('Audio clip is too large.');
             }
-
-            const data: TranscriptionResponse = await response.json();
-            if (__DEV__) {console.log(`${LOG_PREFIX} Transcription complete: "${data.text.substring(0, 50)}..."`);}
-
-            return data.text.trim();
-        } catch (error) {
-            console.error(`${LOG_PREFIX} Transcription failed:`, error);
-            throw error;
+            if (response.status === 429) {
+                throw new Error('Too many requests. Please wait a moment and try again.');
+            }
+            if (response.status === 502 || response.status === 504) {
+                throw new Error('Transcription service is unavailable right now.');
+            }
+            throw new Error(`Transcription failed (${response.status}).`);
         }
+
+        const data: TranscriptionResponse = await response.json();
+        return data.text.trim();
     }
 }
-
-

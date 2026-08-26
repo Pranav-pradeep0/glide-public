@@ -37,6 +37,7 @@ import { FloatingSyncPanel } from '@/components/FloatingSyncPanel';
 import { RecapModal } from '@/components/VideoPlayer/RecapModal';
 import { ResumeModal } from '@/components/VideoPlayer/ResumeModal';
 import { RecapService } from '@/services/RecapService';
+import { RECAP_STT_AVAILABLE } from '@/utils/constants';
 
 // Hooks
 import {
@@ -877,6 +878,11 @@ export default function VideoPlayerScreen({ route }: Props) {
         let isActive = true;
 
         const evaluateRecapEligibility = async () => {
+            if (!RECAP_STT_AVAILABLE) {
+                if (isActive) {setIsRecapEligible(false);}
+                return;
+            }
+
             if (
                 isNetworkStream ||
                 !resumePosition ||
@@ -916,6 +922,11 @@ export default function VideoPlayerScreen({ route }: Props) {
 
     const handleRecapTrigger = useCallback(async () => {
         if (isNetworkStream) {return;}
+
+        if (!RECAP_STT_AVAILABLE) {
+            bookmarksHook.showToastWithMessage('Recap is not available in this build', 'recap');
+            return;
+        }
         // If we already have recap text, just show it
         if (recapText) {
             player.pause();

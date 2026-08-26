@@ -1,5 +1,7 @@
 # Glide — Independent Status Review & Hardening Plan
 
+> Superseded by [Production Hardening Master Tracker](production-hardening-master-tracker.md). Kept for historical context.
+
 Author: fresh review, 2026-08-22. Supersedes `current-context-2026-08-22.md` where they disagree.
 Everything below was verified against this working tree and against upstream sources on 2026-08-22.
 Where I could not verify something, it says so.
