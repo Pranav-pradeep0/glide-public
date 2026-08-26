@@ -25,6 +25,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { useSharedValue, useAnimatedStyle, runOnJS } from 'react-native-reanimated';
 import { UpdateActionButton } from '@/components/UpdateActionButton';
+import { UpdateNotes } from '@/components/UpdateNotes';
 import { useUpdateInstaller } from '@/hooks/useUpdateInstaller';
 
 // Reanimated Text for smooth preview
@@ -324,6 +325,8 @@ export default function SettingsScreen() {
     const {
         canDownload,
         downloadProgress,
+        error,
+        handleCancelDownload,
         hasCachedApk,
         isDownloading,
         handleDownloadAndInstall,
@@ -333,6 +336,7 @@ export default function SettingsScreen() {
         latestVersion: updateStatus.latestVersion,
         releaseUrl: updateStatus.releaseUrl,
         apkUrl: updateStatus.apkUrl,
+        apkSha256Url: updateStatus.apkSha256Url,
     });
 
     return (
@@ -357,9 +361,15 @@ export default function SettingsScreen() {
                                 </Text>
                             </View>
                         </View>
+                        <UpdateNotes notes={updateStatus.releaseNotes} maxHeight={160} />
                         <UpdateActionButton
                             canDownload={canDownload}
                             downloadProgress={downloadProgress}
+
+                            error={error}
+
+
+                            onCancelDownload={handleCancelDownload}
                             hasCachedApk={hasCachedApk}
                             isDownloading={isDownloading}
                             onDownloadAndInstall={handleDownloadAndInstall}

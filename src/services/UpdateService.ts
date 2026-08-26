@@ -4,6 +4,17 @@ import { fetchWithTimeout, NetworkTimeoutError } from '@/utils/network';
 import pkg from '../../package.json';
 import { NativeModules, Platform } from 'react-native';
 const UPDATE_CHECK_TIMEOUT_MS = 8000;
+// Release notes are attacker-influenced Markdown rendered in the update modal.
+const MAX_RELEASE_NOTES_CHARS = 8000;
+
+// GitHub serves release assets from these hosts. The SHA-256 check is the real
+// integrity control; this only stops an edited release pointing the download elsewhere.
+const TRUSTED_ASSET_URL =
+    /^https:\/\/(github\.com|objects\.githubusercontent\.com|release-assets\.githubusercontent\.com)\//;
+
+export function isTrustedAssetUrl(url: string | null | undefined): boolean {
+    return typeof url === 'string' && TRUSTED_ASSET_URL.test(url);
+}
 
 export interface UpdateInfo {
     available: boolean;
@@ -12,6 +23,7 @@ export interface UpdateInfo {
     releaseUrl: string | null;
     releaseNotes: string | null;
     apkUrl: string | null;
+    apkSha256Url: string | null;
 }
 
 interface GitHubReleaseResponse {
@@ -56,19 +68,47 @@ export function getPreferredAbi(
     return null;
 }
 
+export interface SelectedApk {
+    apkUrl: string;
+    /** Checksum published beside the APK. Null means the download cannot be verified. */
+    sha256Url: string | null;
+}
+
 export function selectApkForDevice(
     assets: GitHubReleaseResponse['assets'],
     supportedAbis?: string[]
-): string | null {
+): SelectedApk | null {
     const abi = getPreferredAbi(supportedAbis);
     // Unknown ABI: offer the release page rather than guessing an incompatible APK.
     if (!abi) {return null;}
 
     const suffix = ABI_ASSET_SUFFIX[abi];
-    const asset = (assets || []).find((candidate) =>
-        (candidate.name || '').toLowerCase().endsWith(suffix)
-    );
-    return asset?.browser_download_url || null;
+    const all = assets || [];
+    const apk = all.find((candidate) => (candidate.name || '').toLowerCase().endsWith(suffix));
+    const apkUrl = apk?.browser_download_url;
+    if (!apkUrl || !apk?.name || !isTrustedAssetUrl(apkUrl)) {return null;}
+
+    const checksumName = `${apk.name.toLowerCase()}.sha256`;
+    const checksum = all.find((candidate) => (candidate.name || '').toLowerCase() === checksumName);
+    const sha256Url = checksum?.browser_download_url;
+
+    return {
+        apkUrl,
+        sha256Url: isTrustedAssetUrl(sha256Url) ? sha256Url! : null,
+    };
+}
+
+
+function noUpdate(currentVersion: string): UpdateInfo {
+    return {
+        available: false,
+        currentVersion,
+        latestVersion: null,
+        releaseUrl: null,
+        releaseNotes: null,
+        apkUrl: null,
+        apkSha256Url: null,
+    };
 }
 
 export class UpdateService {
@@ -77,20 +117,14 @@ export class UpdateService {
         const releasesUrl = buildLatestReleaseUrl();
 
         if (!releasesUrl) {
-            return {
-                available: false,
-                currentVersion,
-                latestVersion: null,
-                releaseUrl: null,
-                releaseNotes: null,
-                apkUrl: null,
-            };
+            return noUpdate(currentVersion);
         }
 
         try {
             const response = await fetchWithTimeout(releasesUrl, {
                 headers: {
                     Accept: 'application/vnd.github+json',
+                    'X-GitHub-Api-Version': '2026-03-10',
                 },
             }, UPDATE_CHECK_TIMEOUT_MS);
 
@@ -98,44 +132,23 @@ export class UpdateService {
                 if (__DEV__) {
                     console.warn('[UpdateService] Failed to fetch releases:', response.status);
                 }
-                return {
-                    available: false,
-                    currentVersion,
-                    latestVersion: null,
-                    releaseUrl: null,
-                    releaseNotes: null,
-                    apkUrl: null,
-                };
+                return noUpdate(currentVersion);
             }
 
             const data = (await response.json()) as GitHubReleaseResponse;
 
-            if (!data?.tag_name) {
-                return {
-                    available: false,
-                    currentVersion,
-                    latestVersion: null,
-                    releaseUrl: null,
-                    releaseNotes: null,
-                    apkUrl: null,
-                };
-            }
-
-            if (data.prerelease || data.draft) {
-                return {
-                    available: false,
-                    currentVersion,
-                    latestVersion: null,
-                    releaseUrl: null,
-                    releaseNotes: null,
-                    apkUrl: null,
-                };
+            // /releases/latest already excludes drafts and prereleases; this stays as a
+            // guard for a custom GITHUB_RELEASES_URL that does not.
+            if (!data?.tag_name || data.prerelease || data.draft) {
+                return noUpdate(currentVersion);
             }
 
             const latestVersion = normalizeVersion(data.tag_name);
             const isNewer = compareVersions(latestVersion, currentVersion) > 0;
-            const releaseNotes = data.body ? String(data.body).trim() : null;
-            const apkUrl = selectApkForDevice(data.assets);
+            const releaseNotes = data.body
+                ? String(data.body).trim().slice(0, MAX_RELEASE_NOTES_CHARS)
+                : null;
+            const selected = selectApkForDevice(data.assets);
 
             return {
                 available: isNewer,
@@ -143,33 +156,17 @@ export class UpdateService {
                 latestVersion: latestVersion || null,
                 releaseUrl: data.html_url || null,
                 releaseNotes: releaseNotes || null,
-                apkUrl: apkUrl || null,
+                apkUrl: selected?.apkUrl || null,
+                apkSha256Url: selected?.sha256Url || null,
             };
         } catch (error) {
-            if (error instanceof NetworkTimeoutError) {
-                if (__DEV__) {
-                    console.warn('[UpdateService] Update check timed out:', error.timeoutMs);
-                }
-                return {
-                    available: false,
-                    currentVersion,
-                    latestVersion: null,
-                    releaseUrl: null,
-                    releaseNotes: null,
-                    apkUrl: null,
-                };
-            }
             if (__DEV__) {
-                console.warn('[UpdateService] Update check failed:', error);
+                console.warn(
+                    '[UpdateService] Update check failed:',
+                    error instanceof NetworkTimeoutError ? `timed out after ${error.timeoutMs}ms` : error
+                );
             }
-            return {
-                available: false,
-                currentVersion,
-                latestVersion: null,
-                releaseUrl: null,
-                releaseNotes: null,
-                apkUrl: null,
-            };
+            return noUpdate(currentVersion);
         }
     }
 }

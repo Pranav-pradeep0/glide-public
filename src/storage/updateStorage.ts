@@ -13,8 +13,10 @@ const mmkv = createMMKV({
     id: UPDATE_APK_KEY,
 });
 
+// MMKV is synchronous. These were Promise-returning, which made callers await work that
+// had already finished and implied a backend that could fail asynchronously.
 export const updateStorage = {
-    async load(): Promise<UpdateApkCache | null> {
+    load(): UpdateApkCache | null {
         try {
             const raw = mmkv.getString(UPDATE_APK_KEY);
             if (!raw) {return null;}
@@ -29,7 +31,7 @@ export const updateStorage = {
         }
     },
 
-    async save(cache: UpdateApkCache): Promise<void> {
+    save(cache: UpdateApkCache): void {
         try {
             mmkv.set(UPDATE_APK_KEY, JSON.stringify(cache));
         } catch (error) {
@@ -37,7 +39,7 @@ export const updateStorage = {
         }
     },
 
-    async clear(): Promise<void> {
+    clear(): void {
         try {
             mmkv.remove(UPDATE_APK_KEY);
         } catch (error) {

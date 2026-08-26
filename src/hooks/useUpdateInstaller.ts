@@ -1,193 +1,372 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect } from 'react';
 import { Linking, NativeModules, Platform } from 'react-native';
 import * as RNFS from '@dr.pogodin/react-native-fs';
 import { compareVersions, normalizeVersion } from '@/utils/version';
+import { isTrustedAssetUrl } from '@/services/UpdateService';
+import { fetchWithTimeout } from '@/utils/network';
 import { updateStorage, UpdateApkCache } from '@/storage/updateStorage';
+import { useAppStore } from '@/store/appStore';
 import pkg from '../../package.json';
+
+// One constant cache name, so no release-supplied string ever reaches a file path.
+const APK_NAME = 'glide-update.apk';
+const PART_NAME = 'glide-update.apk.part';
+const APK_PATH = `${RNFS.CachesDirectoryPath}/${APK_NAME}`;
+const PART_PATH = `${RNFS.CachesDirectoryPath}/${PART_NAME}`;
+
+const MAX_APK_BYTES = 300 * 1024 * 1024;
+const CHECKSUM_TIMEOUT_MS = 8000;
+const CONNECTION_TIMEOUT_MS = 15000;
+// No progress for this long means the transfer has stalled.
+const READ_TIMEOUT_MS = 60000;
+const SHA256_HEX = /\b([a-f0-9]{64})\b/i;
+
+export type UpdateErrorKind =
+    | 'network'
+    | 'storage'
+    | 'integrity'
+    | 'cancelled'
+    | 'unknown-sources'
+    | 'installer'
+    | 'unsupported-device';
+
+export interface UpdateError {
+    kind: UpdateErrorKind;
+    message: string;
+    /** True when opening the release page in a browser is a sensible next step. */
+    canOpenRelease: boolean;
+}
+
+class DownloadError extends Error {
+    readonly kind: UpdateErrorKind;
+    constructor(kind: UpdateErrorKind, message: string) {
+        super(message);
+        this.kind = kind;
+    }
+}
+
+// Native reject codes come from ApkInstallerModule's PackageInstaller status mapping.
+const INSTALL_ERRORS: Record<string, UpdateError> = {
+    INSTALL_CANCELLED: { kind: 'cancelled', message: 'Install cancelled.', canOpenRelease: false },
+    UNKNOWN_SOURCES_DENIED: {
+        kind: 'unknown-sources',
+        message: 'Allow Glide to install apps, then try again.',
+        canOpenRelease: false,
+    },
+    INSTALL_BLOCKED: {
+        kind: 'installer',
+        message: 'The system blocked this install. Check Play Protect or your device policy.',
+        canOpenRelease: true,
+    },
+    INSTALL_CONFLICT: {
+        kind: 'installer',
+        message: 'This update conflicts with the installed copy of Glide. It may be signed by a different key.',
+        canOpenRelease: true,
+    },
+    INSTALL_INCOMPATIBLE: {
+        kind: 'unsupported-device',
+        message: 'This build is not compatible with your device.',
+        canOpenRelease: true,
+    },
+    INSTALL_INVALID: {
+        kind: 'integrity',
+        message: 'The downloaded update is damaged. Try again.',
+        canOpenRelease: true,
+    },
+    INSTALL_STORAGE: {
+        kind: 'storage',
+        message: 'Not enough storage to install the update.',
+        canOpenRelease: false,
+    },
+    INVALID_FILE: {
+        kind: 'integrity',
+        message: 'The downloaded update is damaged. Try again.',
+        canOpenRelease: true,
+    },
+};
+
+const GENERIC_INSTALL_ERROR: UpdateError = {
+    kind: 'installer',
+    message: 'The update could not be installed.',
+    canOpenRelease: true,
+};
 
 interface UseUpdateInstallerParams {
     latestVersion: string | null;
     releaseUrl: string | null;
     apkUrl: string | null;
+    apkSha256Url: string | null;
+}
+
+// One download at a time, app-wide: the modal and the Settings card share both the
+// destination file and the store slice, so the job id cannot live in a component.
+let activeJobId: number | null = null;
+// stopDownload makes the job promise reject, which is indistinguishable from a network
+// failure, so remember that the rejection was asked for.
+let cancelRequested = false;
+// Which latestVersion the cache was last checked against. Both consumers mount this
+// hook, and the update check resolves after mount, so the sweep must re-run when the
+// known latest version changes but only once per value.
+let sweptForVersion: string | null | undefined;
+
+async function safeDelete(filePath: string): Promise<void> {
+    try {
+        if (await RNFS.exists(filePath)) {
+            await RNFS.unlink(filePath);
+        }
+    } catch (error) {
+        if (__DEV__) {
+            console.warn('[useUpdateInstaller] Failed to delete', filePath, error);
+        }
+    }
+}
+
+async function fetchExpectedHash(sha256Url: string): Promise<string> {
+    let response: Response;
+    try {
+        response = await fetchWithTimeout(sha256Url, {}, CHECKSUM_TIMEOUT_MS);
+    } catch {
+        throw new DownloadError('network', 'Could not fetch the update checksum.');
+    }
+    if (!response.ok) {
+        throw new DownloadError('network', 'Could not fetch the update checksum.');
+    }
+    // sha256sum output is "<hash>  <filename>".
+    const match = SHA256_HEX.exec(await response.text());
+    if (!match) {
+        throw new DownloadError('integrity', 'The published checksum is malformed.');
+    }
+    return match[1].toLowerCase();
 }
 
 export function useUpdateInstaller({
     latestVersion,
     releaseUrl,
     apkUrl,
+    apkSha256Url,
 }: UseUpdateInstallerParams) {
-    const [isDownloading, setIsDownloading] = useState(false);
-    const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
-    const [cachedApk, setCachedApk] = useState<UpdateApkCache | null>(null);
+    const { isDownloading, downloadProgress, cachedApk, error } = useAppStore(
+        (state) => state.updateInstall
+    );
+    const setUpdateInstall = useAppStore((state) => state.setUpdateInstall);
+
+    const setError = useCallback(
+        (next: UpdateError | null) => setUpdateInstall({ error: next }),
+        [setUpdateInstall]
+    );
+    const setCachedApk = useCallback(
+        (next: UpdateApkCache | null) => setUpdateInstall({ cachedApk: next }),
+        [setUpdateInstall]
+    );
 
     const currentVersion = normalizeVersion(String(pkg.version || '0.0.0'));
-    const canDownload = Boolean(apkUrl);
+    // Without a checksum there is nothing to verify the download against, so treat the
+    // release as browser-only rather than installing bytes we cannot check.
+    const canDownload = isTrustedAssetUrl(apkUrl) && Boolean(apkSha256Url);
     const hasCachedApk = Boolean(cachedApk?.path);
 
-    const safeDeleteFile = useCallback(async (filePath?: string | null) => {
-        if (!filePath) {return;}
-        try {
-            const exists = await RNFS.exists(filePath);
-            if (exists) {
-                await RNFS.unlink(filePath);
-            }
-        } catch (error) {
-            if (__DEV__) {
-                console.warn('[useUpdateInstaller] Failed to delete cached APK:', error);
-            }
+    const cancelActiveDownload = useCallback(() => {
+        if (activeJobId !== null) {
+            RNFS.stopDownload(activeJobId);
+            activeJobId = null;
         }
     }, []);
 
+    const clearError = useCallback(() => setError(null), [setError]);
+
+    const handleCancelDownload = useCallback(() => {
+        cancelRequested = true;
+        cancelActiveDownload();
+        setUpdateInstall({
+            isDownloading: false,
+            downloadProgress: null,
+            error: { kind: 'cancelled', message: 'Download cancelled.', canOpenRelease: false },
+        });
+    }, [cancelActiveDownload, setUpdateInstall]);
+
+    // Drop a cached APK that is stale, unverifiable, or already installed. Both consumers
+    // mount this hook and the update check resolves after mount, so this runs once per
+    // distinct latestVersion rather than once per component.
     useEffect(() => {
-        let isActive = true;
+        if (isDownloading || sweptForVersion === latestVersion) {
+            return;
+        }
+        sweptForVersion = latestVersion;
 
-        const loadCache = async () => {
-            const cached = await updateStorage.load();
+        const sweep = async () => {
+            const cached = updateStorage.load();
+            const discard = async () => {
+                await safeDelete(APK_PATH);
+                await safeDelete(PART_PATH);
+                updateStorage.clear();
+                setCachedApk(null);
+            };
+
             if (!cached) {
-                if (isActive) {setCachedApk(null);} 
+                await safeDelete(PART_PATH);
+                setCachedApk(null);
                 return;
             }
-
-            if (compareVersions(currentVersion, cached.version) >= 0) {
-                await safeDeleteFile(cached.path);
-                await updateStorage.clear();
-                if (isActive) {setCachedApk(null);} 
+            if (
+                cached.path !== APK_PATH ||
+                compareVersions(currentVersion, cached.version) >= 0 ||
+                (latestVersion && compareVersions(cached.version, latestVersion) !== 0) ||
+                !(await RNFS.exists(cached.path))
+            ) {
+                await discard();
                 return;
             }
-
-            if (latestVersion && compareVersions(cached.version, latestVersion) !== 0) {
-                await safeDeleteFile(cached.path);
-                await updateStorage.clear();
-                if (isActive) {setCachedApk(null);} 
-                return;
-            }
-
-            const exists = await RNFS.exists(cached.path);
-            if (!exists) {
-                await updateStorage.clear();
-                if (isActive) {setCachedApk(null);} 
-                return;
-            }
-
-            if (isActive) {
-                setCachedApk(cached);
-            }
+            setCachedApk(cached);
         };
 
-        loadCache();
-
-        return () => {
-            isActive = false;
-        };
-    }, [currentVersion, latestVersion, safeDeleteFile]);
-
-    const openInstaller = useCallback(async (filePath: string, _fileName: string) => {
-        if (Platform.OS === 'android') {
-            try {
-                await NativeModules.ApkInstallerModule.install(filePath);
-                return true;
-            } catch (error) {
-                if (__DEV__) {
-                    console.warn('[useUpdateInstaller] Native install failed:', error);
-                }
-            }
-        }
-
-        try {
-            const fileUrl = Platform.OS === 'android'
-                ? `file://${filePath}`
-                : filePath;
-            await Linking.openURL(fileUrl);
-            return true;
-        } catch (error) {
-            if (__DEV__) {
-                console.warn('[useUpdateInstaller] Linking install failed:', error);
-            }
-        }
-
-        return false;
-    }, []);
+        sweep();
+    }, [currentVersion, isDownloading, latestVersion, setCachedApk]);
 
     const handleOpenRelease = useCallback(async () => {
         if (!releaseUrl) {return;}
         try {
             await Linking.openURL(releaseUrl);
         } catch {
-            // ignore
+            // Nothing further to offer if no browser can handle it.
         }
     }, [releaseUrl]);
 
-    const handleInstallCached = useCallback(async () => {
-        if (!cachedApk) {return;}
-        const opened = await openInstaller(cachedApk.path, cachedApk.fileName);
-        if (!opened && releaseUrl) {
-            handleOpenRelease();
+    const runInstall = useCallback(async (filePath: string) => {
+        if (Platform.OS !== 'android') {
+            setError(GENERIC_INSTALL_ERROR);
+            return;
         }
-    }, [cachedApk, handleOpenRelease, openInstaller, releaseUrl]);
+        try {
+            const allowed = await NativeModules.ApkInstallerModule.canInstallPackages();
+            if (!allowed) {
+                setError(INSTALL_ERRORS.UNKNOWN_SOURCES_DENIED);
+                await NativeModules.ApkInstallerModule.openUnknownSourcesSettings();
+                return;
+            }
+            await NativeModules.ApkInstallerModule.install(filePath);
+        } catch (e) {
+            const code = (e as { code?: string })?.code;
+            setError((code && INSTALL_ERRORS[code]) || GENERIC_INSTALL_ERROR);
+        }
+    }, [setError]);
+
+    const download = useCallback(async (): Promise<string> => {
+        if (!apkUrl || !apkSha256Url || !isTrustedAssetUrl(apkUrl) || !isTrustedAssetUrl(apkSha256Url)) {
+            throw new DownloadError('network', 'This release has no verifiable download.');
+        }
+
+        const expectedHash = await fetchExpectedHash(apkSha256Url);
+        await safeDelete(PART_PATH);
+
+        const job = RNFS.downloadFile({
+            fromUrl: apkUrl,
+            toFile: PART_PATH,
+            connectionTimeout: CONNECTION_TIMEOUT_MS,
+            readTimeout: READ_TIMEOUT_MS,
+            progressDivider: 1,
+            progress: (res) => {
+                if (res.contentLength > MAX_APK_BYTES) {
+                    cancelActiveDownload();
+                    return;
+                }
+                if (res.contentLength > 0) {
+                    setUpdateInstall({
+                        downloadProgress: Math.round((res.bytesWritten / res.contentLength) * 100),
+                    });
+                }
+            },
+        });
+        activeJobId = job.jobId;
+
+        let result: RNFS.DownloadResultT;
+        try {
+            result = await job.promise;
+        } catch {
+            throw cancelRequested
+                ? new DownloadError('cancelled', 'Download cancelled.')
+                : new DownloadError('network', 'The download did not finish.');
+        } finally {
+            activeJobId = null;
+        }
+
+        if (result.statusCode !== 200) {
+            throw new DownloadError('network', `The download failed (HTTP ${result.statusCode}).`);
+        }
+        if (result.bytesWritten > MAX_APK_BYTES) {
+            throw new DownloadError('integrity', 'The download was larger than expected.');
+        }
+
+        const actualHash = (await RNFS.hash(PART_PATH, 'sha256')).toLowerCase();
+        if (actualHash !== expectedHash) {
+            throw new DownloadError('integrity', 'The download did not match its published checksum.');
+        }
+
+        // Only a verified file is allowed to take the install path's name.
+        await safeDelete(APK_PATH);
+        await RNFS.moveFile(PART_PATH, APK_PATH);
+        return APK_PATH;
+    }, [apkSha256Url, apkUrl, cancelActiveDownload, setUpdateInstall]);
 
     const handleDownloadAndInstall = useCallback(async () => {
-        if (!apkUrl || isDownloading) {return;}
+        if (!canDownload || isDownloading) {return;}
+        cancelRequested = false;
+        setUpdateInstall({ error: null, isDownloading: true, downloadProgress: 0 });
+
         try {
-            setIsDownloading(true);
-            setDownloadProgress(0);
-
-            const versionTag = latestVersion || 'update';
-            const fileName = `Glide-${versionTag}.apk`;
-            const targetPath = `${RNFS.CachesDirectoryPath}/${fileName}`;
-
-            const download = RNFS.downloadFile({
-                fromUrl: apkUrl,
-                toFile: targetPath,
-                progressDivider: 1,
-                progress: (res) => {
-                    if (res.contentLength > 0) {
-                        const pct = Math.round((res.bytesWritten / res.contentLength) * 100);
-                        setDownloadProgress(pct);
-                    }
-                },
-            });
-
-            const result = await download.promise;
-            if (result.statusCode !== 200) {
-                throw new Error('Download failed');
-            }
-
-            await updateStorage.save({
-                version: normalizeVersion(versionTag),
-                path: targetPath,
-                fileName,
+            const path = await download();
+            const cache: UpdateApkCache = {
+                version: normalizeVersion(latestVersion || ''),
+                path,
+                fileName: APK_NAME,
                 savedAt: Date.now(),
-            });
-            setCachedApk({
-                version: normalizeVersion(versionTag),
-                path: targetPath,
-                fileName,
-                savedAt: Date.now(),
-            });
-
-            const opened = await openInstaller(targetPath, fileName);
-            if (!opened && releaseUrl) {
-                handleOpenRelease();
-            }
-        } catch (error) {
-            if (__DEV__) {
-                console.warn('[useUpdateInstaller] Download/Install failed:', error);
-            }
-            if (releaseUrl) {
-                handleOpenRelease();
+            };
+            // Metadata is written only after the checksum passes.
+            updateStorage.save(cache);
+            setCachedApk(cache);
+            await runInstall(path);
+        } catch (e) {
+            await safeDelete(PART_PATH);
+            if (e instanceof DownloadError) {
+                setError({
+                    kind: e.kind,
+                    message: e.message,
+                    canOpenRelease: e.kind !== 'cancelled',
+                });
+            } else {
+                if (__DEV__) {
+                    console.warn('[useUpdateInstaller] Download failed:', e);
+                }
+                setError({ kind: 'network', message: 'The update could not be downloaded.', canOpenRelease: true });
             }
         } finally {
-            setIsDownloading(false);
-            setDownloadProgress(null);
+            setUpdateInstall({ isDownloading: false, downloadProgress: null });
         }
-    }, [apkUrl, handleOpenRelease, isDownloading, latestVersion, openInstaller, releaseUrl]);
+    }, [
+        canDownload,
+        download,
+        isDownloading,
+        latestVersion,
+        runInstall,
+        setCachedApk,
+        setError,
+        setUpdateInstall,
+    ]);
+
+    const handleInstallCached = useCallback(async () => {
+        if (!cachedApk) {return;}
+        setError(null);
+        await runInstall(cachedApk.path);
+    }, [cachedApk, runInstall, setError]);
 
     return {
         canDownload,
         cachedApk,
+        clearError,
         downloadProgress,
+        error,
         hasCachedApk,
         isDownloading,
+        handleCancelDownload,
         handleDownloadAndInstall,
         handleInstallCached,
         handleOpenRelease,

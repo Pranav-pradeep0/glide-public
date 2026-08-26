@@ -47,6 +47,7 @@ function App() {
         releaseUrl: result.releaseUrl,
         releaseNotes: result.releaseNotes,
         apkUrl: result.apkUrl,
+        apkSha256Url: result.apkSha256Url,
       });
     };
 
@@ -140,6 +141,7 @@ function App() {
             releaseNotes={updateStatus.releaseNotes}
             releaseUrl={updateStatus.releaseUrl}
             apkUrl={updateStatus.apkUrl}
+            apkSha256Url={updateStatus.apkSha256Url}
             onDismiss={() => {
               setShowUpdateModal(false);
             }}

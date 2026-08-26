@@ -1,14 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
     View,
     Text,
     StyleSheet,
     TouchableOpacity,
     TouchableWithoutFeedback,
-    ScrollView,
     BackHandler,
 } from 'react-native';
-import Markdown from 'react-native-markdown-display';
 import Animated, {
     useSharedValue,
     useAnimatedStyle,
@@ -20,6 +18,7 @@ import { Feather } from '@react-native-vector-icons/feather';
 import { useTheme } from '@/hooks/useTheme';
 import { UpdateActionButton } from '@/components/UpdateActionButton';
 import { useUpdateInstaller } from '@/hooks/useUpdateInstaller';
+import { UpdateNotes } from '@/components/UpdateNotes';
 
 interface UpdateModalProps {
     visible: boolean;
@@ -27,30 +26,8 @@ interface UpdateModalProps {
     releaseNotes: string | null;
     releaseUrl: string | null;
     apkUrl: string | null;
+    apkSha256Url: string | null;
     onDismiss: () => void;
-}
-
-function formatNotes(notes: string | null): string {
-    if (!notes) {return 'No changelog provided.';}
-
-    let normalized = notes
-        .replace(/\r\n/g, '\n')
-        .replace(/\\r\\n/g, '\n')
-        .replace(/\\n/g, '\n')
-        .replace(/\\r/g, '\n')
-        .trim();
-
-    const dividerIndex = normalized.indexOf('\n---');
-    if (dividerIndex !== -1) {
-        normalized = normalized.slice(0, dividerIndex).trim();
-    }
-
-    const buildInfoIndex = normalized.indexOf('\n**Build Info**');
-    if (buildInfoIndex !== -1) {
-        normalized = normalized.slice(0, buildInfoIndex).trim();
-    }
-
-    return normalized.length > 0 ? normalized : 'No changelog provided.';
 }
 
 export default function UpdateModal({
@@ -59,6 +36,7 @@ export default function UpdateModal({
     releaseNotes,
     releaseUrl,
     apkUrl,
+    apkSha256Url,
     onDismiss,
 }: UpdateModalProps) {
     const theme = useTheme();
@@ -67,16 +45,18 @@ export default function UpdateModal({
     // Reanimated Shared Values
     const fadeAnim = useSharedValue(0);
     const scaleAnim = useSharedValue(0.9);
-    const displayNotes = useMemo(() => formatNotes(releaseNotes), [releaseNotes]);
     const {
         canDownload,
         downloadProgress,
+        error,
+        handleCancelDownload,
+        clearError,
         hasCachedApk,
         isDownloading,
         handleDownloadAndInstall,
         handleInstallCached,
         handleOpenRelease,
-    } = useUpdateInstaller({ latestVersion, releaseUrl, apkUrl });
+    } = useUpdateInstaller({ latestVersion, releaseUrl, apkUrl, apkSha256Url });
 
     // Animated Styles
     const backdropStyle = useAnimatedStyle(() => ({
@@ -101,6 +81,13 @@ export default function UpdateModal({
             scaleAnim.value = withTiming(0.9, { duration: 200 });
         }
     }, [visible, mounted, fadeAnim, scaleAnim]);
+
+    // A failure from a previous attempt should not greet the next open.
+    useEffect(() => {
+        if (visible) {
+            clearError();
+        }
+    }, [clearError, visible]);
 
     // Handle Android back button
     useEffect(() => {
@@ -162,28 +149,7 @@ export default function UpdateModal({
                     </View>
                 </View>
 
-                <View style={styles.notesBlock}>
-                    <Text style={[styles.notesTitle, { color: textColor }]}>
-                        What's new
-                    </Text>
-                    <ScrollView
-                        style={styles.notesScroll}
-                        showsVerticalScrollIndicator={false}
-                        nestedScrollEnabled
-                    >
-                        <Markdown
-                            style={{
-                                body: { ...styles.notesText, color: textSecondaryColor },
-                                heading3: { ...styles.notesHeading, color: textColor },
-                                list_item: styles.notesListItem,
-                                bullet_list: styles.notesList,
-                                ordered_list: styles.notesList,
-                            }}
-                        >
-                            {displayNotes}
-                        </Markdown>
-                    </ScrollView>
-                </View>
+                <UpdateNotes notes={releaseNotes} />
 
                 <View style={styles.actions}>
                     {!isDownloading && (
@@ -199,6 +165,8 @@ export default function UpdateModal({
                     <UpdateActionButton
                         canDownload={canDownload}
                         downloadProgress={downloadProgress}
+                        error={error}
+                        onCancelDownload={handleCancelDownload}
                         hasCachedApk={hasCachedApk}
                         isDownloading={isDownloading}
                         onDownloadAndInstall={handleDownloadAndInstall}
@@ -256,36 +224,9 @@ const styles = StyleSheet.create({
         marginTop: 2,
         fontSize: 13,
     },
-    notesBlock: {
-        marginBottom: 20,
-    },
-    notesTitle: {
-        fontSize: 14,
-        fontWeight: '700',
-        marginBottom: 8,
-    },
-    notesScroll: {
-        maxHeight: 200,
-    },
-    notesText: {
-        fontSize: 13,
-        lineHeight: 20,
-    },
-    notesHeading: {
-        fontSize: 14,
-        fontWeight: '700',
-        marginBottom: 6,
-        marginTop: 6,
-    },
-    notesList: {
-        marginTop: 4,
-        marginBottom: 4,
-    },
-    notesListItem: {
-        marginBottom: 4,
-    },
     actions: {
         flexDirection: 'row',
+        alignItems: 'flex-end',
         gap: 12,
     },
     dismissButton: {

@@ -394,41 +394,106 @@ the exposed credential.
   `-arm64.apk` suffixes. The old `includes('arm')` search also matched `arm64`.
 - `[done]` For unknown ABI, return no direct APK and offer the release page; never
   silently choose ARM64. `UpdateActionButton` already degrades to “Open Release”.
-- `[todo]` Validate the GitHub response shape, final tag, release URL, asset URL, and asset name.
-- `[todo]` Ignore draft/prerelease releases unless the user explicitly joins a prerelease channel.
-- `[todo]` Cap release-note length before rendering Markdown and update `markdown-it`/
-  `react-native-markdown-display` through a compatible package update.
+- `[done]` Validate the asset URL and asset name. `isTrustedAssetUrl` requires HTTPS and a
+  GitHub release-asset host, and the checksum asset must be the APK's name plus `.sha256`.
+- `[todo]` Validate the remaining GitHub response shape: final tag and release URL.
+- `[keep]` Ignore draft/prerelease releases. `/releases/latest` already returns "the most
+  recent non-prerelease, non-draft release," so the client check only guards a custom
+  `GITHUB_RELEASES_URL`. A prerelease channel would be new product scope, not a fix.
+- `[done]` Cap release-note length before rendering Markdown, at 8,000 characters.
+- `[todo]` Update `markdown-it`/`react-native-markdown-display` through a compatible
+  package update. Split from the cap above; it belongs with the dependency work.
+- `[todo]` Send the update check through the Cloudflare Worker with a short cache.
+  Unauthenticated GitHub REST is 60 requests/hour keyed to the originating IP, so users
+  behind carrier NAT share one budget and silently stop being offered updates.
 
 Tests: strict versions, leading `v`, malformed input, missing patch component if allowed,
 greater/less/equal, every supported ABI, asset reordering, no asset, and malicious URLs.
 
 ### 7.2 Download and cache integrity
 
-- `[todo]` Restrict downloads to HTTPS and trusted GitHub release-asset hosts.
-- `[todo]` Publish SHA-256 files beside both APKs and verify before invoking Package Installer.
-- `[todo]` Download to a `.part` file, then rename only after status, size, and hash pass.
-- `[todo]` Add cancellation on component unmount/new download and delete partial files.
-- `[todo]` Add a total timeout/stall timeout and a defensible maximum APK size.
-- `[todo]` Sanitize the version-derived file name or use a constant cache name plus metadata.
-- `[todo]` Ensure paths resolve inside `CachesDirectoryPath`; reject traversal and arbitrary paths.
-- `[todo]` Clean obsolete cached APKs on app start and after successful upgrade.
-- `[todo]` Store cache metadata only after verification; make MMKV methods synchronous unless
-  a real asynchronous backend remains part of the interface.
-- `[todo]` Distinguish check, network, storage, integrity, installer, unknown-source,
-  cancellation, and unsupported-device errors in the UI.
-- `[todo]` Do not turn every error into “open browser.” Offer that as an explicit fallback.
+- `[done]` Restrict downloads to HTTPS and trusted GitHub release-asset hosts. The host
+  check only constrains the starting URL; redirects are not re-checked, which is
+  acceptable because the SHA-256 comparison is the real integrity control.
+- `[done]` Publish SHA-256 files beside both APKs and verify before invoking the installer.
+  A release with no checksum asset is now browser-only: `canDownload` is false rather than
+  installing bytes that cannot be checked.
+- `[done]` Download to a `.part` file, then rename only after status, size, and hash pass.
+- `[done]` Add cancellation on component unmount/new download and delete partial files.
+  `RNFS.downloadFile` returns the `jobId`; `stopDownload` cancels it.
+- `[done]` Add a stall timeout and a maximum APK size: `connectionTimeout` 15 s,
+  `readTimeout` 60 s, and a 300 MB cap enforced from `contentLength` during progress and
+  from `bytesWritten` afterwards.
+- `[done]` Use a constant cache name plus metadata. `glide-update.apk` and its `.part`
+  are fixed strings, so no release-supplied text ever reaches a file path and the
+  sanitation problem stops existing rather than being solved.
+- `[done]` Ensure paths resolve inside `CachesDirectoryPath`. The native module compares
+  the canonical APK path against the canonical cache directory before opening a session.
+- `[done]` Clean obsolete cached APKs. `useUpdateInstaller` runs from the always-mounted
+  `UpdateModal`, so the stale-cache sweep happens at app start.
+- `[done]` Store cache metadata only after verification, and make MMKV access synchronous.
+  `updateStorage` no longer returns Promises for work that had already completed.
+- `[done]` Distinguish network, storage, integrity, installer, unknown-source,
+  cancellation, and unsupported-device errors in the UI, as a typed `UpdateError`.
+- `[done]` Do not turn every error into “open browser.” Only an error whose
+  `canOpenRelease` is true switches the button to that fallback; cancellation and a
+  missing unknown-sources grant keep the retry action.
+
+### 7.2b Update UI state, reported from device use
+
+Verified defect, present in public 1.8.1: the update UI exists in two places — the
+app-level `UpdateModal` mounted for the whole session in `App.tsx`, and the Settings
+update card — and each called `useUpdateInstaller`, so each owned its own `useState`.
+Two independent state machines drove one shared download and one shared cache file, so
+progress, download status, and cached-APK state disagreed between the two surfaces.
+Settings also never rendered the changelog at all.
+
+- `[done]` Move download progress, status, error, and cached-APK state into the existing
+  zustand store as an `updateInstall` slice. Both surfaces now read one source of truth.
+  No new dependency and no context provider: zustand already holds `updateStatus`.
+- `[done]` Move the download job id and the cancellation flag to module scope, so two
+  consumers cannot start two downloads into the same destination file.
+- `[done]` Run the stale-cache sweep once per distinct `latestVersion` rather than once
+  per mounted component. A once-per-session flag would have skipped the re-check after
+  the update request resolves, leaving a cached APK for a superseded version installable.
+- `[done]` Share one `UpdateNotes` renderer between the modal and Settings, so the
+  Settings card shows the same changelog with the same Markdown styling.
+- `[done]` Give the user a way to cancel a running download, on both surfaces, and report
+  a cancellation as cancelled rather than as a network failure.
+- `[done]` Explain why an in-app download is unavailable instead of silently degrading to
+  a browser button.
+- `[done]` Clear a stale error when the modal reopens.
+- `[todo]` Device-test both surfaces at once: start a download in Settings, open the
+  modal, and confirm one progress figure, one cancel, and one resulting install.
 
 ### 7.3 Installer behavior
 
-- `[todo]` Before launch, call `PackageManager.canRequestPackageInstalls()` on API 26+.
-- `[todo]` If false, explain the permission and open
-  `Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES` for Glide; retry only after the Activity result.
-- `[todo]` Verify a package installer can resolve the intent before calling `startActivity`.
-- `[todo]` Validate that the requested file is an existing regular `.apk` under Glide's
-  cache directory before creating a FileProvider URI.
-- `[todo]` Retain `FLAG_GRANT_READ_URI_PERMISSION` and `FLAG_ACTIVITY_NEW_TASK`.
-- `[todo]` Test denied/allowed unknown sources, missing installer, corrupt APK, wrong
-  signer, lower/equal/higher versionCode, and successful upgrade preserving data.
+Replaced `ACTION_VIEW` on a FileProvider URI with a `PackageInstaller` session.
+`ACTION_INSTALL_PACKAGE` has been deprecated since API 29, and the intent path cannot
+report an install result at all: it resolved success as soon as the installer Activity
+started, which is why the ABI defect in section 7.1 was invisible in production.
+
+- `[done]` Before launch, call `PackageManager.canRequestPackageInstalls()`. minSdk is 26,
+  so no version guard is needed.
+- `[done]` If false, explain the permission and open `Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES`.
+  Retry is the user pressing the button again rather than an Activity-result listener;
+  revisit only if device testing shows the extra tap is a real problem.
+- `[done]` Verify the install can proceed before committing. No longer intent resolution:
+  a session either opens or fails with a status.
+- `[done]` Validate that the requested file is an existing regular `.apk` inside Glide's
+  cache directory, by canonical path, before opening the session.
+- `[done]` Map every `PackageInstaller` terminal status to a distinct error code:
+  aborted, blocked, conflict, incompatible, invalid, and storage.
+- `[done]` Set `setRequestUpdateOwnership(true)` on API 34+ so no other installer can
+  replace Glide without explicit user approval, and `INSTALL_REASON_USER`.
+- `[done]` Remove the now-unused `${applicationId}.fileprovider` provider and
+  `res/xml/file_paths.xml`. A search proved `ApkInstallerModule` was the only consumer;
+  `react-native-share` declares its own `com.glide.app.rnshare.fileprovider`, which the
+  regenerated release manifest confirms is still present.
+- `[todo]` Test denied/allowed unknown sources, corrupt APK, wrong signer, lower/equal/
+  higher versionCode, cancelling the system prompt, and a successful upgrade preserving data.
+- `[todo]` Consider `requestUserPreapproval()` on API 34+ so the install is approved
+  before a ~60 MB download rather than after it.
 
 ## 8. P1 — complete timer-free player geometry and lifecycle
 

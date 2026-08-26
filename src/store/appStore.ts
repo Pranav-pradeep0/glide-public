@@ -1,5 +1,26 @@
 import { create } from 'zustand';
 import { AppSettings, HapticSettings } from '../types';
+import type { UpdateError } from '../hooks/useUpdateInstaller';
+import type { UpdateApkCache } from '../storage/updateStorage';
+
+/**
+ * The update UI appears in two places at once: the app-level UpdateModal and the
+ * Settings update card. Both drive the same download and the same cached file, so the
+ * progress, status, and error live here rather than in each component's own state.
+ */
+export interface UpdateInstallState {
+    isDownloading: boolean;
+    downloadProgress: number | null;
+    error: UpdateError | null;
+    cachedApk: UpdateApkCache | null;
+}
+
+const INITIAL_UPDATE_INSTALL: UpdateInstallState = {
+    isDownloading: false,
+    downloadProgress: null,
+    error: null,
+    cachedApk: null,
+};
 
 // Default haptic settings
 export const DEFAULT_HAPTIC_SETTINGS: HapticSettings = {
@@ -40,10 +61,13 @@ interface AppStore {
         releaseUrl: string | null;
         releaseNotes: string | null;
         apkUrl: string | null;
+        apkSha256Url: string | null;
         lastCheckedAt: number | null;
         seen: boolean;
         notified: boolean;
     };
+    updateInstall: UpdateInstallState;
+    setUpdateInstall: (patch: Partial<UpdateInstallState>) => void;
     updateSettings: (settings: Partial<AppSettings>) => void;
     toggleDarkMode: () => void;
     toggleHaptics: () => void;
@@ -82,6 +106,7 @@ interface AppStore {
         releaseUrl: string | null;
         releaseNotes: string | null;
         apkUrl: string | null;
+        apkSha256Url: string | null;
     }) => void;
     markUpdateSeen: () => void;
     markUpdateNotified: () => void;
@@ -95,10 +120,14 @@ export const useAppStore = create<AppStore>((set) => ({
         releaseUrl: null,
         releaseNotes: null,
         apkUrl: null,
+        apkSha256Url: null,
         lastCheckedAt: null,
         seen: false,
         notified: false,
     },
+    updateInstall: INITIAL_UPDATE_INSTALL,
+    setUpdateInstall: (patch) =>
+        set((state) => ({ updateInstall: { ...state.updateInstall, ...patch } })),
     updateSettings: (newSettings) =>
         set((state) => ({
             settings: { ...state.settings, ...newSettings },
