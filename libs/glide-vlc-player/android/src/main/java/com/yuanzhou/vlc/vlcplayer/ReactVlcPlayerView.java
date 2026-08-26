@@ -6,10 +6,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.text.TextUtils;
-import android.Manifest;
 import android.content.res.Configuration;
-import android.content.pm.PackageManager;
-import androidx.core.content.ContextCompat;
 import android.graphics.Bitmap;
 import android.graphics.SurfaceTexture;
 import android.media.AudioAttributes;
@@ -3084,16 +3081,11 @@ class ReactVlcPlayerView extends TextureView implements
         }
     }
 
+    // No POST_NOTIFICATIONS check: Android exempts MediaStyle notifications carrying an
+    // active media-session token, so gating on it only suppressed controls Android allows.
     private void showNotification(int state) {
         if (mMediaSession == null)
             return;
-        if (Build.VERSION.SDK_INT >= 33) {
-            if (ContextCompat.checkSelfPermission(getContext(),
-                    Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                Log.w(TAG, "[NOTIF] POST_NOTIFICATIONS not granted, skipping");
-                return;
-            }
-        }
 
         int icon = (state == PlaybackStateCompat.STATE_PLAYING)
                 ? android.R.drawable.ic_media_pause

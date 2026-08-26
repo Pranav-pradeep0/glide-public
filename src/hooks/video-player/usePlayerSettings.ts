@@ -8,7 +8,6 @@ import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { PlayerResizeMode } from '@glide/vlc-player';
 import { PlayerSettings, UsePlayerSettingsReturn } from './types';
 import { EQUALIZER_PRESETS } from '@/config/equalizerPresets';
-import { PermissionService } from '@/services/PermissionService';
 
 // ============================================================================
 // TYPES
@@ -207,12 +206,6 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
 
     const toggleBackgroundPlay = useCallback(() => {
         const newValue = !settings.backgroundPlayEnabled;
-
-        // Android 13+ needs POST_NOTIFICATIONS before the native player can show
-        // media controls, otherwise background playback runs with no notification.
-        if (newValue) {
-            PermissionService.hasNotificationPermission();
-        }
 
         showToast?.(newValue ? 'Background play enabled' : 'Background play disabled', 'background-play');
         setSettings(prev => ({

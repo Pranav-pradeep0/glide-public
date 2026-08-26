@@ -275,12 +275,15 @@ gate suppresses a notification that Android allows.
   `androidx.media.app.NotificationCompat.MediaStyle` with the active media-session token;
   no project-owned non-media notification exists at this baseline.
 
-- `[todo]` Delete the `POST_NOTIFICATIONS` declaration from
+- `[done]` Delete the `POST_NOTIFICATIONS` declaration from
   `android/app/src/main/AndroidManifest.xml`.
-- `[todo]` Delete `PermissionService.hasNotificationPermission()` and its comments.
-- `[todo]` Delete the call from `usePlayerSettings.toggleBackgroundPlay()`.
-- `[todo]` Delete the native `checkSelfPermission(POST_NOTIFICATIONS)` gate and now-unused imports.
-- `[todo]` Confirm no merged dependency manifest reintroduces the permission.
+- `[done]` Delete `PermissionService.hasNotificationPermission()` and its comments.
+- `[done]` Delete the call from `usePlayerSettings.toggleBackgroundPlay()`, and the
+  now-unused `PermissionService` import with it.
+- `[done]` Delete the native `checkSelfPermission(POST_NOTIFICATIONS)` gate and the
+  `Manifest`, `PackageManager`, and `ContextCompat` imports it was the only user of.
+- `[done]` Confirm no merged dependency manifest reintroduces the permission. The
+  release merged manifest was regenerated and contains no `POST_NOTIFICATIONS`.
 - `[todo]` Add an Android 13+ manual test with notifications denied at the OS level:
   media controls must still appear while the media session is active.
 - `[todo]` Do not re-add this permission for the future playback service unless Glide
@@ -290,14 +293,31 @@ gate suppresses a notification that Android allows.
 
 Current CameraRoll reads use `assetType: 'Videos'`; deletion passes video content URIs.
 
-- `[todo]` Remove `READ_MEDIA_IMAGES`, `READ_MEDIA_AUDIO`, and
+- `[done]` Remove `READ_MEDIA_IMAGES`, `READ_MEDIA_AUDIO`, and
   `ACCESS_MEDIA_LOCATION` from the manifest.
-- `[todo]` On API 33+, request only `READ_MEDIA_VIDEO` and base success only on it.
-- `[todo]` On Android 14+, handle selected-video access correctly. Verify the current
-  CameraRoll behavior under partial grants; declare `READ_MEDIA_VISUAL_USER_SELECTED`
-  only if the app actively manages re-selection, otherwise rely on compatibility mode
-  and explain its limitations. Do not request images merely to obtain video access.
-- `[todo]` Keep `READ_EXTERNAL_STORAGE` with `maxSdkVersion=32` for older devices.
+- `[done]` On API 33+, request only `READ_MEDIA_VIDEO` and base success only on it.
+  Public 1.8.1 required `READ_MEDIA_IMAGES` *and* `READ_MEDIA_VIDEO` to both be granted,
+  so denying photo access to a video-only app made the library fail to load.
+- `[done]` On Android 14+, rely on compatibility mode rather than declaring
+  `READ_MEDIA_VISUAL_USER_SELECTED`; Glide does not own re-selection UI. The limitation
+  is written next to the request in `PermissionService`. Still needs the device check below.
+- `[keep]` Keep `READ_EXTERNAL_STORAGE` with `maxSdkVersion=32` for older devices.
+
+New finding, present in public 1.8.1: the release merged manifest ships two permissions
+Glide never declared. `READ_PHONE_STATE`, a dangerous runtime permission, is injected by
+`react-native-share` and `react-native-stallion`; `WRITE_EXTERNAL_STORAGE` is injected
+unbounded by `@dr.pogodin/react-native-fs`. Both appear on the user-visible permission
+list of a video player that reads neither.
+
+- `[done]` Strip `READ_PHONE_STATE` with `tools:node="remove"`.
+- `[done]` Re-declare `WRITE_EXTERNAL_STORAGE` with `android:maxSdkVersion="28"` and
+  `tools:node="replace"`. It is inert from API 29 under scoped storage, but
+  `CameraRoll.deletePhotos` still needs the storage group on API 26-28.
+- `[todo]` Device-test that stripping `READ_PHONE_STATE` does not break the
+  `react-native-share` sheet or the Stallion OTA check. If either library reads phone
+  state at runtime it will now raise `SecurityException`.
+- `[todo]` Re-run the merged-manifest permission diff after every dependency upgrade;
+  direct-manifest review does not catch an injected permission.
 - `[todo]` Verify library, albums, search index, thumbnails, playback, and video deletion
   on Android 13, 14, 15, and 16.
 - `[todo]` Verify denial behavior: explain why video access is needed, allow retry from
