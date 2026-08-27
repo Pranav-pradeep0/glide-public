@@ -86,3 +86,7 @@ android/app/glide-release.keystore
 android/app/my-upload-key.keystore
 # Agent/session scratch
 .codex-remote-attachments/
+
+# Ad-hoc logcat dumps captured while debugging
+glide-crash.txt
+glide-exit-info.txt
