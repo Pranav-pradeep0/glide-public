@@ -40,7 +40,10 @@ interface GitHubReleaseResponse {
 
 function buildLatestReleaseUrl(): string | null {
     if (GITHUB_RELEASES_URL) {
-        return GITHUB_RELEASES_URL;
+        // A custom endpoint is build configuration rather than user input, but it still
+        // decides which release the updater offers and which APK it points at. Over
+        // cleartext the network decides that instead, so a non-HTTPS override fails closed.
+        return GITHUB_RELEASES_URL.startsWith('https://') ? GITHUB_RELEASES_URL : null;
     }
     if (!GITHUB_OWNER || !GITHUB_REPO) {
         return null;

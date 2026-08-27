@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug override. Resource merging gives the debug source set precedence over main, so
+  local development can point any app API at an http:// host without editing the
+  production config. Nothing here reaches a release build.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
