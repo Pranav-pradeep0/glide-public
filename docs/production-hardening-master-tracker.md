@@ -520,14 +520,34 @@ started, which is why the ABI defect in section 7.1 was invisible in production.
 
 ### 8.2 Replace lifecycle timing guesses with Activity lifecycle
 
-- `[todo]` Observe Activity lifecycle `ON_START`/`ON_STOP` in the native player view.
-- `[todo]` Delete `PIP_HOST_PAUSE_GRACE_MS`, `mAwaitingPipAutoEnter`, the pending PiP
-  background-pause runnable, and their cancellation plumbing.
-- `[todo]` Pause normal foreground-only playback on `ON_STOP`; PiP produces `onPause`
-  without `onStop`, so it continues naturally.
-- `[todo]` Keep user pause, host stop, audio-focus loss, noisy-device pause, ended state,
-  and background-play intent as separate state.
-- `[todo]` Verify teardown removes lifecycle listeners and all pending callbacks.
+The platform documentation is explicit about this: "In Android 7.0 and later, you should
+pause and resume video playback when the system calls your activity's `onStop()` and
+`onStart()`. By doing this, you can avoid having to check if your app is in PiP mode in
+`onPause()`." The 800 ms grace period existed only because the view listened on the wrong
+callback — `onPause` fires for both backgrounding and entering PiP, `onStop` for neither
+but the first.
+
+- `[done]` Observe Activity lifecycle `ON_START`/`ON_STOP` in the native player view.
+  Both host Activities extend `ReactActivity`, so both are `LifecycleOwner`s, and
+  `androidx.lifecycle` was already on the compile classpath — no new dependency.
+- `[done]` Delete `PIP_HOST_PAUSE_GRACE_MS`, `mAwaitingPipAutoEnter`, the pending PiP
+  background-pause runnable, its `Handler`, and all cancellation plumbing. The handler
+  existed only for this timer, so this also satisfies part of section 8.4.
+- `[done]` Pause normal foreground-only playback on `ON_STOP`. `onHostPause` and
+  `onHostResume` are now explicitly empty with a comment saying why.
+- `[done]` Rename the state to match the signal: `isHostPaused` → `isHostStopped`,
+  `mPausedForHostPause` → `mPausedForHostStop`, `wasPlayingBeforeHostPause` →
+  `wasPlayingBeforeHostStop`, `shouldKeepPlayingWhileHostPaused` →
+  `shouldKeepPlayingWhileHostStopped`. The old names encoded the wrong model.
+- `[done]` Keep user pause, host stop, audio-focus loss, noisy-device pause, ended state,
+  and background-play intent as separate state. No flags were merged.
+- `[done]` Verify teardown removes lifecycle listeners and all pending callbacks.
+  `cleanUpResources` and `onDetachedFromWindow` both detach the observer, and the detach
+  is idempotent.
+- `[todo]` Device-test: background and return during playback, enter PiP and return,
+  dismiss the PiP window, lock the screen, and the same set with background play enabled,
+  on Android 8, 12 and 16. This replaces a timing heuristic, so behavior differences show
+  up only on real transitions.
 
 ### 8.3 Replace fixed player retries with real events
 
@@ -632,6 +652,38 @@ snapshot. The recurring React state update currently reaches these paths:
   sync matching, pause/resume, PiP, rate changes, source change, and enhancement recreation.
 
 ## 9. P1 — make background playback honest before target SDK 35+
+
+Verified defect, present in public 1.8.1, reported from device use: the notification's
+playback clock kept advancing after pausing, stopping, or closing PiP, while actual
+playback position stayed correct. `updatePlayPauseState` passed `mMediaPlayer.getRate()`
+as the `PlaybackStateCompat` playback speed. That is the rate *setting*, which stays at
+1.0 while paused; LibVLC never reports 0 for it. The system extrapolates the position it
+displays as `position + elapsed * speed`, so any non-playing state published with a
+non-zero speed produces a clock that runs on its own, client-side, forever.
+
+- `[done]` Publish speed 0 for every non-playing state. One guard in `updatePlayPauseState`,
+  which all five call sites already route through.
+- `[todo]` Device-test the notification and lock-screen clock across pause, stop, closing
+  PiP, and background play left enabled, on Android 13 through 16.
+- `[todo]` The session position also goes stale after seeking while paused, because
+  nothing republishes the state on a seek. Media3 removes the whole class of bug by
+  deriving session state from the player, so fix it there rather than adding another
+  publish call to the legacy path.
+
+Decisions taken 2026-08-27:
+
+- `[done]` `[decision]` **Media3 owns the session and notification.** A `SimpleBasePlayer`
+  adapter over LibVLC, with `MediaSessionService` providing the notification, media
+  buttons, lock-screen controls, and a `MediaController` API. All four of those exist
+  today as hand-written code inside the 3,247-line `ReactVlcPlayerView`, so the adapter
+  is close to line-neutral while replacing the deprecated `androidx.media` session APIs.
+- `[done]` `[decision]` **Dismissing the task stops playback.** `onTaskRemoved` stops the
+  service and clears the notification, and the UI copy must say so. Rejected leaving
+  audio alive: it is music-app behavior, it costs process-death state handling, and it
+  strands users with audio they cannot find.
+- `[done]` `[decision]` **Section 8.2 lands before this phase.** `shouldShowBackgroundNotification()`
+  reads `isHostPaused && !isInPipMode() && !mAwaitingPipAutoEnter`, which are exactly the
+  timing guesses 8.2 deletes. Building service lifecycle on them means writing it twice.
 
 - `[decision]` Until this phase is complete, either label background playback
   experimental or disable its production toggle. Activity-owned playback is not a
@@ -776,7 +828,7 @@ root-package dependency and therefore needs its own migration checklist.
   verify caching/loading UX, then remove the unmaintained dependency.
 - `[todo]` After RN 0.87, use built-in `edgeToEdgeEnabled=true`; replace only required
   navigation-bar styling and remove `react-native-edge-to-edge`.
-- `[todo]` Remove direct `baseline-browser-mapping`; it has no source/config consumer.
+- `[done]` Remove direct `baseline-browser-mapping`; it had no source or config consumer.
 - `[todo]` Remove stale local VLC package dependencies: `react-native-slider`, old
   `react-native-vector-icons`, `@expo/config-plugins`, and React 18 types.
 - `[todo]` Remove `@types/react-test-renderer` 18 or align it if a real test-renderer consumer exists.
@@ -792,16 +844,15 @@ root-package dependency and therefore needs its own migration checklist.
 
 Re-run references immediately before deletion, then remove:
 
-- `[todo]` `src/components/VideoPlayer/HapticIndicator.tsx` — 177 lines, no consumer.
-- `[todo]` `src/hooks/video-player/useAudioEqualizer.ts` — 110 lines, no consumer.
-- `[todo]` `src/components/Logo.tsx` — 48 lines, no consumer.
-- `[todo]` `src/utils/hapticMapper.ts` — 35 lines, no consumer.
-- `[todo]` `src/store/mediaStore.ts` — 18 lines, no consumer.
+- `[done]` All five deleted, 388 lines, after re-running references immediately before
+  removal and confirming none is re-exported from a barrel file. Typecheck, lint, tests
+  and a full debug build pass without them.
 
 ### 12.3 Remove stale configuration and build plumbing
 
-- `[todo]` `react-native.config.js` points to nonexistent `assets/fonts`. Either point to
-  the actual cross-platform licensed font directory or delete the assets entry.
+- `[done]` `react-native.config.js` pointed at a nonexistent `./assets/fonts`. The entry
+  is deleted: the fonts are committed directly to `android/app/src/main/assets/fonts`,
+  so there was never anything for `react-native-asset` to link.
 - `[todo]` Review the bundled `NetflixSans-*` font files. Record license/provenance or
   replace them with a redistributable font; do not publish unverified branded font assets.
 - `[todo]` Remove global Gradle `flatDir`; keep one explicit local AAR module only while

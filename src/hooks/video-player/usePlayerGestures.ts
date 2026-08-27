@@ -107,9 +107,9 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
         isInPipMode = false,
     } = options;
 
-    // These are stable across progress updates, unlike `player` itself, whose memo
-    // identity changes every time state.currentTime ticks (~2/second). Depending on
-    // the object rebuilt the entire gesture tree on every tick.
+    // Narrow to stable members rather than depending on `player`. Playback position no
+    // longer lives in player state, so its identity is stable during playback, but
+    // depending on the whole object would re-tie the gesture tree to unrelated state.
     const { setIsSeeking, previewSeek, commitSeek, currentTimeRef } = player;
     // resetZoom must not depend on the whole hud object: it calls updateZoom, which
     // changes hud.state, which would change resetZoom, which re-runs the effect below

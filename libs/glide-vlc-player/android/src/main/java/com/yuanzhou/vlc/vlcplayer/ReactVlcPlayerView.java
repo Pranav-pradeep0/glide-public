@@ -46,6 +46,10 @@ import android.os.ParcelFileDescriptor;
 import android.support.v4.media.session.MediaSessionCompat;
 import android.support.v4.media.session.PlaybackStateCompat;
 import android.support.v4.media.MediaMetadataCompat;
+import android.app.Activity;
+import androidx.lifecycle.Lifecycle;
+import androidx.lifecycle.LifecycleEventObserver;
+import androidx.lifecycle.LifecycleOwner;
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
 import androidx.media.session.MediaButtonReceiver;
@@ -82,7 +86,6 @@ class ReactVlcPlayerView extends TextureView implements
 
     // Buffering debounce for UI indicator
     private static final int BUFFERING_DEBOUNCE_MS = 200;
-    private static final long PIP_HOST_PAUSE_GRACE_MS = 800L;
 
     // Resize debounce
     private static final int RESIZE_DEBOUNCE_MS = 50;
@@ -99,6 +102,7 @@ class ReactVlcPlayerView extends TextureView implements
 
     private final VideoEventEmitter eventEmitter;
     private final ThemedReactContext themedReactContext;
+    private Lifecycle mObservedLifecycle = null;
     private final AudioManager audioManager;
 
     // Player instances
@@ -148,9 +152,9 @@ class ReactVlcPlayerView extends TextureView implements
     // Playback state — volatile because VLC events arrive on VLC's internal thread
     private volatile boolean isPaused = true;
     private volatile boolean mNativeStopped = true;
-    private boolean isHostPaused = false;
-    private boolean wasPlayingBeforeHostPause = false;
-    private boolean mPausedForHostPause = false;
+    private boolean isHostStopped = false;
+    private boolean wasPlayingBeforeHostStop = false;
+    private boolean mPausedForHostStop = false;
     private boolean mPausedForAudioFocus = false;
     private boolean mPausedForNoisyEvent = false;
     private boolean isResizeModeApplied = false;
@@ -229,9 +233,6 @@ class ReactVlcPlayerView extends TextureView implements
     private float mPendingRate = Float.NaN;
     private final Handler mAudioTrackHandler = new Handler(Looper.getMainLooper());
     private Runnable mPendingAudioTrackRunnable = null;
-    private final Handler mPipTransitionHandler = new Handler(Looper.getMainLooper());
-    private Runnable mPendingPipBackgroundPause = null;
-    private boolean mAwaitingPipAutoEnter = false;
 
     // Guard against concurrent createPlayer() calls
     private volatile boolean mCreatingPlayer = false;
@@ -332,11 +333,13 @@ class ReactVlcPlayerView extends TextureView implements
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
         mPipController.attach();
+        observeActivityLifecycle();
     }
 
     @Override
     protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
+        stopObservingActivityLifecycle();
         mPipController.detach();
         cleanUpResources();
     }
@@ -345,55 +348,88 @@ class ReactVlcPlayerView extends TextureView implements
     // Lifecycle
     // =========================================================================
 
-    @Override
-    public void onHostResume() {
-        Log.d(TAG, "[LIFECYCLE] onHostResume | isSurfaceViewDestroyed=" + isSurfaceViewDestroyed
-                + " wasPlayingBeforeHostPause=" + wasPlayingBeforeHostPause
-                + " isHostPaused=" + isHostPaused
+    /**
+     * Activity ON_START / ON_STOP, not onResume / onPause.
+     *
+     * Entering PiP pauses the Activity but never stops it, so onPause cannot distinguish
+     * "the user backgrounded us" from "we are becoming a PiP window". This view used to
+     * guess by waiting 800 ms to see whether PiP appeared. onStop carries that
+     * information directly: it fires when the app is genuinely backgrounded and does not
+     * fire for PiP, which is what the platform documentation recommends for video.
+     */
+    private final LifecycleEventObserver mActivityLifecycleObserver = (source, event) -> {
+        if (event == Lifecycle.Event.ON_START) {
+            onHostStart();
+        } else if (event == Lifecycle.Event.ON_STOP) {
+            onHostStop();
+        }
+    };
+
+    private void observeActivityLifecycle() {
+        if (mObservedLifecycle != null) {
+            return;
+        }
+        Activity activity = themedReactContext.getCurrentActivity();
+        if (!(activity instanceof LifecycleOwner)) {
+            Log.w(TAG, "[LIFECYCLE] host Activity is not a LifecycleOwner; ON_STOP pausing unavailable");
+            return;
+        }
+        mObservedLifecycle = ((LifecycleOwner) activity).getLifecycle();
+        mObservedLifecycle.addObserver(mActivityLifecycleObserver);
+    }
+
+    private void stopObservingActivityLifecycle() {
+        if (mObservedLifecycle != null) {
+            mObservedLifecycle.removeObserver(mActivityLifecycleObserver);
+            mObservedLifecycle = null;
+        }
+    }
+
+    private void onHostStart() {
+        Log.d(TAG, "[LIFECYCLE] ON_START | isSurfaceViewDestroyed=" + isSurfaceViewDestroyed
+                + " wasPlayingBeforeHostStop=" + wasPlayingBeforeHostStop
+                + " isHostStopped=" + isHostStopped
                 + " isPaused=" + isPaused);
 
-        if (mMediaPlayer != null && (isSurfaceViewDestroyed || wasPlayingBeforeHostPause) && isHostPaused) {
+        if (mMediaPlayer != null && (isSurfaceViewDestroyed || wasPlayingBeforeHostStop) && isHostStopped) {
             IVLCVout vlcOut = mMediaPlayer.getVLCVout();
             if (!vlcOut.areViewsAttached()) {
                 vlcOut.attachViews(onNewVideoLayoutListener);
                 isSurfaceViewDestroyed = false;
-                Log.d(TAG, "[LIFECYCLE] onHostResume: re-attached VLC views");
+                Log.d(TAG, "[LIFECYCLE] ON_START: re-attached VLC views");
             }
-            if (wasPlayingBeforeHostPause && mPausedForHostPause && !isPaused) {
+            if (wasPlayingBeforeHostStop && mPausedForHostStop && !isPaused) {
                 if (requestAudioFocusInternal()) {
                     mMediaPlayer.play();
-                    Log.i(TAG, "[LIFECYCLE] onHostResume: resumed playback");
+                    Log.i(TAG, "[LIFECYCLE] ON_START: resumed playback");
                 }
             }
         }
-        cancelPendingPipBackgroundPause();
-        mAwaitingPipAutoEnter = false;
-        mPausedForHostPause = false;
-        isHostPaused = false;
+        mPausedForHostStop = false;
+        isHostStopped = false;
+    }
+
+    private void onHostStop() {
+        wasPlayingBeforeHostStop = (mMediaPlayer != null && mMediaPlayer.isPlaying()) || !isPaused;
+        isHostStopped = true;
+
+        Log.d(TAG, "[LIFECYCLE] ON_STOP | wasPlaying=" + wasPlayingBeforeHostStop
+                + " playInBackground=" + playInBackground);
+
+        // Reaching ON_STOP means this is a real background transition, never PiP.
+        if (!playInBackground) {
+            pauseForHostBackground("onHostStop");
+        }
+    }
+
+    @Override
+    public void onHostResume() {
+        // Activity ON_START owns resume; onResume also fires on every PiP focus change.
     }
 
     @Override
     public void onHostPause() {
-        wasPlayingBeforeHostPause = (mMediaPlayer != null && mMediaPlayer.isPlaying()) || !isPaused;
-        isHostPaused = true;
-
-        Log.d(TAG, "[LIFECYCLE] onHostPause | wasPlaying=" + wasPlayingBeforeHostPause
-                + " playInBackground=" + playInBackground);
-
-        if (!playInBackground && !isInPipMode()) {
-            boolean shouldAwaitPipAutoEnter = mPipEnabled && wasPlayingBeforeHostPause && !isPaused;
-            if (shouldAwaitPipAutoEnter) {
-                schedulePendingPipBackgroundPause();
-                Log.i(TAG, "[LIFECYCLE] onHostPause: awaiting PiP auto-enter before pausing");
-            } else {
-                cancelPendingPipBackgroundPause();
-                mAwaitingPipAutoEnter = false;
-                pauseForHostBackground("onHostPause");
-            }
-        } else {
-            cancelPendingPipBackgroundPause();
-            mAwaitingPipAutoEnter = false;
-        }
+        // Activity ON_STOP owns pausing; onPause cannot tell backgrounding from PiP.
     }
 
     @Override
@@ -424,10 +460,10 @@ class ReactVlcPlayerView extends TextureView implements
         @Override
         public void onSurfacesDestroyed(IVLCVout ivlcVout) {
             isSurfaceViewDestroyed = true;
-            Log.d(TAG, "[SURFACE] onSurfacesDestroyed | isHostPaused=" + isHostPaused + " playInBackground="
+            Log.d(TAG, "[SURFACE] onSurfacesDestroyed | isHostStopped=" + isHostStopped + " playInBackground="
                     + playInBackground);
 
-            if (isHostPaused && !shouldKeepPlayingWhileHostPaused()) {
+            if (isHostStopped && !shouldKeepPlayingWhileHostStopped()) {
                 pauseForHostBackground("onSurfacesDestroyed");
             }
         }
@@ -450,7 +486,7 @@ class ReactVlcPlayerView extends TextureView implements
                         mVolumeBeforeDuck = -1;
                     }
                     if (mResumeOnFocusGain && mPausedForAudioFocus) {
-                        boolean allowResume = !isHostPaused || shouldKeepPlayingWhileHostPaused();
+                        boolean allowResume = !isHostStopped || shouldKeepPlayingWhileHostStopped();
                         if (allowResume && !isPaused) {
                             mMediaPlayer.play();
                             setKeepScreenOn(true);
@@ -919,7 +955,7 @@ class ReactVlcPlayerView extends TextureView implements
                     Log.i(TAG, "[VLC_EVENT] Paused | isPaused=" + isPaused + " pos=" + mMediaPlayer.getPosition()
                             + " time=" + mMediaPlayer.getTime());
 
-                    if (mPausedForHostPause && !isPaused) {
+                    if (mPausedForHostStop && !isPaused) {
                         Log.d(TAG, "[VLC_EVENT] Paused suppressed — host lifecycle pause");
                         break;
                     }
@@ -1379,7 +1415,6 @@ class ReactVlcPlayerView extends TextureView implements
     private void releasePlayer() {
         clearPendingResizeRequest();
         cancelPendingSeek();
-        cancelPendingPipBackgroundPause();
 
         if (pendingBufferingEvent != null) {
             bufferingHandler.removeCallbacks(pendingBufferingEvent);
@@ -1852,7 +1887,7 @@ class ReactVlcPlayerView extends TextureView implements
 
         isPaused = paused;
         if (paused) {
-            mPausedForHostPause = false;
+            mPausedForHostStop = false;
             mPausedForAudioFocus = false;
             mPausedForNoisyEvent = false;
         }
@@ -2045,10 +2080,6 @@ class ReactVlcPlayerView extends TextureView implements
 
     public void setPlayInBackground(boolean playInBackground) {
         this.playInBackground = playInBackground;
-        if (playInBackground) {
-            cancelPendingPipBackgroundPause();
-            mAwaitingPipAutoEnter = false;
-        }
         Log.i(TAG, "[CONFIG] playInBackground=" + playInBackground);
     }
 
@@ -2059,10 +2090,6 @@ class ReactVlcPlayerView extends TextureView implements
      */
     public void setPipEnabled(boolean pipEnabled) {
         this.mPipEnabled = pipEnabled;
-        if (!pipEnabled) {
-            cancelPendingPipBackgroundPause();
-            mAwaitingPipAutoEnter = false;
-        }
         mPipController.setEnabled(pipEnabled);
         Log.d(TAG, "[PIP] enabled=" + pipEnabled);
     }
@@ -2078,10 +2105,7 @@ class ReactVlcPlayerView extends TextureView implements
 
     /** Called by {@link VlcPipController} once the Activity has changed PiP state. */
     void onPipModeChangedInternal(boolean inPipMode) {
-        cancelPendingPipBackgroundPause();
-        mAwaitingPipAutoEnter = false;
-
-        if (!inPipMode && isHostPaused && !playInBackground) {
+        if (!inPipMode && isHostStopped && !playInBackground) {
             Log.i(TAG, "[PIP] PiP closed while host paused → pausing");
             pauseForHostBackground("pipExit");
         }
@@ -2267,44 +2291,20 @@ class ReactVlcPlayerView extends TextureView implements
         mLastAppliedResizeMode = resizeMode;
     }
 
-    private boolean shouldKeepPlayingWhileHostPaused() {
-        return playInBackground || isInPipMode() || mAwaitingPipAutoEnter;
+    private boolean shouldKeepPlayingWhileHostStopped() {
+        return playInBackground || isInPipMode();
     }
 
     private boolean shouldShowBackgroundNotification() {
-        return playInBackground || (isHostPaused && !isInPipMode() && !mAwaitingPipAutoEnter);
+        return playInBackground || (isHostStopped && !isInPipMode());
     }
 
     private void pauseForHostBackground(String reason) {
         if (mMediaPlayer != null && mMediaPlayer.isPlaying()) {
-            mPausedForHostPause = true;
+            mPausedForHostStop = true;
             mMediaPlayer.pause();
             setKeepScreenOn(false);
             Log.i(TAG, "[LIFECYCLE] paused for host background reason=" + reason);
-        }
-    }
-
-    private void schedulePendingPipBackgroundPause() {
-        cancelPendingPipBackgroundPause();
-        mAwaitingPipAutoEnter = true;
-        mPendingPipBackgroundPause = () -> {
-            mPendingPipBackgroundPause = null;
-            if (!isHostPaused || playInBackground || isInPipMode()) {
-                mAwaitingPipAutoEnter = false;
-                return;
-            }
-
-            mAwaitingPipAutoEnter = false;
-            Log.i(TAG, "[LIFECYCLE] PiP auto-enter grace expired → pausing");
-            pauseForHostBackground("pipAutoEnterTimeout");
-        };
-        mPipTransitionHandler.postDelayed(mPendingPipBackgroundPause, PIP_HOST_PAUSE_GRACE_MS);
-    }
-
-    private void cancelPendingPipBackgroundPause() {
-        if (mPendingPipBackgroundPause != null) {
-            mPipTransitionHandler.removeCallbacks(mPendingPipBackgroundPause);
-            mPendingPipBackgroundPause = null;
         }
     }
 
@@ -2789,12 +2789,14 @@ class ReactVlcPlayerView extends TextureView implements
             return;
         mCleaned = true;
 
+        // The Activity outlives this view, so a retained observer would leak it.
+        stopObservingActivityLifecycle();
+
         // Cancel pending enhancement work
         cancelPendingEnhancement();
 
         clearPendingResizeRequest();
         cancelPendingSeek();
-        cancelPendingPipBackgroundPause();
 
         if (seekExecutor != null && !seekExecutor.isShutdown()) {
             seekExecutor.shutdownNow();
@@ -3058,7 +3060,13 @@ class ReactVlcPlayerView extends TextureView implements
         if (mMediaSession == null)
             return;
         long position = mMediaPlayer != null ? mMediaPlayer.getTime() : 0;
-        float speed = mMediaPlayer != null ? mMediaPlayer.getRate() : 1f;
+        // The system extrapolates the position it displays as position + elapsed * speed,
+        // so speed must be 0 unless playback is actually advancing. getRate() is the rate
+        // setting and stays at 1.0 while paused, which left the notification clock running
+        // after a pause, a stop, or closing PiP.
+        float speed = (state == PlaybackStateCompat.STATE_PLAYING && mMediaPlayer != null)
+                ? mMediaPlayer.getRate()
+                : 0f;
         PlaybackStateCompat.Builder sb = new PlaybackStateCompat.Builder()
                 .setActions(PlaybackStateCompat.ACTION_PLAY
                         | PlaybackStateCompat.ACTION_PAUSE
