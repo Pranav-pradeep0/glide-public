@@ -67,6 +67,23 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug
 
+      - name: Compile release build
+        working-directory: android
+        run: |
+          # Without this, the release variant is built for the first time by the
+          # tag-gated job, where a failure burns a version number: v1.9.1 was spent on
+          # an AAR metadata error that could only surface in a release build.
+          #
+          # Debug-signed on purpose and never uploaded -- this job has contents: read
+          # and no publish step -- so it verifies compilation, R8 and AAR metadata
+          # without needing the keystore secret, which fork pull requests cannot read.
+          #
+          # arm64 only: metadata and R8 failures are not ABI-specific, and building one
+          # ABI halves the native work.
+          ./gradlew assembleRelease \
+            -PallowDebugSigning=true \
+            -PreactNativeArchitectures=arm64-v8a
+
   release:
     name: Release (tag-gated)
     if: ${{ startsWith(github.ref, 'refs/tags/v') }}
@@ -216,18 +233,25 @@ jobs:
           echo "ARM_PATH=$ARM_DEST" >> "$GITHUB_ENV"
           echo "ARM64_PATH=$ARM64_DEST" >> "$GITHUB_ENV"
 
-      - name: Generate changelog from previous final release
+      - name: Generate changelog from previous published release
         run: |
           set -e
-          LAST_TAG=$(git tag --list --sort=-creatordate \
-            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-build\.[0-9]+)?$' \
-            | grep -Fvx "$TAG" \
-            | head -n 1)
-          if [ -z "$LAST_TAG" ]; then
+          # The previous *published* release, not the newest tag. A tag whose release
+          # build failed leaves an orphan tag behind (v1.9.1), and ranging from it
+          # silently drops every commit between the last real release and that tag --
+          # which is how 1.9.2's notes came to omit both crash fixes.
+          #
+          # This is the same endpoint the in-app updater reads, so the notes describe
+          # exactly the jump users are taking. The release being built does not exist
+          # yet at this step, so this cannot return the current tag.
+          LAST_TAG=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null || true)
+          if [ -z "$LAST_TAG" ] || [ "$LAST_TAG" = "null" ] \
+              || ! git rev-parse -q --verify "refs/tags/$LAST_TAG" >/dev/null; then
             RANGE="HEAD"
-            echo "No previous final tag found. Using full history."
+            echo "No usable previous published release. Using full history."
           else
             RANGE="${LAST_TAG}..HEAD"
+            echo "Changelog range: $RANGE"
           fi
 
           RAW_LOG=$(git log --no-merges --pretty=format:"%s" $RANGE)

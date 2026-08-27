@@ -204,33 +204,53 @@ credential exists. Exercise both disabled and restored product paths.
 
 Keep one workflow unless splitting materially improves maintenance.
 
-- `[todo]` Run typecheck, lint, tests, and debug/release compilation on pull requests
-  and pushes to `main`/`develop`, with `contents: read` only.
-- `[todo]` Trigger publication only from a strict final tag such as `v1.8.2` or an
-  explicit manual release input. Do not publish on an ordinary branch push.
+Reconciled 2026-08-27. Most of this section was implemented in the 1.9.x workflow rebuild
+but never marked; the entries below are verified against the workflow file, not memory.
+
+- `[done]` Run typecheck, lint, tests, and debug **and release** compilation on pull
+  requests and pushes to `main`/`develop`, with `contents: read` only. The release build
+  was added 2026-08-27 and is the reason this item was still open: before it, the release
+  variant was first compiled by the tag-gated job, where a failure burns a version
+  number. That is exactly how 1.9.1 was spent. It is debug-signed via the project's
+  `-PallowDebugSigning=true` opt-in so it needs no keystore secret (fork pull requests
+  cannot read one), builds `arm64-v8a` only because AAR-metadata and R8 failures are not
+  ABI-specific, and has no upload step so it cannot publish.
+- `[done]` Trigger publication only from a strict final tag. The `release` job is gated on
+  `startsWith(github.ref, 'refs/tags/v')` and the tag must match `^v[0-9]+\.[0-9]+\.[0-9]+$`.
+  An ordinary branch push runs `verify` only.
 - `[done]` Refuse to publish a tag whose commit is not an ancestor of `origin/main`.
   Tag-gating alone still allows a `develop` commit to be tagged and released.
-- `[todo]` Add a release concurrency group so only one production release can run.
-- `[todo]` Set `contents: write` on the release job only, not globally.
-- `[todo]` Validate that the tag version exactly equals `package.json` version.
-- `[todo]` Reject prerelease/build suffixes until the updater intentionally supports
-  them. The smallest policy is one unique SemVer per public APK.
-- `[todo]` Fail if the tag or GitHub Release already exists. Do not rebuild a public
-  version in place; bump the patch version.
-- `[todo]` Remove the unused “Get commit message” step.
-- `[todo]` Replace `actions/create-release@v1` and `actions/upload-release-asset@v1`.
-  Prefer the installed GitHub CLI: create the release with both APK paths after all
-  builds and validations pass.
-- `[todo]` Generate the changelog from the previous final release tag, not whichever
-  `v*` tag was most recently created by the old build-number scheme.
-- `[todo]` Keep commit-subject filtering aligned with `AGENTS.md`: only `feat`, `fix`,
+- `[done]` Add a release concurrency group so only one production release can run.
+  `group: production-release`, `cancel-in-progress: false`.
+- `[done]` Set `contents: write` on the release job only, not globally. The workflow
+  default is `contents: read`.
+- `[done]` Validate that the tag version exactly equals `package.json` version.
+- `[done]` Reject prerelease/build suffixes. The tag regex is anchored, so `-build.N`
+  and prerelease suffixes fail validation.
+- `[done]` Fail if the tag or GitHub Release already exists, via `gh release view`.
+- `[done]` Remove the unused "Get commit message" step.
+- `[done]` Replace `actions/create-release@v1` and `actions/upload-release-asset@v1` with
+  `gh release create`, called once with both APKs and both checksums after all
+  validations pass.
+- `[done]` Generate the changelog from the previous **published release**, not the newest
+  tag. Corrects this entry's original wording, which said "previous final release tag":
+  a tag is the wrong source, not merely the wrong tag. A tag whose release build failed
+  leaves an orphan behind, and ranging from it drops every commit between the last real
+  release and that tag. Verified against history: the shipped 1.9.2 notes ranged from the
+  orphan `v1.9.1` and listed one fix; ranging from the published `v1.9.0` lists three,
+  including both crash fixes. Now reads `/releases/latest`, the same endpoint the in-app
+  updater uses, so the notes describe exactly the jump users are taking.
+- `[todo]` The published 1.9.2 release notes still carry the truncated list. The workflow
+  fix only affects future releases; those notes need editing by hand or not at all.
+- `[done]` Keep commit-subject filtering aligned with `AGENTS.md`: only `feat`, `fix`,
   and `perf` become release notes.
-- `[todo]` Remove `npm ci --legacy-peer-deps` after dependency alignment. CI must fail
-  on a real peer conflict rather than hiding it.
-- `[todo]` Upgrade the CI Node version with the React Native migration; do not do it
-  independently while RN 0.78 remains the runtime.
-- `[todo]` Do not publish a release before both ABI assets, checksum files, release
-  notes, and provenance metadata exist.
+- `[done]` Remove `npm ci --legacy-peer-deps`. Both jobs use a plain `npm ci`.
+- `[done]` Upgrade the CI Node version with the React Native migration. Node 22 in both
+  jobs, matching the `>=22.11.0` engine.
+- `[done]` Do not publish a release before both ABI assets and checksum files exist. The
+  release step `test -f`s both APKs before calling `gh release create`.
+- `[todo]` Provenance metadata is still not produced. Build attestation or an SBOM is the
+  remaining half of the item above; section 15.2 tracks the dependency/license inventory.
 
 ### 4.2 Make version identity monotonic and single-source
 
@@ -341,33 +361,91 @@ list of a video player that reads neither.
 
 Glide intentionally accepts `http://`, `https://`, and `rtsp://` playback sources.
 
-- `[todo]` Set production `usesCleartextTraffic` to false, leaving the debug override
-  only for deliberate local development.
-- `[todo]` Device-test an arbitrary HTTP LibVLC stream. LibVLC may use its own native
-  network stack; do not assume Android Network Security Config controls it.
-- `[decision]` If disabling global cleartext breaks an intentional arbitrary-host HTTP
-  stream feature, choose explicitly:
-  - support HTTPS/RTSP only; or
-  - retain HTTP stream support with an in-product insecurity warning while separately
-    enforcing HTTPS for every app-owned API and updater URL.
-- `[todo]` Enforce HTTPS and expected hosts in `UpdateService`, Groq/proxy, OMDb, and
-  SubDL code even if the manifest permits cleartext for native streams.
-- `[todo]` Reject non-HTTPS custom update endpoints and APK asset URLs.
-- `[todo]` Never allow “accept invalid certificate” for app APIs. If LibVLC exposes it
-  for user streams, keep it off by default and make the risk explicit.
+Implemented 2026-08-27. The `[decision]` below is resolved by making it unnecessary
+rather than by choosing a side: a Network Security Config permits cleartext in its
+`base-config`, so arbitrary user streams are untouched, and forbids it per-domain for
+every app-owned API. No product capability is given up, so no insecurity warning is owed.
+
+- `[done]` `[decision]` **Retain HTTP stream support; pin app-owned APIs to HTTPS.** The
+  second listed option, minus the in-product warning, which was only owed if a
+  user-facing feature had to be degraded. It did not.
+- `[done]` Replace blanket `usesCleartextTraffic="true"` with
+  `android:networkSecurityConfig="@xml/network_security_config"`. Domains pinned to
+  HTTPS: `github.com`, `githubusercontent.com`, `subdl.com`, `omdbapi.com`,
+  `stalliontech.io`, `workers.dev`, each with `includeSubdomains`. Verified in the
+  regenerated release merged manifest.
+- `[done]` Keep the debug override. `app/src/debug/res/xml/network_security_config.xml`
+  shadows the production file by resource merging, so no manifest override and no
+  `tools:replace` is needed. The now-ignored `usesCleartextTraffic` was deleted from the
+  debug manifest rather than left behind as a no-op attribute.
+- `[keep]` Stallion's bundle CDN (`cloudfront.net`) is deliberately **not** pinned.
+  Pinning all of CloudFront would also block a user stream hosted there, which is exactly
+  the case `base-config` exists to permit. The control plane on `stalliontech.io` is pinned.
+- `[done]` Reject non-HTTPS custom update endpoints. `buildLatestReleaseUrl()` returned
+  `GITHUB_RELEASES_URL` verbatim; a cleartext override would have let the network choose
+  which release the updater offers. It now fails closed to `noUpdate`.
+- `[keep]` APK asset URLs were already covered by `isTrustedAssetUrl`, which requires
+  HTTPS plus a GitHub release-asset host. Nothing to add.
+- `[keep]` The proxy URL needs no config entry: `constants.ts` already refuses any
+  `AI_PROXY_URL` not starting with `https://`, and static XML cannot know a custom proxy
+  domain chosen at build time. `workers.dev` covers the default Workers domain.
+- `[todo]` Device-test an arbitrary HTTP LibVLC stream. Expected unaffected — LibVLC uses
+  its own native network stack, so the config should never reach it — but "expected to be
+  unaffected" is the claim that needs the device, not the one that gets to skip it.
+- `[todo]` Device-test that the update check, subtitle search/download, OMDb lookup, and
+  the Stallion OTA check all still succeed over the pinned domains.
+- `[todo]` Enforce expected *hosts*, not only HTTPS, in OMDb and SubDL code. The config
+  now covers the transport; the code still trusts whatever host `.env` supplies.
+- `[todo]` Never allow "accept invalid certificate" for app APIs. If LibVLC exposes it
+  for user streams, keep it off by default and make the risk explicit. The
+  `acceptInvalidCertificates` native prop exists and is unused by this app (section 10.5).
 
 ### 6.2 Validate external intents and deep links
 
-- `[todo]` In `VideoPlayerActivity`, accept only supported `content`, `file`, `http`,
-  `https`, and `rtsp` schemes and a video MIME where available.
-- `[todo]` Treat all external names, URIs, metadata, and file sizes as untrusted.
-- `[todo]` Reject empty/oversized/malformed URIs before initializing LibVLC.
-- `[todo]` For `content://`, retain URI permission correctly and fail clearly when the
-  grant is absent or expires.
-- `[todo]` Keep external-open exit behavior scoped to finishing its Activity, not
-  exiting the process.
+Implemented 2026-08-27. `VideoPlayerActivity` is `exported="true"`, so any installed app
+can start it with an **explicit** intent and bypass all eight manifest intent filters.
+Before this change `intent.data.toString()` reached JavaScript and LibVLC unvalidated, and
+LibVLC natively resolves `smb`, `ftp`, `nfs`, `sftp`, `dvd`, `screen` and more.
+
+- `[done]` Accept only `content`, `file`, `http`, `https`, `rtsp`. One
+  `resolveExternalVideoUri()` covers both ACTION_VIEW and ACTION_SEND, so the two entry
+  points cannot drift apart.
+- `[done]` Reject empty and oversized URIs before LibVLC initialises: blank
+  `schemeSpecificPart`, and a length cap of 8,192.
+- `[done]` Validate in `onCreate` rather than in `getLaunchOptions`, so a rejected intent
+  can `finish()`. Necessary, not stylistic: `VideoPlayerRoot` renders an indefinite
+  spinner when `videoUri` is absent, so merely dropping the prop would have left a black
+  screen with no error and no way out.
+- `[done]` Keep external-open exit scoped to `finish()`. Exiting the process would also
+  take `MainActivity`, which may be showing the user their own library.
+- `[done]` Take a persistable `content://` grant only when the sender offered
+  `FLAG_GRANT_PERSISTABLE_URI_PERMISSION`. Taking one that was not offered throws, and
+  most file managers offer a call-scoped grant instead.
+- `[keep]` **No MIME assertion on ACTION_VIEW.** The manifest already requires `video/*`
+  for every implicit VIEW except extension-matched http(s) links, and an explicit intent
+  can declare `video/mp4` for anything — so the check buys nothing against an attacker
+  while rejecting file managers that send `application/octet-stream` for a real video.
+  ACTION_SEND keeps its MIME check, where the sender chooses the type and the stream
+  extra carries no scheme guarantee of its own.
+- `[todo]` A `content://` URI arriving with no read grant is still accepted, and fails
+  downstream as a decode error rather than a clear message. Rejecting on a missing
+  `FLAG_GRANT_READ_URI_PERMISSION` would also reject world-readable exported providers
+  that legitimately need no grant, so this needs the device matrix first. Marked with a
+  `ponytail:` comment at the return site.
+- `[todo]` `onNewIntent` is unvalidated but currently inert: `launchMode="singleTask"`
+  means a second intent never re-runs `getLaunchOptions`, so no new URI reaches
+  JavaScript. That is a UX gap — opening a second video while the player is open does
+  nothing — not a hole. Validate it whenever that UX is fixed.
+- `[keep]` `RootNavigator`'s `Linking` handler calls `DeepLinkService.isVideoUri` only to
+  decide whether to log, and `MainActivity` declares no VIEW filter, so no external URL
+  reaches it. It is not an input boundary; do not harden it as though it were one.
 - `[todo]` Add tests for ACTION_VIEW, ACTION_SEND, malformed URLs, missing grants, and
-  unsupported schemes in both host Activities.
+  unsupported schemes. **Not done, and deliberately not faked:** the logic uses
+  `android.net.Uri`, so a JVM unit test needs Robolectric or a hand-rolled URI parser, and
+  hand-rolling URI parsing to test URI validation reintroduces the bug class the check
+  exists to prevent. Section 15.2 already tracks the instrumentation test that covers this.
+- `[done]` Verified: `compileDebugKotlin` passes, release merged manifest regenerated and
+  inspected, `tsc --noEmit` clean, 25/25 Jest, ESLint unchanged at 0 errors/262 warnings.
 
 ## 7. R1/P1 — harden GitHub APK updates
 
