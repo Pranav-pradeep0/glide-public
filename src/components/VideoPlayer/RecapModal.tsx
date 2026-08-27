@@ -7,6 +7,7 @@ import {
     TouchableOpacity,
     ScrollView,
     Dimensions,
+    type DimensionsPayload,
 } from 'react-native';
 import { BlurView } from '@react-native-community/blur';
 import Feather from '@react-native-vector-icons/feather';
@@ -102,7 +103,8 @@ export const RecapModal: React.FC<RecapModalProps> = ({
 
     // Listen for dimension changes
     useEffect(() => {
-        const subscription = Dimensions.addEventListener('change', ({ window }) => {
+        const subscription = Dimensions.addEventListener('change', ({ window }: DimensionsPayload) => {
+            if (!window) { return; }
             setDimensions({
                 width: window.width,
                 height: window.height,

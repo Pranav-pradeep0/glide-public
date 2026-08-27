@@ -153,7 +153,7 @@ export default function VideoPlayerScreen({ route }: Props) {
 
     // Brightness tracking
     const brightnessRef = useRef<number | undefined>(undefined);
-    const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+    const appStateRef = useRef<AppStateStatus>((AppState.currentState ?? 'active') as AppStateStatus);
 
     const handleBrightnessChange = useCallback((val: number) => {
         brightnessRef.current = val;

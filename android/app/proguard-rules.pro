@@ -30,8 +30,6 @@
 # React Native Screens
 -keep class com.swmansion.rnscreens.** { *; }
 
-# Fast Image
--keep class com.dylanvann.fastimage.** { *; }
 
 # React Native FS
 -keep class com.rnfs.** { *; }

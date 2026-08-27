@@ -18,7 +18,6 @@ import {
     Easing,   // Added
     useWindowDimensions, // Added
 } from 'react-native';
-import FastImage from 'react-native-fast-image';
 import { RouteProp, useRoute, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Feather from '@react-native-vector-icons/feather';
@@ -442,10 +441,10 @@ export default function PlayerDetailScreen() {
                                 blurRadius={5}
                             />
                             <Animated.View style={[styles.heroImage, StyleSheet.absoluteFill, { opacity: imageOpacity }]}>
-                                <FastImage
+                                <Image
                                     source={{ uri: getHighResPoster(movieDetails.Poster) }}
                                     style={styles.heroImage}
-                                    resizeMode={FastImage.resizeMode.cover}
+                                    resizeMode="cover"
                                     onLoad={() => {
                                         Animated.timing(imageOpacity, {
                                             toValue: 1,

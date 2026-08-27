@@ -38,7 +38,6 @@ public class ReactVlcPlayerViewManager extends SimpleViewManager<ReactVlcPlayerV
     private static final String PROP_PROGRESS_UPDATE_INTERVAL = "progressUpdateInterval";
     private static final String PROP_TEXT_TRACK = "textTrack";
     private static final String PROP_AUDIO_TRACK = "audioTrack";
-    private static final String PROP_RECORDING_PATH = "recordingPath";
     private static final String PROP_ACCEPT_INVALID_CERTIFICATES = "acceptInvalidCertificates";
     private static final String PROP_RESIZE_MODE = "resizeMode";
     private static final String PROP_PLAY_IN_BACKGROUND = "playInBackground";
@@ -214,14 +213,6 @@ public class ReactVlcPlayerViewManager extends SimpleViewManager<ReactVlcPlayerV
         videoView.setAudioDelay((long) delayMs);
     }
 
-    public void startRecording(final ReactVlcPlayerView videoView, final String recordingPath) {
-        videoView.startRecording(recordingPath);
-    }
-
-    public void stopRecording(final ReactVlcPlayerView videoView) {
-        videoView.stopRecording();
-    }
-
     public void stopPlayer(final ReactVlcPlayerView videoView) {
         videoView.stopPlayer();
     }
@@ -233,8 +224,6 @@ public class ReactVlcPlayerViewManager extends SimpleViewManager<ReactVlcPlayerV
     @Override
     public Map<String, Integer> getCommandsMap() {
         return MapBuilder.of(
-                "startRecording", 1,
-                "stopRecording", 2,
                 "pausePlayer", 4,
                 "stopPlayer", 5,
                 "enterPictureInPicture", 6);
@@ -243,17 +232,6 @@ public class ReactVlcPlayerViewManager extends SimpleViewManager<ReactVlcPlayerV
     @Override
     public void receiveCommand(ReactVlcPlayerView root, int commandId, @Nullable ReadableArray args) {
         switch (commandId) {
-            case 1:
-                if (args != null && args.size() > 0 && !args.isNull(0)) {
-                    String path = args.getString(0);
-                    root.startRecording(path);
-                }
-                break;
-
-            case 2:
-                root.stopRecording();
-                break;
-
             case 4:
                 root.pausePlayer();
                 break;

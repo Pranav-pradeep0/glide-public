@@ -12,11 +12,11 @@ import {
     StyleSheet,
     RefreshControl,
     Dimensions,
+    Image,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import FastImage from 'react-native-fast-image';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import Feather from '@react-native-vector-icons/feather';
 import { FlashList as FlashListOriginal } from '@shopify/flash-list';
@@ -64,10 +64,10 @@ const AlbumThumbnail = React.memo(({ albumName, refreshKey }: { albumName: strin
 
     if (thumbnail) {
         return (
-            <FastImage
-                source={{ uri: thumbnail, priority: FastImage.priority.normal }}
+            <Image
+                source={{ uri: thumbnail }}
                 style={styles.thumbnailImage}
-                resizeMode={FastImage.resizeMode.cover}
+                resizeMode="cover"
             />
         );
     }

@@ -6,6 +6,7 @@ import {
     TouchableOpacity,
     Pressable,
     TextInput,
+    type TextInputInstance,
     ScrollView,
     ActivityIndicator,
     Alert,
@@ -46,7 +47,7 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
     const [results, setResults] = useState<MatchResult[]>([]);
     const [isFocused, setIsFocused] = useState(false);
     const [isListening, setIsListening] = useState(false);
-    const inputRef = useRef<TextInput>(null);
+    const inputRef = useRef<TextInputInstance>(null);
     // Matching and offset calculation must use the same playback instant. Playback keeps
     // moving while transcription runs and while the user reviews the matches.
     const matchReferenceTimeRef = useRef(0);

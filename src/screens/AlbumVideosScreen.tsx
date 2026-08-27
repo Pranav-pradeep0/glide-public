@@ -7,12 +7,12 @@ import {
     TouchableOpacity,
     Dimensions,
     Alert,
+    Image,
 } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useNavigation, useRoute, RouteProp, useIsFocused } from '@react-navigation/native';
 import { FlashList as FlashListOriginal } from '@shopify/flash-list';
-import FastImage from 'react-native-fast-image';
-import Feather from 'react-native-vector-icons/Feather';
+import Feather from '@react-native-vector-icons/feather';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { LinearTransition, FadeInDown, ZoomInRight } from 'react-native-reanimated';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -50,10 +50,10 @@ const VideoThumbnail = React.memo(({ path, duration }: { path: string; duration:
 
     if (thumbnail) {
         return (
-            <FastImage
-                source={{ uri: thumbnail, priority: FastImage.priority.high }}
+            <Image
+                source={{ uri: thumbnail }}
                 style={styles.videoThumbnailImage}
-                resizeMode={FastImage.resizeMode.cover}
+                resizeMode="cover"
             />
         );
     }

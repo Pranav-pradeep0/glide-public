@@ -11,7 +11,6 @@ import { VideoFile } from '@/types';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAlbumVideos } from '@/hooks/useMediaService';
 import { useThumbnail } from '@/hooks/useThumbnails';
-import FastImage from 'react-native-fast-image';
 
 interface PlaylistPanelProps {
     visible: boolean;
@@ -59,10 +58,10 @@ const PlaylistItem = memo<{
             <View style={styles.videoMain}>
                 <View style={styles.thumbnailContainer}>
                     {thumbnail ? (
-                        <FastImage
+                        <Image
                             source={{ uri: thumbnail }}
                             style={styles.thumbnail}
-                            resizeMode={FastImage.resizeMode.cover}
+                            resizeMode="cover"
                         />
                     ) : (
                         <View style={[styles.thumbnail, styles.thumbnailPlaceholder]}>
@@ -365,7 +364,7 @@ const styles = StyleSheet.create({
         backgroundColor: '#0F0F0F',
     },
     playingOverlay: {
-        ...StyleSheet.absoluteFillObject,
+        ...StyleSheet.absoluteFill,
         backgroundColor: 'rgba(0,0,0,0.6)',
         alignItems: 'center',
         justifyContent: 'center',

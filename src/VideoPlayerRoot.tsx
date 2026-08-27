@@ -4,7 +4,7 @@ import { NavigationContainer, DarkTheme } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { ErrorBoundary } from 'ErrorBoundary';
+import { ErrorBoundary } from '../ErrorBoundary';
 import VideoPlayerScreen from '@/screens/VideoPlayerScreen';
 import PlayerDetailScreen from '@/screens/PlayerDetailScreen';
 import { useTheme } from '@/hooks/useTheme';

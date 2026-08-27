@@ -200,12 +200,6 @@ export type VLCPlayerCallbackProps = {
    */
   onLoad?: (event: VideoInfo) => void;
 
-  /**
-   * Called when a new recording is created
-   *
-   * @param recordingPath - Full path to the recording file
-   */
-  onRecordingCreated?: (recordingPath: string) => void;
 
 
   /**
@@ -377,16 +371,7 @@ declare class PlaybackMethods<T> extends Component<T> {
    */
   enterPictureInPicture();
 
-  /**
-   * Start a new recording session at the given path
-   * @param path Directory to create new recording in
-   */
-  startRecording(path: string);
 
-  /**
-   * Stop current recording session
-   */
-  stopRecording();
 
   /**
    * Stop playing

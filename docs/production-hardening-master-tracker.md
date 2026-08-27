@@ -861,38 +861,207 @@ incoming call, notification controls, and reopening the UI all preserve explicit
 
 Do not update these independently. Use the RN Upgrade Helper/template diff as the source of truth.
 
+### 9.1 Foreground service crash loop (found on device, 2026-08-27)
+
+`ForegroundServiceDidNotStartInTimeException` on `GlidePlaybackService`, twice in 23
+seconds across two PIDs: `Context.startForegroundService() did not then call
+Service.startForeground()`.
+
+- `[done]` Return `START_NOT_STICKY` from `onStartCommand`. Media3's `MediaSessionService`
+  returns `START_STICKY` (confirmed from the 1.7.1 bytecode: a null intent returns 1),
+  which suits a player that owns its media and can rebuild itself. This one cannot: the
+  LibVLC player lives in the React view and `VlcPlaybackHost` is static, so both die with
+  the process. A restarted service has nothing to describe.
+- `[done]` Never leave a started service without settling its foreground state. `onCreate`
+  bailed with a bare `stopSelf()` when no host was registered, *after* `super.onCreate()`.
+  If the start required foreground promotion, that is this exact exception. The bail path
+  now posts a placeholder notification and withdraws it immediately, which satisfies the
+  contract whether or not the start required it.
+- These two compounded into a loop that cannot exit: the process dies for any reason, the
+  platform restarts the service sticky, the restart finds no host, it stops without going
+  foreground, and the platform kills the process for it. Which matches the log exactly —
+  same exception, same service, two PIDs, 23 seconds apart.
+- `[todo]` The trigger for the *first* death is not in the captured log, which begins at
+  the crash. `ApplicationExitInfo` reports `pss=488MB rss=627MB`, so a low-memory kill of
+  a large video process is the likely entry into the loop. Worth watching memory
+  independently; the fix above breaks the loop regardless of what starts it.
+- `[todo]` Retest: play, background, PiP, swipe the task away, and force-stop, confirming
+  no `AndroidRuntime` crash and that the notification still appears and controls playback.
+
 ### 10.1 JavaScript/runtime alignment
 
-- `[todo]` React Native `0.78.3` → `0.87.x` stable patch selected at migration time.
-- `[todo]` React `19.0.0` → the exact React version required by that RN template
-  (`19.2.3` for RN 0.87.0), not arbitrary latest.
-- `[todo]` Align `@react-native/babel-preset`, `metro-config`, `eslint-config`, and
-  `typescript-config` to the RN runtime version.
-- `[todo]` Replace alpha CLI 15 packages with the template-supported stable CLI.
-- `[todo]` Node engine and CI → at least `22.13.0` as required by RN 0.87.
-- `[todo]` Fix `VLCPlayer.tsx` deep import by using `Image.resolveAssetSource`.
-- `[todo]` Replace `InteractionManager` in `OnboardingScreen` with `requestIdleCallback`.
-- `[todo]` Enable/fix the RN 0.87 Strict TypeScript API; do not use the legacy deep-import
-  opt-out as the final state.
-- `[todo]` Add `@react-native/jest-preset@0.87.x`, change `jest.config.js` from the
-  removed implicit `react-native` preset path, and retain MMKV/Nitro transforms only
-  where an actual test imports them. Add React test renderer/types only if component
-  tests use them, at the exact React-compatible version.
-- `[todo]` Regenerate the lockfile with plain `npm install`/`npm ci`; no legacy peer override.
+- `[done]` React Native `0.78.3` → `0.87.1`, the `latest` dist-tag at migration time.
+- `[done]` React `19.0.0` → `19.2.3`, read from the RN 0.87.1 template rather than from
+  npm `latest`. Both core packages are pinned exactly, as the template pins them.
+- `[done]` Align `@react-native/babel-preset`, `metro-config`, `eslint-config`, and
+  `typescript-config` to `0.87.1`. They had been pinned at `0.76.0` against a `0.78.3`
+  runtime, so they were already two versions adrift before this migration started.
+- `[done]` Replace the `15.0.0-alpha.2` CLI packages with stable `20.2.0`.
+  `cli-platform-ios` is dropped rather than bumped: no iOS release is planned.
+- `[done]` Node engine set to `>=22.11.0`. Corrects this entry's earlier `22.13.0`,
+  which was not sourced from the template; `@react-native-community/template` for 0.87
+  declares `>= 22.11.0`.
+- `[done]` Fix the `VLCPlayer.tsx` deep import into
+  `react-native/Libraries/Image/resolveAssetSource` by using `Image.resolveAssetSource`.
+  The result is typed as a local `ResolvedVlcSource`, because the player passes plain
+  objects carrying VLC-only fields (`mainVer`, `patchVer`, `initOptions`) straight
+  through, and those are not part of React Native's resolved-asset shape.
+- `[done]` Replace `InteractionManager` in `OnboardingScreen` with `requestIdleCallback`.
+  This was not optional in the end: 0.87 removed `InteractionManager` from both the
+  runtime and the type surface. React Native installs `requestIdleCallback` and
+  `cancelIdleCallback` as globals in `setUpTimers.js` but ships no types for them, so
+  `src/types/globals.d.ts` declares them.
+- `[done]` The RN 0.87 Strict TypeScript API is active and the legacy deep-import opt-out
+  is not in use. Verified by resolution rather than by assumption: `tsc --traceResolution`
+  resolves `react-native` to `types_generated/index.d.ts`, and the package's export map
+  offers the legacy surface only under the `react-native-legacy-deep-imports` condition,
+  which nothing here sets. This is what produced most of the 52 type errors this migration
+  had to fix, so it is load-bearing rather than nominal.
+- `[done]` Add `@react-native/jest-preset@0.87.1` and point `jest.config.js` at it
+  instead of the removed implicit `react-native` preset path. The existing
+  `transformIgnorePatterns` is kept as-is; it already covers the untranspiled ESM deps.
+  No React test renderer was added: all four suites are plain logic tests over
+  `@jest/globals` and none render a component, so `@types/react-test-renderer` was
+  removed rather than upgraded. 25/25 pass.
+- `[done]` Regenerate the lockfile with a plain `npm install`; no `--legacy-peer-deps`.
+  Two separate conflicts had to go first, and the second was the real one:
+  `react-native-fast-image` declares `react@"^17 || ^18"` against this app's React 19,
+  and `@react-native-documents/picker@11` requires `react-native >=0.79` while the app
+  was on `0.78.3`. The flag had been masking a genuinely unsupported combination, not
+  merely a cosmetic peer warning.
+
+- `[done]` Remove `react-native-fast-image` entirely. It had not been published since
+  October 2022, has no Fabric support, and its React 19 peer conflict was one of the two
+  reasons the tree needed `--legacy-peer-deps`. All ten call sites were plain
+  `<Image>` equivalents: eight local thumbnails and two OMDB posters, and its caching and
+  priority queue only ever applied to remote images, which Android already caches natively.
+- `[done]` Drop four dependencies `@glide/vlc-player` declared but never imported
+  (`react-native-slider`, `react-native-vector-icons`, `@expo/config-plugins`, and
+  `@types/react@~18.2.14`). The last was pulling React 18 types into a React 19 tree, and
+  the vector-icons one was the only reason three app files could import the legacy icon
+  package at all; they now use the scoped `@react-native-vector-icons/feather` like the
+  rest of the app.
+- `[done]` Reanimated `3.19.3` → `4.6.0` with the new `react-native-worklets` peer, and
+  the Babel plugin moved from `react-native-reanimated/plugin` to
+  `react-native-worklets/plugin`. Verified the app's Reanimated surface survives v4:
+  `useAnimatedGestureHandler`, the one API v4 removes, has zero uses here.
+- `[done]` Drop `baseUrl` from `tsconfig.json`, deprecated in TypeScript 6 and removed in
+  7, rather than silencing it with `ignoreDeprecations`. `paths` resolve relative to the
+  config file without it. This surfaced two imports that only ever resolved through
+  `baseUrl` (`from 'ErrorBoundary'` in `App.tsx` and `VideoPlayerRoot.tsx`).
+- `[done]` Fix the 0.87 type-surface changes: `StyleSheet.absoluteFillObject` is gone and
+  `absoluteFill` is now that same raw object; `SharedValue` moved off the Reanimated
+  `Animated` namespace to the package root; refs hold `TextInputInstance` rather than the
+  component type; `Dimensions` change payloads are all-optional; `AppState.currentState`
+  is nullable; `Linking.getInitialURL` can resolve `undefined`; and `TextStyle` members
+  are readonly, so `SubtitleHtmlParser`'s two style builders assemble through a writable
+  view of the same shape.
 
 ### 10.2 Android template alignment
 
-- `[todo]` Move to RN-template AGP 9, Kotlin 2.2, compile/build tools 37, and target 36.
-- `[todo]` Use the temporary AGP 9 Kotlin/new-DSL opt-outs recommended by RN 0.87,
-  then track their later removal; do not improvise Gradle DSL migration simultaneously.
-- `[todo]` Update Gradle wrapper to the exact template-compatible version.
-- `[todo]` Reconcile root NDK 26 and app NDK 27 to the RN/native-dependency-supported version.
-- `[todo]` Delete the app's no-op CMake/flexible-page-size block.
-- `[todo]` Retain New Architecture and Hermes; verify every local native module under it.
-- `[todo]` Keep only app ABIs `armeabi-v7a` and `arm64-v8a`; stop local libraries from
-  compiling x86/x86_64 unless emulator CI deliberately needs them.
+- `[done]` Move to the RN 0.87.1 template toolchain: AGP 9.2.1 and Kotlin 2.2.0 (both read
+  from `@react-native/gradle-plugin`'s own version catalogue), build tools 37.0.0,
+  compileSdk 37, targetSdk 36. `minSdk` stays at 26; the template's 24 is lower than what
+  this app already requires. AGP is not pinned anywhere: the root uses versionless
+  classpaths, so React Native's Gradle plugin supplies it and the RN version governs.
+- `[done]` Add `android.builtInKotlin=false` and `android.newDsl=false`, exactly as the
+  0.87 template ships them. `[todo]` Remove both when moving to AGP 10, which drops the
+  opt-outs; the build currently logs obsolete-variant-API warnings that are the deferred
+  work, not a defect.
+- `[done]` Gradle wrapper `8.11.1` → `9.4.1`, the version the 0.87.1 template pins.
+- `[done]` Reconcile the split NDK versions. The root declared `26.1.10909125` and the app
+  overrode it with `27.0.12077973`; both now resolve to the template's `27.1.12297006`
+  from `rootProject.ext`.
+- `[done]` Delete the app's `-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON` CMake arguments.
+  Corrects this entry's original premise, and my first justification for acting on it: the
+  block was **not** a no-op. The app module ships no `CMakeLists.txt` of its own, but React
+  Native's Gradle plugin configures `externalNativeBuild` for `:app` against its own CMake
+  and generated autolinking, so the argument was reaching a real native build. Removing it
+  is still right, for a different reason: `NdkConfiguratorUtils` adds
+  `-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON` itself unless a build already specifies it, so
+  the manual copy was redundant rather than dead. This matters because NDK r27 treats 16 KB
+  page support as opt-in (r28 makes it the default), so deleting the flag without checking
+  who else sets it would have silently regressed 16 KB alignment.
+- `[done]` Confirm 16 KB alignment on the built APKs rather than trusting the plugin
+  read: `zipalign -c -P 16 4` passes on both `arm64-v8a` and `armeabi-v7a`.
+  `scripts/glide-trace.ps1 -Verify` now runs exactly this check, alongside the device page
+  size and the installed build, so it is repeatable before each release.
+- `[done]` New Architecture and Hermes stay on, and every local native module compiles
+  under Kotlin 2.2/AGP 9.
+- `[done]` The app `splits` block no longer hardcodes its ABI list; it reads the same
+  `rootProject.ext.nativeArchitectures` the local modules use, so all three cannot drift.
+  `[todo]` Some third-party modules (`react-native-stallion`, `react-native-mmkv`) still
+  configure x86/x86_64 CMake targets regardless of `reactNativeArchitectures`. It costs
+  build time only, since the APK splits exclude them, but it is worth revisiting.
 - `[todo]` Re-run Android 15/16 behavior-change checklists, predictive back, edge-to-edge,
   exported components, foreground service, permissions, and 16 KB tests.
+
+- `[done]` Migrate `MainApplication` from `reactNativeHost` to `reactHost`. This was not
+  cosmetic: in 0.87 `ReactApplication.reactNativeHost` *throws* under the New Architecture.
+  Stallion's OTA bundle, previously supplied by overriding `getJSBundleFile()`, is now
+  passed as `getDefaultReactHost(jsBundleFilePath = ...)`, which keeps the same
+  null-means-use-the-packaged-bundle behaviour. `SoLoader.init` plus the New Architecture
+  entry point are replaced by `loadReactNative(this)`.
+- `[done]` Fix two silent runtime regressions the compiler could not catch:
+  `MainActivity` and `VideoPlayerActivity` reached the React context through
+  `reactNativeHost.reactInstanceManager`, inside a `try/catch`. That still compiles, but
+  now throws at runtime and would have been swallowed, leaving picture-in-picture mode
+  changes silently never reaching JavaScript. Both now use `reactHost.currentReactContext`.
+- `[done]` Replace `currentActivity` with `reactApplicationContext.currentActivity` across
+  the Splash, orientation, and PiP modules. 0.87 converted `ReactContextBaseJavaModule` to
+  Kotlin, so `getCurrentActivity()` is no longer synthesised into a property; this is the
+  replacement its own deprecation names.
+- `[done]` Switch both `getDefaultProguardFile('proguard-android.txt')` call sites to
+  `proguard-android-optimize.txt`. AGP 9 refuses the former outright because it carries
+  `-dontoptimize`, which suppresses many R8 optimisations.
+- `[done]` CI moves to Node 22 (0.87 requires >= 22.11, CI was pinned at 20) and installs
+  with a plain `npm ci`. JDK 17 is unchanged and satisfies AGP 9.
+
+### 10.5 Clean sweep review (2026-08-27)
+
+A deliberate re-read of everything changed in sections 9 and 10, against the shipped APIs
+rather than against memory. Findings, including against my own work:
+
+- `[done]` **A codemod silently corrupted an import.** `OnboardingScreen` ended up with
+  `FlatList,<CR>    useWindowDimensions,` on one line: in JavaScript, `^` under the `m`
+  flag matches after a lone `CR` as well as after `LF`, so a `/^\s*X,\r?\n/m` edit on a
+  CRLF file anchored *between* the CR and the LF and the greedy `\s*` then ate the LF.
+  It compiled and typechecked, because the result is still valid TypeScript. Repaired, and
+  every changed file was swept for lone CRs — this was the only one.
+- `[done]` **The crash fix created a second notification channel.** A channel is
+  permanently visible in the app's notification settings once created, so the placeholder
+  would have left the user a "Playback handoff" category for a notification that exists
+  only between posting and withdrawing it. It now reuses
+  `DefaultMediaNotificationProvider.DEFAULT_CHANNEL_ID` and `DEFAULT_NOTIFICATION_ID`,
+  so nothing new appears.
+- `[done]` The same bail path could run twice — `onCreate` calls it, then the pending start
+  command arrives and calls it again. Guarded.
+- `[done]` Delete the recording feature: `startRecording`, `stopRecording` and
+  `onRecordingState` across the view, the view manager, the event emitter, `VLCPlayer.tsx`
+  and `index.d.ts`, with zero callers anywhere in `src/`. About 70 lines. Command ids in
+  the manager are explicit (1, 2, 4, 5, 6) and JavaScript dispatches by name, so removing
+  1 and 2 needed no renumbering.
+- `[done]` Move `@types/sentiment` from `dependencies` to `devDependencies`.
+- `[done]` `-Verify` no longer demands a connected device. Checking a build's 16 KB
+  alignment is a local operation and had no business requiring a phone.
+- `[done]` Remove a stray blank line the `DimensionsPayload` import edit left in
+  `RecapModal`.
+
+Deliberately **not** done, with reasons:
+
+- `[keep]` The module declares 50 props and the app passes 29. Most of the difference is
+  not dead: the eleven `onVideoX` callbacks are the native event names that
+  `VLCPlayer.tsx` maps to the short names the app uses, and `subtitleUri` and
+  `acceptInvalidCertificates` are real native features this app happens not to use. Only
+  `disableFocus` and `playWhenInactive` are genuinely inert, which is not worth churning
+  a file that was just validated on device. Checked before cutting, not after.
+- `[keep]` `autoAspectRatio` is never passed from JavaScript but is load-bearing in the
+  native geometry code from section 8.1. Removing the prop would have stranded live
+  branches; removing the machinery is a geometry refactor, not a sweep.
+- `[todo]` **`ios/` is a stale pre-0.80 template.** Old-style `AppDelegate.mm`, no
+  `Podfile.lock`, and last touched only by a version bump. It cannot build on RN 0.87,
+  where the AppDelegate moved to Swift. With no iOS release planned it is dead weight that
+  implies support that does not exist. Deleting it is a product call, not a cleanup.
 
 ### 10.3 Local VLC module Gradle cleanup
 

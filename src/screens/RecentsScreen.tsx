@@ -10,13 +10,13 @@ import {
     Dimensions,
     RefreshControl,
     Alert,
+    Image,
 } from 'react-native';
 import { Theme } from '@/theme/theme';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { RootStackParamList, VideoHistoryEntry } from '@/types';
-import FastImage from 'react-native-fast-image';
-import Feather from 'react-native-vector-icons/Feather';
+import Feather from '@react-native-vector-icons/feather';
 import Animated, { withTiming, useAnimatedStyle, useSharedValue, FadeInDown, ZoomInRight, LinearTransition } from 'react-native-reanimated';
 import { Loader } from '../components/Loader';
 import { useVideoHistoryStore } from '../store/videoHistoryStore';
@@ -150,10 +150,10 @@ const VideoGridCard = React.memo(
                 >
                     <View style={[styles.videoGridThumbnail, { backgroundColor: theme.colors.border }]}>
                         {item.thumbnailPath ? (
-                            <FastImage
-                                source={{ uri: item.thumbnailPath, priority: FastImage.priority.high }}
+                            <Image
+                                source={{ uri: item.thumbnailPath }}
                                 style={styles.videoGridThumbnailImage}
-                                resizeMode={FastImage.resizeMode.cover}
+                                resizeMode="cover"
                             />
                         ) : (
                             <View style={styles.thumbnailPlaceholder}>
@@ -277,10 +277,10 @@ const VideoListItem = React.memo(
                 >
                     <View style={[styles.videoThumbnail, { backgroundColor: theme.colors.background }]}>
                         {item.thumbnailPath ? (
-                            <FastImage
-                                source={{ uri: item.thumbnailPath, priority: FastImage.priority.high }}
+                            <Image
+                                source={{ uri: item.thumbnailPath }}
                                 style={styles.videoThumbnailImage}
-                                resizeMode={FastImage.resizeMode.cover}
+                                resizeMode="cover"
                             />
                         ) : (
                             <View style={styles.thumbnailPlaceholder}>

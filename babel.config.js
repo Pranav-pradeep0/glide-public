@@ -11,6 +11,6 @@ module.exports = {
         extensions: ['.ios.js', '.android.js', '.js', '.ts', '.tsx', '.json'],  // Support common extensions
       },
     ],
-    'react-native-reanimated/plugin',
+    'react-native-worklets/plugin',
   ],
 };

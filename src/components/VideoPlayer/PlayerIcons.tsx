@@ -193,6 +193,7 @@ export const RottenTomatoesIcon = ({ size = 20 }: { size?: number }) => (
 
 import Animated, {
     useAnimatedProps,
+    type SharedValue,
 } from 'react-native-reanimated';
 
 // Create Animated SVG components
@@ -201,7 +202,7 @@ const AnimatedPath = Animated.createAnimatedComponent(Path);
 interface AnimatedIconProps {
     size?: number;
     color?: string;
-    progress: Animated.SharedValue<number>; // 0 to 1 (or higher for boost)
+    progress: SharedValue<number>; // 0 to 1 (or higher for boost)
     maxVolume?: number; // For normalising boost
 }
 
@@ -238,7 +239,7 @@ export const AnimatedVolumeIconStandard = ({ size = 20, color = '#fff', progress
 };
 
 // Helper to create threshold opacity
-const useRayOpacity = (progress: Animated.SharedValue<number>, threshold: number) => {
+const useRayOpacity = (progress: SharedValue<number>, threshold: number) => {
     return useAnimatedProps(() => {
         const p = Math.max(0, Math.min(1, progress.value));
         return {

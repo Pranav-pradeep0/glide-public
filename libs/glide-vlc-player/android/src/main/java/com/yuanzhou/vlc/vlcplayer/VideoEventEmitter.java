@@ -34,7 +34,6 @@ class VideoEventEmitter {
     public static final String EVENT_ON_VIDEO_BUFFERING = "onVideoBuffering";
     public static final String EVENT_ON_PAUSED = "onVideoPaused";
     public static final String EVENT_ON_LOAD = "onVideoLoad";
-    public static final String EVENT_RECORDING_STATE = "onRecordingState";
 
     static final String[] Events = {
             EVENT_LOAD_START,
@@ -48,8 +47,7 @@ class VideoEventEmitter {
             EVENT_ON_VIDEO_BUFFERING,
             EVENT_ON_ERROR,
             EVENT_ON_VIDEO_STOPPED,
-            EVENT_ON_LOAD,
-            EVENT_RECORDING_STATE
+            EVENT_ON_LOAD
     };
 
     @Retention(RetentionPolicy.SOURCE)
@@ -65,8 +63,7 @@ class VideoEventEmitter {
             EVENT_ON_VIDEO_BUFFERING,
             EVENT_ON_ERROR,
             EVENT_ON_VIDEO_STOPPED,
-            EVENT_ON_LOAD,
-            EVENT_RECORDING_STATE
+            EVENT_ON_LOAD
     })
 
     @interface VideoEvents {

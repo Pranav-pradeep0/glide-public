@@ -1,5 +1,6 @@
 import React, { forwardRef, useImperativeHandle, useRef } from 'react';
 import {
+    Image,
     StyleSheet,
     requireNativeComponent,
     UIManager,
@@ -9,10 +10,16 @@ import {
     ViewStyle,
     StyleProp,
 } from 'react-native';
-// @ts-ignore - resolveAssetSource doesn't have proper types
-import resolveAssetSource from 'react-native/Libraries/Image/resolveAssetSource';
 
 // Native component type declaration
+interface ResolvedVlcSource {
+    uri?: string;
+    type?: string;
+    mainVer?: number;
+    patchVer?: number;
+    initOptions?: string[];
+}
+
 interface RCTVLCPlayerNativeProps {
     ref?: React.Ref<any>;
     style?: StyleProp<ViewStyle>;
@@ -49,7 +56,6 @@ interface RCTVLCPlayerNativeProps {
     onVideoStopped?: (event: any) => void;
     onVideoBuffering?: (event: any) => void;
     onVideoLoad?: (event: any) => void;
-    onRecordingState?: (event: any) => void;
     onVideoSeek?: (event: any) => void;
     [key: string]: any;
 }
@@ -114,7 +120,6 @@ export interface VLCPlayerProps extends ViewProps {
     onVideoOpen?: (event: any) => void;
     onVideoLoad?: (event: any) => void;
     onVideoSeek?: (event: any) => void;
-    onRecordingState?: (event: any) => void;
 
     /* Wrapper callbacks */
     onLoadStart?: (event: any) => void;
@@ -125,7 +130,6 @@ export interface VLCPlayerProps extends ViewProps {
     onStopped?: (event: any) => void;
     onPlaying?: (event: any) => void;
     onPaused?: (event: any) => void;
-    onRecordingCreated?: (path: string) => void;
     onBuffering?: (event: any) => void;
     onOpen?: (event: any) => void;
     onLoad?: (event: any) => void;
@@ -136,8 +140,6 @@ export interface VLCPlayerRef {
     seek: (pos: number) => void;
     previewSeek: (pos: number) => void;
     resume: (isResume: boolean) => void;
-    startRecording: (path: string) => void;
-    stopRecording: () => void;
     stopPlayer: () => void;
     pausePlayer: () => void; // Added for completeness
     setNativeProps: (nativeProps: any) => void;
@@ -149,7 +151,6 @@ export interface VLCPlayerRef {
 
 const VLCPlayer = forwardRef<VLCPlayerRef, VLCPlayerProps>((props, ref) => {
     const nativeComponentRef = useRef<any>(null);
-    const lastRecordingRef = useRef<string | null>(null);
 
     useImperativeHandle(ref, () => ({
         seek: (pos: number) => {
@@ -162,12 +163,6 @@ const VLCPlayer = forwardRef<VLCPlayerRef, VLCPlayerProps>((props, ref) => {
         },
         resume: (isResume: boolean) => {
             setNativeProps({ resume: isResume });
-        },
-        startRecording: (path: string) => {
-            dispatchCommand('startRecording', [path]);
-        },
-        stopRecording: () => {
-            dispatchCommand('stopRecording', []);
         },
         stopPlayer: () => {
             dispatchCommand('stopPlayer', []);
@@ -199,13 +194,17 @@ const VLCPlayer = forwardRef<VLCPlayerRef, VLCPlayerProps>((props, ref) => {
     };
 
     const dispatchCommand = (command: string, args: any[]) => {
-        if (nativeComponentRef.current) {
-            UIManager.dispatchViewManagerCommand(
-                findNodeHandle(nativeComponentRef.current),
-                UIManager.getViewManagerConfig('RCTVLCPlayer').Commands[command],
-                args
-            );
+        if (!nativeComponentRef.current) {
+            return;
         }
+        const handle = findNodeHandle(nativeComponentRef.current);
+        if (handle == null) {
+            return;
+        }
+        const config = UIManager.getViewManagerConfig('RCTVLCPlayer') as {
+            Commands: Record<string, number>;
+        };
+        UIManager.dispatchViewManagerCommand(handle, config.Commands[command], args);
     };
 
     // Callback wrappers
@@ -249,22 +248,13 @@ const VLCPlayer = forwardRef<VLCPlayerRef, VLCPlayerProps>((props, ref) => {
         props.onLoad?.(event.nativeEvent);
     };
 
-    const _onRecordingState = (event: NativeSyntheticEvent<any>) => {
-        if (lastRecordingRef.current === event.nativeEvent.recordPath) {
-            return;
-        }
-        if (!event.nativeEvent.isRecording && event.nativeEvent.recordPath) {
-            lastRecordingRef.current = event.nativeEvent.recordPath;
-            props.onRecordingCreated?.(lastRecordingRef.current!);
-        }
-    };
-
     const _onSeek = (event: NativeSyntheticEvent<any>) => {
         props.onSeek?.(event.nativeEvent);
     };
 
     // Render logic
-    const source = resolveAssetSource(props.source) || {};
+    const source: ResolvedVlcSource =
+        (Image.resolveAssetSource(props.source) as ResolvedVlcSource | null) || {};
     let uri = source.uri || '';
     if (uri && uri.match(/^\//)) {
         uri = `file://${uri}`;
@@ -316,7 +306,6 @@ const VLCPlayer = forwardRef<VLCPlayerRef, VLCPlayerProps>((props, ref) => {
             onVideoStopped={_onStopped}
             onVideoBuffering={_onBuffering}
             onVideoLoad={_onLoad}
-            onRecordingState={_onRecordingState}
             onVideoSeek={_onSeek}
         />
     );

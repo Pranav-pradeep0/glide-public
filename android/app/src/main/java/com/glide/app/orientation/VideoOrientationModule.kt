@@ -13,13 +13,13 @@ class VideoOrientationModule(reactContext: ReactApplicationContext) : ReactConte
 
     @ReactMethod
     fun lockToPortrait() {
-        val activity = currentActivity
+        val activity = reactApplicationContext.currentActivity
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
     }
 
     @ReactMethod
     fun lockToLandscape() {
-        val activity = currentActivity
+        val activity = reactApplicationContext.currentActivity
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
     }
 
@@ -29,7 +29,7 @@ class VideoOrientationModule(reactContext: ReactApplicationContext) : ReactConte
         // This allows all 4 orientations (if device supports) and respects the user holding the device 
         // *even if* system auto-rotate is off (because we are enforcing it for this activity).
         // It also handles the "initial state" correctly without delay.
-        val activity = currentActivity
+        val activity = reactApplicationContext.currentActivity
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
     }
 
@@ -37,7 +37,7 @@ class VideoOrientationModule(reactContext: ReactApplicationContext) : ReactConte
     fun disableAuto() {
         // To "lock" the current orientation, we ask the system what the configuration is right now,
         // and then explicitly set that as the requested orientation.
-        val activity = currentActivity ?: return
+        val activity = reactApplicationContext.currentActivity ?: return
         
         val configuration = activity.resources.configuration
         val rotation = activity.windowManager.defaultDisplay.rotation
@@ -64,7 +64,7 @@ class VideoOrientationModule(reactContext: ReactApplicationContext) : ReactConte
 
     @ReactMethod
     fun release() {
-        val activity = currentActivity
+        val activity = reactApplicationContext.currentActivity
         // Reset to UNSPECIFIED to let the system decide (usually means following system settings)
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
     }

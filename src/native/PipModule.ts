@@ -81,7 +81,9 @@ export function usePipModeListener(): boolean {
             return;
         }
 
-        const eventEmitter = new NativeEventEmitter(NativePipModule);
+        const eventEmitter = new NativeEventEmitter<{
+            [PIP_MODE_CHANGED_EVENT]: [PipModeEvent];
+        }>(NativePipModule);
         const subscription = eventEmitter.addListener(
             PIP_MODE_CHANGED_EVENT,
             (event: PipModeEvent) => setIsInPip(event.isInPipMode)

@@ -25,12 +25,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: 'npm'
 
-      # ponytail: --legacy-peer-deps stays until the RN 0.87 dependency alignment (tracker §10.1)
       - name: Install JS dependencies
-        run: npm ci --legacy-peer-deps
+        run: npm ci
 
       - name: Create .env file
         run: |
@@ -146,11 +145,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: 'npm'
 
       - name: Install JS dependencies
-        run: npm ci --legacy-peer-deps
+        run: npm ci
 
       - name: Create .env file
         run: |

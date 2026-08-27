@@ -1071,21 +1071,6 @@ class ReactVlcPlayerView extends TextureView implements
                     // High-frequency — progress handled by polling loop. No-op.
                     break;
 
-                // ─────────────────────────────────────────────────────────────
-                case MediaPlayer.Event.RecordChanged: {
-                    VlcLog.trace("VLC_EVENT", "RecordChanged isRecording=" + event.getRecording());
-                    WritableMap map = createEventMap();
-                    if (map == null)
-                        return;
-                    map.putString("type", "RecordingPath");
-                    map.putBoolean("isRecording", event.getRecording());
-                    if (!event.getRecording() && event.getRecordPath() != null) {
-                        map.putString("recordPath", event.getRecordPath());
-                    }
-                    eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_RECORDING_STATE);
-                    break;
-                }
-
                 default:
                     break;
             }
@@ -1949,18 +1934,6 @@ class ReactVlcPlayerView extends TextureView implements
         _textTrack = track;
         if (mMediaPlayer != null)
             mMediaPlayer.setSpuTrack(track);
-    }
-
-    public void startRecording(String recordingPath) {
-        if (mMediaPlayer == null || recordingPath == null)
-            return;
-        mMediaPlayer.record(recordingPath);
-    }
-
-    public void stopRecording() {
-        if (mMediaPlayer == null)
-            return;
-        mMediaPlayer.record(null);
     }
 
     public void stopPlayer() {

@@ -4,17 +4,18 @@ import {
     View,
     Text,
     TextInput,
+    type TextInputInstance,
     FlatList,
     TouchableOpacity,
     StyleSheet,
     ActivityIndicator,
     Dimensions,
     RefreshControl,
+    Image,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useNavigation } from '@react-navigation/native';
-import FastImage from 'react-native-fast-image';
 import Feather from '@react-native-vector-icons/feather';
 import Animated, { FadeInDown, ZoomInRight } from 'react-native-reanimated';
 
@@ -43,10 +44,10 @@ const VideoThumbnail = React.memo(({ path, duration }: { path: string; duration:
 
     if (thumbnail) {
         return (
-            <FastImage
-                source={{ uri: thumbnail, priority: FastImage.priority.normal }}
+            <Image
+                source={{ uri: thumbnail }}
                 style={styles.thumbnailImage}
-                resizeMode={FastImage.resizeMode.cover}
+                resizeMode="cover"
             />
         );
     }
@@ -154,7 +155,7 @@ export default function SearchScreen() {
     const theme = useTheme();
     const navigation = useNavigation<NavigationProp>();
     const insets = useSafeAreaInsets();
-    const inputRef = useRef<TextInput>(null);
+    const inputRef = useRef<TextInputInstance>(null);
 
     const [viewMode, setViewMode] = useState<ViewMode>('list');
     const [refreshing, setRefreshing] = useState(false);

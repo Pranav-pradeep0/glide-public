@@ -146,7 +146,7 @@ export class DeepLinkService {
         try {
             const url = await Linking.getInitialURL();
             if (__DEV__) {console.log(LOG_PREFIX, 'Initial URL:', url);}
-            return url;
+            return url ?? null;
         } catch (error) {
             console.error(LOG_PREFIX, 'Error getting initial URL:', error);
             return null;

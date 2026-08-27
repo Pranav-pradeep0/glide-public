@@ -4,7 +4,7 @@ import { FileService } from '@/services/FileService';
 import { useAppStore } from '@/store/appStore';
 import { useTheme } from '@/hooks/useTheme';
 import { useVideoIndexStore } from '@/store/videoIndexStore';
-import { ErrorBoundary } from 'ErrorBoundary';
+import { ErrorBoundary } from './ErrorBoundary';
 import React, { useEffect, useState, useRef } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';

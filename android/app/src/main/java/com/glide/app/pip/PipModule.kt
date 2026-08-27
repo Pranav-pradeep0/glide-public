@@ -41,13 +41,13 @@ class PipModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaMod
 
     @ReactMethod
     fun isInPipMode(promise: Promise) {
-        val activity = currentActivity
+        val activity = reactApplicationContext.currentActivity
         promise.resolve(activity != null && activity.isInPictureInPictureMode)
     }
 
     @ReactMethod
     fun isPipSupported(promise: Promise) {
-        val activity = currentActivity
+        val activity = reactApplicationContext.currentActivity
         if (activity == null) {
             promise.resolve(false)
             return
@@ -67,7 +67,7 @@ class PipModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaMod
      */
     @ReactMethod
     fun finishCurrentActivity(promise: Promise) {
-        val activity = currentActivity
+        val activity = reactApplicationContext.currentActivity
         if (activity == null) {
             promise.resolve(false)
             return

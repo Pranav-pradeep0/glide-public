@@ -124,7 +124,7 @@ gradle.taskGraph.whenReady { graph ->
 def jscFlavor = 'org.webkit:android-jsc:+'
 
 android {
-    ndkVersion "27.0.12077973"
+    ndkVersion rootProject.ext.ndkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
     
@@ -145,19 +145,13 @@ android {
         resValue "string", "StallionProjectId", project.env.get("STALLION_PROJECT_ID")
         resValue "string", "StallionAppToken", project.env.get("STALLION_APP_TOKEN")
 
-        // Ensure NDK uses 16KB page alignment
-        externalNativeBuild {
-            cmake {
-                arguments "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
-            }
-        }
     }
     splits {
         abi {
             reset()
             enable true
             universalApk false
-            include "armeabi-v7a", "arm64-v8a"
+            include(*rootProject.ext.nativeArchitectures)
         }
     }
     signingConfigs {
@@ -188,7 +182,7 @@ android {
             signingConfig hasReleaseSigningConfig ? signingConfigs.release : signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
             shrinkResources true
-            proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
         }
     }
 }

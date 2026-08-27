@@ -10,7 +10,6 @@ import {
     Text,
     StyleSheet,
     FlatList,
-    InteractionManager,
     useWindowDimensions,
     Pressable,
     type NativeScrollEvent,
@@ -148,11 +147,9 @@ const SlideItem = React.memo<SlideItemProps>(
                 setAnimateReady(false);
                 return;
             }
-            const task = InteractionManager.runAfterInteractions(() =>
-                setAnimateReady(true),
-            );
+            const handle = requestIdleCallback(() => setAnimateReady(true));
             return () => {
-                task.cancel();
+                cancelIdleCallback(handle);
                 setAnimateReady(false);
             };
         }, [isActive, shouldAnimate]);

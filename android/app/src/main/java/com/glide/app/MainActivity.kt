@@ -72,7 +72,7 @@ class MainActivity : ReactActivity() {
 
     try {
       val reactApplication = application as? com.facebook.react.ReactApplication
-      val reactContext = reactApplication?.reactNativeHost?.reactInstanceManager?.currentReactContext
+      val reactContext = reactApplication?.reactHost?.currentReactContext
       reactContext?.getNativeModule(PipModule::class.java)
           ?.onPictureInPictureModeChanged(isInPictureInPictureMode)
     } catch (e: Exception) {

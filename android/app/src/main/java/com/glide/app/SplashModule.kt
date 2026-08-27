@@ -9,7 +9,7 @@ class SplashModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
 
     @ReactMethod
     fun hide() {
-        val activity = currentActivity as? MainActivity ?: return
+        val activity = reactApplicationContext.currentActivity as? MainActivity ?: return
         activity.runOnUiThread {
             activity.onReactReady()
         }

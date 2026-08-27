@@ -10,8 +10,7 @@ import {
     Image,
     Pressable,
 } from 'react-native';
-import Feather from 'react-native-vector-icons/Feather';
-import FastImage from 'react-native-fast-image';
+import Feather from '@react-native-vector-icons/feather';
 import { FFprobeKit } from 'react-native-ffmpeg-kit';
 import { useTheme } from '@/hooks/useTheme';
 import { VideoFile, VideoHistoryEntry } from '@/types';
@@ -311,13 +310,13 @@ export const VideoOptionsBottomSheet: React.FC<VideoOptionsProps> = ({
                                             style={StyleSheet.absoluteFill}
                                             resizeMode="cover"
                                             blurRadius={10}
-                                        /><View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0, 0, 0, 0.51)' }} />
+                                        /><View style={{ ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0, 0, 0, 0.51)' }} />
 
                                         {/* Playable Content */}
-                                        <FastImage
+                                        <Image
                                             source={{ uri: thumbnail }}
                                             style={StyleSheet.absoluteFill}
-                                            resizeMode={FastImage.resizeMode.contain}
+                                            resizeMode="contain"
                                         />
                                     </>
                                 ) : (
@@ -389,7 +388,7 @@ const styles = StyleSheet.create({
         justifyContent: 'flex-end',
     },
     backdrop: {
-        ...StyleSheet.absoluteFillObject,
+        ...StyleSheet.absoluteFill,
         backgroundColor: 'rgba(0,0,0,0.5)',
     },
     sheet: {
@@ -471,7 +470,7 @@ const styles = StyleSheet.create({
         shadowRadius: 8,
     },
     playOverlay: {
-        ...StyleSheet.absoluteFillObject,
+        ...StyleSheet.absoluteFill,
         alignItems: 'center',
         justifyContent: 'center',
     },

@@ -14,6 +14,10 @@ interface ParsedSegment {
     color?: string;
 }
 
+// React Native 0.87 made style properties readonly. Both builders below assemble a
+// style by mutation, so they need a writable view of the same shape.
+type WritableTextStyle = {-readonly [K in keyof TextStyle]: TextStyle[K]};
+
 interface FlattenedBaseTextStyle extends TextStyle {
     fontFamily?: string;
     fontWeight?: TextStyle['fontWeight'];
@@ -71,7 +75,7 @@ export class SubtitleHtmlParser {
         segment: ParsedSegment,
         baseStyle: FlattenedBaseTextStyle
     ): TextStyle {
-        const segmentStyle: TextStyle = {};
+        const segmentStyle: WritableTextStyle = {};
         const baseFontFamily = baseStyle.fontFamily;
         const baseFontWeight = baseStyle.fontWeight;
         const useCustomFont = !!baseFontFamily && this.canUseCustomFont(segment.text);
@@ -232,7 +236,7 @@ export class SubtitleHtmlParser {
     }
 
     static resolveContainerTextStyle(baseStyle: FlattenedBaseTextStyle): TextStyle {
-        const containerStyle: TextStyle = { ...baseStyle };
+        const containerStyle: WritableTextStyle = { ...baseStyle };
         delete containerStyle.color;
         delete containerStyle.fontFamily;
         delete containerStyle.fontStyle;
