@@ -1,20 +1,25 @@
 // components/VideoPlayer/BookmarkPanel.tsx
-import React, { useMemo, memo, useCallback } from 'react';
+import React, { useMemo, memo, useCallback, useState } from 'react';
 import { View, Text, Pressable, StyleSheet, ScrollView } from 'react-native';
 import Animated, {
     useAnimatedStyle,
+    useAnimatedReaction,
     useSharedValue,
+    runOnJS,
     withTiming,
     Easing,
 } from 'react-native-reanimated';
 import { Feather } from '@react-native-vector-icons/feather';
+import type { SharedValue } from 'react-native-reanimated';
 import { VideoBookmark } from '@/types';
+import { findActiveBookmarkId } from '@/hooks/video-player/types';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 interface BookmarkPanelProps {
     visible: boolean;
     bookmarks: VideoBookmark[];
-    currentTime: number;
+    /** Highlighting reads this on the UI thread, so progress never renders the screen. */
+    currentTime: SharedValue<number>;
     onClose: () => void;
     onSelectBookmark: (timestamp: number) => void;
     onDeleteBookmark: (bookmarkId: string) => void;
@@ -130,6 +135,25 @@ export const BookmarkPanel: React.FC<BookmarkPanelProps> = memo(({
         return [...bookmarks].sort((a, b) => a.timestamp - b.timestamp);
     }, [bookmarks]);
 
+    // Highlight the bookmark the playhead is sitting on. The comparison runs on the UI
+    // thread against every frame's position, but only crossing into or out of a
+    // bookmark's window renders anything, and only while the panel is open.
+    const [activeBookmarkId, setActiveBookmarkId] = useState<string | null>(null);
+    const timeline = useMemo(
+        () => sortedBookmarks.map((bookmark) => ({ id: bookmark.id, timestamp: bookmark.timestamp })),
+        [sortedBookmarks]
+    );
+
+    useAnimatedReaction(
+        () => (visible ? findActiveBookmarkId(timeline, currentTime.value) : null),
+        (id, previous) => {
+            if (id !== previous) {
+                runOnJS(setActiveBookmarkId)(id);
+            }
+        },
+        [timeline, visible]
+    );
+
     const handleSelectAndClose = useCallback((timestamp: number) => {
         onSelectBookmark(timestamp);
         onClose();
@@ -185,7 +209,7 @@ export const BookmarkPanel: React.FC<BookmarkPanelProps> = memo(({
                         </View>
                     ) : (
                         sortedBookmarks.map((bookmark, index) => {
-                            const isActive = Math.abs(currentTime - bookmark.timestamp) < 2;
+                            const isActive = bookmark.id === activeBookmarkId;
                             return (
                                 <BookmarkItem
                                     key={bookmark.id}
@@ -206,10 +230,12 @@ export const BookmarkPanel: React.FC<BookmarkPanelProps> = memo(({
 }, (prevProps, nextProps) => {
     // Optimize re-renders - only update when necessary
     if (prevProps.visible !== nextProps.visible) {return false;}
-    if (prevProps.bookmarks.length !== nextProps.bookmarks.length) {return false;}
-    if (prevProps.onSelectBookmark !== nextProps.onSelectBookmark) {return false;} // NEW: Check for callback updates
-    if (Math.abs(prevProps.currentTime - nextProps.currentTime) < 1) {return true;} // Skip minor time updates
-    return false;
+    // Reference, not length: editing a bookmark's timestamp must re-render too.
+    if (prevProps.bookmarks !== nextProps.bookmarks) {return false;}
+    if (prevProps.onSelectBookmark !== nextProps.onSelectBookmark) {return false;}
+    if (prevProps.onDeleteBookmark !== nextProps.onDeleteBookmark) {return false;}
+    // currentTime is a SharedValue with a stable identity; highlighting is handled inside.
+    return true;
 });
 
 BookmarkPanel.displayName = 'BookmarkPanel';

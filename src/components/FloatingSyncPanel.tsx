@@ -25,7 +25,8 @@ interface FloatingSyncPanelProps {
     onChange: (value: number) => void;
     onClose: () => void;
     subtitleCues?: SubtitleCue[];
-    currentTime?: number;
+    /** Read at the moment of an action; the player screen does not re-render on progress. */
+    currentTimeRef: React.MutableRefObject<number>;
     videoPath?: string;
     subtitleLanguage?: string;
 }
@@ -36,7 +37,7 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
     onChange,
     onClose,
     subtitleCues = [],
-    currentTime = 0,
+    currentTimeRef,
     videoPath,
     subtitleLanguage,
 }) => {
@@ -46,6 +47,9 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
     const [isFocused, setIsFocused] = useState(false);
     const [isListening, setIsListening] = useState(false);
     const inputRef = useRef<TextInput>(null);
+    // Matching and offset calculation must use the same playback instant. Playback keeps
+    // moving while transcription runs and while the user reviews the matches.
+    const matchReferenceTimeRef = useRef(0);
 
     // Format value with sign and unit
     const formattedValue = useMemo(() => {
@@ -75,15 +79,20 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
         }
     }, [searchMode]);
 
-    const handleSearch = useCallback((text: string) => {
+    const updateSearch = useCallback((text: string, referenceTime: number) => {
         setQuery(text);
         if (text.length >= 2 && subtitleCues.length > 0) {
-            const matches = SubtitleSyncService.findMatchingCues(subtitleCues, text, currentTime);
+            matchReferenceTimeRef.current = referenceTime;
+            const matches = SubtitleSyncService.findMatchingCues(subtitleCues, text, referenceTime);
             setResults(matches);
         } else {
             setResults([]);
         }
-    }, [subtitleCues, currentTime]);
+    }, [subtitleCues]);
+
+    const handleSearch = useCallback((text: string) => {
+        updateSearch(text, currentTimeRef.current);
+    }, [currentTimeRef, updateSearch]);
 
     const handleAutoListen = useCallback(async () => {
         if (!videoPath || isListening) {return;}
@@ -94,7 +103,8 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
             setResults([]); // Clear previous matches immediately
 
             // Extract 10 seconds of audio around the current time
-            const extractStart = Math.max(0, currentTime - 5);
+            const referenceTime = currentTimeRef.current;
+            const extractStart = Math.max(0, referenceTime - 5);
             const audioClip = await AudioExtractor.extractAudioChunk(videoPath, extractStart, 10);
 
             if (audioClip) {
@@ -141,8 +151,7 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
                 });
 
                 if (text && text.trim()) {
-                    // This will trigger the search with the fresh text
-                    handleSearch(text);
+                    updateSearch(text, referenceTime);
                 } else {
                     setQuery('');
                     setResults([]);
@@ -156,15 +165,15 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
         } finally {
             setIsListening(false);
         }
-    }, [videoPath, currentTime, isListening, handleSearch, subtitleLanguage]);
+    }, [videoPath, currentTimeRef, isListening, updateSearch, subtitleLanguage]);
 
     const applySync = useCallback((match: MatchResult) => {
-        const offset = SubtitleSyncService.calculateOffset(match.cue, currentTime);
+        const offset = SubtitleSyncService.calculateOffset(match.cue, matchReferenceTimeRef.current);
         onChange(offset);
         setSearchMode(false);
         setQuery('');
         setResults([]);
-    }, [currentTime, onChange]);
+    }, [onChange]);
 
     const formatMatchTime = (seconds: number) => {
         const m = Math.floor(seconds / 60);

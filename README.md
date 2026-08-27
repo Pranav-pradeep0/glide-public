@@ -41,7 +41,8 @@ Glide includes a floating sync panel with two ways to fix drift:
 Auto-listen details:
 - FFmpeg extracts a short mono 16kHz WAV clip.
 - A quick RMS check skips silent segments to avoid wasted API calls.
-- Groq Whisper transcription powers a text query.
+- A Cloudflare Worker proxy sends the clip to Groq transcription without packaging a
+  provider credential in the app.
 - Matches are ranked by proximity and similarity, and then the offset is calculated and applied.
 
 Key files:
@@ -145,16 +146,17 @@ Glide is not trying to replace any media player. Instead, it is pushing the play
 - React Native 0.78
 - Custom VLC bridge (`@glide/vlc-player`)
 - FFmpeg/FFprobe via `react-native-ffmpeg-kit`
-- Groq Whisper for transcription and Llama 3.3 for recap
+- Cloudflare Worker AI proxy for Groq transcription and recap
 - Zustand + MMKV for state and persistence
 
 ## Environment Variables
 
-Copy `.env.example` to `.env` and fill in your keys.
+Copy `.env.example` to `.env` and fill in the client configuration.
 
 - SubDL API key for subtitle search and download
-- Groq API key for speech-to-text and recap
 - OMDB API key for metadata (optional)
+- `AI_PROXY_URL` for speech-to-text and recap; the Groq key belongs only in the
+  Cloudflare Worker secret store and must never be added to the mobile `.env`
 
 ## Getting Started
 

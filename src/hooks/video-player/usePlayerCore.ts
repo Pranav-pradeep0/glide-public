@@ -14,7 +14,6 @@ import {
     VLCBufferingEvent,
     UsePlayerCoreReturn,
     PLAYER_CONSTANTS,
-    formatTime,
 } from './types';
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
@@ -30,7 +29,6 @@ const PLAY_PAUSE_INTENT_GUARD_MS = 900;
 const initialPlayerState: PlayerState = {
     paused: false,
     duration: 0,
-    currentTime: 0,
     isVideoLoaded: false,
     isPlaying: false,
     isBuffering: false,
@@ -73,7 +71,6 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
 
     // Time tracking — refs are source of truth; state drives display only
     const currentTimeRef = useRef<number>(0);
-    const lastDisplayUpdateRef = useRef<number>(0);
 
     // Resume position (cleared after first use)
     const resumePosRef = useRef<number | null>(getResumePosition?.() ?? null);
@@ -133,11 +130,16 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
         }
     });
 
-    // ── DERIVED VALUES ────────────────────────────────────────────────────────
-
-    const displayTime = useMemo(() => state.currentTime, [state.currentTime]);
-    const formattedTime = useMemo(() => formatTime(displayTime), [displayTime]);
-    const formattedDuration = useMemo(() => formatTime(state.duration), [state.duration]);
+    /**
+     * Duration is the only thing progress and seek events put into React state, and both
+     * must keep the shared value in step with it. Anything below the threshold is decoder
+     * jitter, not a real change.
+     */
+    const syncDuration = useCallback((durSec: number) => {
+        if (Math.abs(durSec - durationShared.value) <= 1.0) {return;}
+        durationShared.value = durSec;
+        setState(prev => ({ ...prev, duration: durSec }));
+    }, [durationShared]);
 
     // ═════════════════════════════════════════════════════════════════════════
     // SEEK IMPLEMENTATION
@@ -223,7 +225,6 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
 
         setState(prev => ({
             ...prev,
-            currentTime: clamped,
             isSeeking: false,
             // When reviving from stopped/ended state, also clear paused so React
             // doesn't re-send paused=true to native and immediately pause the
@@ -372,8 +373,6 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
             lastSyncTimestamp.value = Date.now();
             resumePosRef.current = null;
 
-            setState(prev => ({ ...prev, currentTime: resumeTime }));
-
             // Direct seek — applySeekToVLC can't be used here because
             // state.isVideoLoaded is stale in its closure.
             setTimeout(() => {
@@ -432,21 +431,10 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
             lastSyncPosition.value = timeSec;
         }
 
-        const shouldUpdate = (now - lastDisplayUpdateRef.current) > PLAYER_CONSTANTS.DISPLAY_TIME_UPDATE_INTERVAL;
-        if (shouldUpdate) {
-            lastDisplayUpdateRef.current = now;
-            setState(prev => {
-                const timeChanged = Math.abs(timeSec - prev.currentTime) > 0.1;
-                const durChanged = Math.abs(durSec - prev.duration) > 1.0;
-                if (!timeChanged && !durChanged) {return prev;}
-                return {
-                    ...prev,
-                    currentTime: timeSec,
-                    duration: durChanged ? durSec : prev.duration,
-                };
-            });
-        }
-    }, [currentTimeShared, isScrubbingShared, lastSyncPosition, lastSyncTimestamp,
+        // Position is already in currentTimeRef and currentTimeShared above, so a progress
+        // tick renders nothing. Only a genuine duration change reaches React state.
+        syncDuration(durSec);
+    }, [currentTimeShared, syncDuration, isScrubbingShared, lastSyncPosition, lastSyncTimestamp,
         isPlayingShared, state.paused, playbackRateShared]);
 
     /**
@@ -462,7 +450,7 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
             currentTimeShared.value = 0;
             lastSyncPosition.value = 0;
             lastSyncTimestamp.value = Date.now();
-            setState(prev => ({ ...prev, currentTime: 0, isPlaying: true }));
+            setState(prev => ({ ...prev, isPlaying: true }));
             if (__DEV__) {console.log('[END] repeating from start');}
             return;
         }
@@ -481,7 +469,6 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
         setState(prev => ({
             ...prev,
             paused: true,
-            currentTime: prev.duration,
             isPlaying: false,
             isBuffering: false,
             playerStopped: true,
@@ -620,8 +607,8 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
         lastSyncPosition.value = timeSec;
         lastSyncTimestamp.value = now;
 
-        setState(prev => ({ ...prev, currentTime: timeSec, duration: durSec }));
-    }, [currentTimeShared, lastSyncPosition, lastSyncTimestamp, isScrubbingShared]);
+        syncDuration(durSec);
+    }, [currentTimeShared, syncDuration, lastSyncPosition, lastSyncTimestamp, isScrubbingShared]);
 
     // ── CLEANUP ───────────────────────────────────────────────────────────────
 
@@ -658,9 +645,6 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
         handlePaused,
         handleStopped,
         handleSeek,
-        displayTime,
-        formattedTime,
-        formattedDuration,
     }), [
         videoRef, currentTimeRef, state,
         currentTimeShared, durationShared, isScrubbingShared,
@@ -668,7 +652,6 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
         previewSeek, commitSeek, setIsSeeking, clearResumePosition,
         handleLoad, handleProgress, handleEnd, handleError,
         handleBuffering, handlePlaying, handlePaused, handleStopped, handleSeek,
-        displayTime, formattedTime, formattedDuration,
     ]);
 }
 

@@ -20,7 +20,6 @@ export const PLAYER_CONSTANTS = {
     BUFFERING_TIMEOUT_MS: 300,
     PROGRESS_SAVE_INTERVAL_MS: 2000,
     BOOKMARK_TOAST_DURATION_MS: 3000,
-    DISPLAY_TIME_UPDATE_INTERVAL: 500,
     RESUME_DELAY_MS: 100,
     // Gesture thresholds
     SEEK_SENSITIVITY: 0.10,
@@ -192,10 +191,15 @@ export interface UIState {
 // PLAYER CORE STATE TYPES
 // ============================================================================
 
+/**
+ * Deliberately holds no current time. Playback position advances continuously, so
+ * keeping it here re-rendered every consumer of this state twice a second during idle
+ * playback. Position lives in `currentTimeShared` for anything animated and
+ * `currentTimeRef` for anything that samples it during an event.
+ */
 export interface PlayerState {
     paused: boolean;
     duration: number;
-    currentTime: number;
     isVideoLoaded: boolean;
     isPlaying: boolean;
     isBuffering: boolean;
@@ -275,9 +279,6 @@ export interface UsePlayerCoreReturn {
 
 
     // Display helpers
-    displayTime: number;
-    formattedTime: string;
-    formattedDuration: string;
 }
 
 export interface UsePlayerUIReturn {
@@ -425,6 +426,30 @@ export interface VideoPlayerProps {
 /**
  * Format seconds to MM:SS or H:MM:SS string
  */
+/** Seconds either side of a bookmark that count as "at" it. */
+export const BOOKMARK_ACTIVE_WINDOW_SECONDS = 2;
+
+/**
+ * Nearest bookmark within the active window, or null. Runs as a worklet on the UI
+ * thread, so it must stay free of closures over anything but its arguments.
+ */
+export function findActiveBookmarkId(
+    timeline: Array<{ id: string; timestamp: number }>,
+    time: number
+): string | null {
+    'worklet';
+    let bestId: string | null = null;
+    let bestDistance = BOOKMARK_ACTIVE_WINDOW_SECONDS;
+    for (let i = 0; i < timeline.length; i++) {
+        const distance = Math.abs(time - timeline[i].timestamp);
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            bestId = timeline[i].id;
+        }
+    }
+    return bestId;
+}
+
 export const formatTime = (seconds: number): string => {
     if (!isFinite(seconds) || seconds < 0) { return '00:00'; }
     const hrs = Math.floor(seconds / 3600);

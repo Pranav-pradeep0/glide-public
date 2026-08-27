@@ -101,6 +101,9 @@ interface UseUpdateInstallerParams {
 // One download at a time, app-wide: the modal and the Settings card share both the
 // destination file and the store slice, so the job id cannot live in a component.
 let activeJobId: number | null = null;
+// Atomic owner for the whole checksum -> download -> verify -> install operation. Store
+// state is for rendering and can be stale inside a second button's callback.
+let activeDownloadOperation: Promise<void> | null = null;
 // stopDownload makes the job promise reject, which is indistinguishable from a network
 // failure, so remember that the rejection was asked for.
 let cancelRequested = false;
@@ -168,7 +171,6 @@ export function useUpdateInstaller({
     const cancelActiveDownload = useCallback(() => {
         if (activeJobId !== null) {
             RNFS.stopDownload(activeJobId);
-            activeJobId = null;
         }
     }, []);
 
@@ -256,7 +258,13 @@ export function useUpdateInstaller({
         }
 
         const expectedHash = await fetchExpectedHash(apkSha256Url);
+        if (cancelRequested) {
+            throw new DownloadError('cancelled', 'Download cancelled.');
+        }
         await safeDelete(PART_PATH);
+        if (cancelRequested) {
+            throw new DownloadError('cancelled', 'Download cancelled.');
+        }
 
         const job = RNFS.downloadFile({
             fromUrl: apkUrl,
@@ -289,6 +297,9 @@ export function useUpdateInstaller({
             activeJobId = null;
         }
 
+        if (cancelRequested) {
+            throw new DownloadError('cancelled', 'Download cancelled.');
+        }
         if (result.statusCode !== 200) {
             throw new DownloadError('network', `The download failed (HTTP ${result.statusCode}).`);
         }
@@ -300,6 +311,9 @@ export function useUpdateInstaller({
         if (actualHash !== expectedHash) {
             throw new DownloadError('integrity', 'The download did not match its published checksum.');
         }
+        if (cancelRequested) {
+            throw new DownloadError('cancelled', 'Download cancelled.');
+        }
 
         // Only a verified file is allowed to take the install path's name.
         await safeDelete(APK_PATH);
@@ -307,44 +321,58 @@ export function useUpdateInstaller({
         return APK_PATH;
     }, [apkSha256Url, apkUrl, cancelActiveDownload, setUpdateInstall]);
 
-    const handleDownloadAndInstall = useCallback(async () => {
-        if (!canDownload || isDownloading) {return;}
+    const handleDownloadAndInstall = useCallback((): Promise<void> => {
+        if (!canDownload) {return Promise.resolve();}
+        if (activeDownloadOperation) {return activeDownloadOperation;}
+
         cancelRequested = false;
         setUpdateInstall({ error: null, isDownloading: true, downloadProgress: 0 });
 
-        try {
-            const path = await download();
-            const cache: UpdateApkCache = {
-                version: normalizeVersion(latestVersion || ''),
-                path,
-                fileName: APK_NAME,
-                savedAt: Date.now(),
-            };
-            // Metadata is written only after the checksum passes.
-            updateStorage.save(cache);
-            setCachedApk(cache);
-            await runInstall(path);
-        } catch (e) {
-            await safeDelete(PART_PATH);
-            if (e instanceof DownloadError) {
-                setError({
-                    kind: e.kind,
-                    message: e.message,
-                    canOpenRelease: e.kind !== 'cancelled',
-                });
-            } else {
-                if (__DEV__) {
-                    console.warn('[useUpdateInstaller] Download failed:', e);
+        const operation = (async () => {
+            try {
+                const path = await download();
+                if (cancelRequested) {
+                    throw new DownloadError('cancelled', 'Download cancelled.');
                 }
-                setError({ kind: 'network', message: 'The update could not be downloaded.', canOpenRelease: true });
+                const cache: UpdateApkCache = {
+                    version: normalizeVersion(latestVersion || ''),
+                    path,
+                    fileName: APK_NAME,
+                    savedAt: Date.now(),
+                };
+                // Metadata is written only after the checksum passes.
+                updateStorage.save(cache);
+                setCachedApk(cache);
+                await runInstall(path);
+            } catch (e) {
+                await safeDelete(PART_PATH);
+                if (e instanceof DownloadError) {
+                    setError({
+                        kind: e.kind,
+                        message: e.message,
+                        canOpenRelease: e.kind !== 'cancelled',
+                    });
+                } else {
+                    if (__DEV__) {
+                        console.warn('[useUpdateInstaller] Download failed:', e);
+                    }
+                    setError({ kind: 'network', message: 'The update could not be downloaded.', canOpenRelease: true });
+                }
+            } finally {
+                setUpdateInstall({ isDownloading: false, downloadProgress: null });
             }
-        } finally {
-            setUpdateInstall({ isDownloading: false, downloadProgress: null });
-        }
+        })();
+
+        activeDownloadOperation = operation;
+        operation.finally(() => {
+            if (activeDownloadOperation === operation) {
+                activeDownloadOperation = null;
+            }
+        });
+        return operation;
     }, [
         canDownload,
         download,
-        isDownloading,
         latestVersion,
         runInstall,
         setCachedApk,

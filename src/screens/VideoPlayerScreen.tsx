@@ -1002,7 +1002,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                 setIsGeneratingRecap(false);
             }
         }
-    }, [recapText, resumePosition, bookmarksHook, player, cleanTitle, videoName, videoPath, tracksHook.subtitleTracks, isNetworkStream]);
+    }, [recapText, resumePosition, isRecapEligible, bookmarksHook, player, cleanTitle, videoName, videoPath, tracksHook.subtitleTracks, isNetworkStream]);
 
     // Inactivity Prompt Logic
     useEffect(() => {
@@ -1218,7 +1218,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                         playInBackground={settingsHook.settings.backgroundPlayEnabled}
                         pipEnabled={pipEnabled}
                         pipPresentationActive={pipPresentationActive}
-                        currentTime={player.currentTimeRef.current}
+                        currentTimeRef={player.currentTimeRef}
                         duration={player.state.duration}
                         videoEnhancement={settingsHook.settings.videoEnhancement}
                         audioTrack={tracksHook.selectedAudioTrackId}
@@ -1251,7 +1251,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                     onChange={syncPanelType === 'audio' ? settingsHook.setAudioDelay : settingsHook.setSubtitleDelay}
                     onClose={() => setSyncPanelType(null)}
                     subtitleCues={tracksHook.subtitleCues}
-                    currentTime={player.currentTimeRef.current}
+                    currentTimeRef={player.currentTimeRef}
                     videoPath={videoPath}
                     subtitleLanguage={tracksHook.subtitleTracks.find(t => t.index === tracksHook.selectedSubtitleTrackIndex)?.language}
                 />
@@ -1313,7 +1313,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                     onTogglePlayPause={handleTogglePlayPause}
                     currentTime={player.currentTimeShared}
                     duration={player.durationShared}
-                    currentTimeSeconds={player.state.currentTime}
+                    currentTimeSeconds={player.currentTimeRef.current}
                     durationSeconds={player.state.duration}
                     seekPreviewTime={gestures.sharedValues.seekTime}
                     isScrubbingShared={player.isScrubbingShared}
@@ -1498,7 +1498,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                 <BookmarkPanel
                     visible={ui.state.bookmarkPanelOpen}
                     bookmarks={bookmarksHook.bookmarks}
-                    currentTime={player.state.currentTime}
+                    currentTime={player.currentTimeShared}
                     onClose={() => ui.closePanel('bookmarkPanel')}
                     onSelectBookmark={bookmarksHook.jumpToBookmark}
                     onDeleteBookmark={bookmarksHook.deleteBookmark}

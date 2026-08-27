@@ -114,6 +114,22 @@ jobs:
             exit 1
           fi
 
+          # Old public tags used vX.Y.Z-build.N. Compare their SemVer portion too, so a
+          # strict tag cannot silently reuse an installed version such as 1.8.1.
+          PREVIOUS_VERSION=$(git tag --list \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-build\.[0-9]+)?$' \
+            | grep -Fvx "$TAG" \
+            | sed -E 's/^v//; s/-build\.[0-9]+$//' \
+            | sort -V \
+            | tail -n 1)
+          if [ -n "$PREVIOUS_VERSION" ]; then
+            NEWEST_VERSION=$(printf '%s\n%s\n' "$PREVIOUS_VERSION" "$VERSION" | sort -V | tail -n 1)
+            if [ "$NEWEST_VERSION" != "$VERSION" ] || [ "$PREVIOUS_VERSION" = "$VERSION" ]; then
+              echo "::error::Version '$VERSION' must be greater than public version '$PREVIOUS_VERSION'."
+              exit 1
+            fi
+          fi
+
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "::error::GitHub Release '$TAG' already exists. Never rebuild a public version in place; bump the patch version."
             exit 1
@@ -204,7 +220,10 @@ jobs:
       - name: Generate changelog from previous final release
         run: |
           set -e
-          LAST_TAG=$(git tag --list --sort=-creatordate | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
+          LAST_TAG=$(git tag --list --sort=-creatordate \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-build\.[0-9]+)?$' \
+            | grep -Fvx "$TAG" \
+            | head -n 1)
           if [ -z "$LAST_TAG" ]; then
             RANGE="HEAD"
             echo "No previous final tag found. Using full history."

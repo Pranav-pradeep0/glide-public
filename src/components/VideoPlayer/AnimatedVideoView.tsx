@@ -38,7 +38,8 @@ interface AnimatedVideoViewProps {
     playInBackground: boolean;
     pipEnabled: boolean;
     pipPresentationActive: boolean;
-    currentTime: number;
+    /** Sampled only when playerKey changes, to resume after a decoder/enhancement remount. */
+    currentTimeRef: React.MutableRefObject<number>;
     duration: number;
 
     // Tracks
@@ -93,7 +94,7 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
             playInBackground,
             pipEnabled,
             pipPresentationActive,
-            currentTime,
+            currentTimeRef,
             duration,
             audioTrack,
             textTrack,
@@ -123,7 +124,9 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
 
             if (playerKey > 0 && duration > 1) {
                 const maxSeek = Math.max(0, duration - END_GUARD_SECONDS);
-                const clampedResume = Math.max(0, Math.min(maxSeek, currentTime));
+                // Read the live position here rather than taking it as a prop: the screen
+                // no longer re-renders on progress, so a prop value would be stale.
+                const clampedResume = Math.max(0, Math.min(maxSeek, currentTimeRef.current));
 
                 if (clampedResume >= MIN_RESUME_SECONDS && clampedResume < maxSeek) {
                     if (__DEV__) {console.log('[AnimatedVideoView] Setting start-time for seamless resume:', clampedResume, 'seconds');}
@@ -234,8 +237,8 @@ function areEqual(prevProps: AnimatedVideoViewProps, nextProps: AnimatedVideoVie
     if (prevProps.playInBackground !== nextProps.playInBackground) {return false;}
     if (prevProps.onEnd !== nextProps.onEnd) {return false;} // Important: Check for onEnd handler updates (auto-play closure)
 
-    // Ignore currentTime and duration changes!
-    // These update frequently but shouldn't trigger re-render unless playerKey also changes.
+    // Ignore duration changes: they must not trigger a re-render unless playerKey also
+    // changes. Position is not a prop at all — it is read from the ref on remount.
 
     // animatedStyle is handled by reanimated
     // Callback references should be stable via useCallback

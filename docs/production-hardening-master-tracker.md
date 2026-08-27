@@ -451,8 +451,9 @@ Settings also never rendered the changelog at all.
 - `[done]` Move download progress, status, error, and cached-APK state into the existing
   zustand store as an `updateInstall` slice. Both surfaces now read one source of truth.
   No new dependency and no context provider: zustand already holds `updateStatus`.
-- `[done]` Move the download job id and the cancellation flag to module scope, so two
-  consumers cannot start two downloads into the same destination file.
+- `[done]` Move the whole checksum/download/install operation, download job id, and
+  cancellation flag to module scope. The operation promise is the atomic owner, so stale
+  component state cannot let two consumers write the same destination file.
 - `[done]` Run the stale-cache sweep once per distinct `latestVersion` rather than once
   per mounted component. A once-per-session flag would have skipped the re-check after
   the update request resolves, leaving a cached APK for a superseded version installable.
@@ -594,24 +595,39 @@ snapshot. The recurring React state update currently reaches these paths:
 - `AnimatedVideoView.currentTime`, ignored by its memo comparison during progress but
   sampled when `playerKey` changes to resume decoder/enhancement recreation.
 
-- `[todo]` Remove recurring `currentTime` updates from the whole `PlayerCoreState`; keep
-  continuous progress in the existing shared value/ref rather than adding another timer,
-  store, event bus, or state framework.
-- `[todo]` Make `PlayerControls` fallbacks initialization/remount fallbacks only. Verify
-  visible time, remaining time, duration, scrubbing, and accessibility text continue to
-  update from Reanimated without a React render cadence.
-- `[todo]` Update bookmark highlighting only while the panel is visible, at the smallest
-  cadence the two-second active window needs, or derive it from the existing shared value.
-  Do not rerender the entire player screen for a hidden panel.
-- `[todo]` Give `FloatingSyncPanel` the existing time ref/shared value or a stable getter
-  and read the current value when matching, extracting, or calculating offset. Do not
-  depend on unrelated parent renders for freshness.
-- `[todo]` Preserve `AnimatedVideoView` resume behavior by sampling
-  `currentTimeRef.current` when `playerKey` changes; verify decoder/enhancement recreation
-  resumes at the current position near the start and near the end.
-- `[todo]` Add a profiler/dev regression check: during idle playback with controls both
-  visible and hidden, progress events must not render `VideoPlayerScreen` or rebuild the
-  gesture tree. Opening bookmarks/sync UI may update only the visible consumer.
+- `[done]` Remove recurring `currentTime` updates from the whole `PlayerCoreState`. The
+  field is gone from `PlayerState` entirely, with a comment on the type recording why, so
+  it cannot be reintroduced by habit. Continuous progress stays in `currentTimeShared`
+  and `currentTimeRef`; no timer, store, event bus, or state framework was added.
+  `DISPLAY_TIME_UPDATE_INTERVAL` and its throttle ref are deleted with it.
+- `[done]` `handleProgress` and `handleSeek` now touch React state only through one
+  `syncDuration` helper, which ignores anything within a second of the known duration.
+  Both keep `durationShared` in step, which `handleSeek` previously did not.
+- `[done]` Delete the dead `displayTime`, `formattedTime`, and `formattedDuration`
+  derived values. Nothing consumed them, and all three recomputed on every tick.
+- `[done]` Make `PlayerControls` fallbacks initialization/remount fallbacks only. They now
+  read `currentTimeRef.current`, which is evaluated only on a real render. The visible
+  time, remaining time, and scrub position already came from Reanimated derived values,
+  so no display path depended on the React cadence.
+- `[done]` Update bookmark highlighting from the shared value, on the UI thread, and only
+  while the panel is visible. Crossing into or out of a bookmark's window is the only
+  thing that renders, and it renders the panel rather than the screen.
+- `[done]` Give `FloatingSyncPanel` the time ref. Manual search captures the live position
+  when the query changes; auto-listen captures it once before extraction and preserves
+  that same reference through matching and offset application, so transcription/user
+  latency cannot become subtitle delay.
+- `[done]` Preserve `AnimatedVideoView` resume behavior. It now takes the ref and samples
+  `currentTimeRef.current` inside the `playerKey`-keyed memo, so resume no longer depends
+  on the parent having re-rendered recently.
+- `[done]` Fix the `BookmarkPanel` memo comparator, which compared `bookmarks.length` and
+  so ignored an edited timestamp. It compares the array reference now.
+- `[done]` Cover the highlight decision with tests: outside the window, both edges, the
+  excluded boundary, overlapping bookmarks resolving to the nearest, and an empty list.
+- `[todo]` Confirm with the React DevTools Profiler that idle playback renders
+  `VideoPlayerScreen` zero times with controls both visible and hidden, and that opening
+  bookmarks or the sync panel updates only that panel. No always-on render counter was
+  added: the Profiler already measures this, and shipping diagnostic scaffolding to do it
+  again is the kind of code this tracker exists to remove.
 - `[todo]` Device-test time labels, rapid seek/scrub, bookmark activation, subtitle/audio
   sync matching, pause/resume, PiP, rate changes, source change, and enhancement recreation.
 
