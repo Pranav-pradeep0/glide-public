@@ -14,7 +14,6 @@ import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
-import android.util.Log;
 import android.view.Surface;
 import android.view.TextureView;
 import android.view.View;
@@ -29,47 +28,36 @@ import com.facebook.react.bridge.WritableArray;
 import com.facebook.react.uimanager.ThemedReactContext;
 
 import org.videolan.libvlc.interfaces.IVLCVout;
-import org.videolan.libvlc.LibVLC;
 import org.videolan.libvlc.Media;
 import org.videolan.libvlc.MediaPlayer;
 import org.videolan.libvlc.Dialog;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import android.os.ParcelFileDescriptor;
 
-import android.support.v4.media.session.MediaSessionCompat;
-import android.support.v4.media.session.PlaybackStateCompat;
-import android.support.v4.media.MediaMetadataCompat;
 import android.app.Activity;
 import androidx.lifecycle.Lifecycle;
 import androidx.lifecycle.LifecycleEventObserver;
 import androidx.lifecycle.LifecycleOwner;
-import androidx.core.app.NotificationCompat;
-import androidx.core.app.NotificationManagerCompat;
-import androidx.media.session.MediaButtonReceiver;
-import android.app.PendingIntent;
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
 import android.os.Build;
 
 @SuppressLint("ViewConstructor")
 class ReactVlcPlayerView extends TextureView implements
         LifecycleEventListener,
         TextureView.SurfaceTextureListener,
-        AudioManager.OnAudioFocusChangeListener {
+        AudioManager.OnAudioFocusChangeListener,
+        VlcMedia3Player.Host {
 
     // =========================================================================
     // Constants
     // =========================================================================
 
-    private static final String TAG = "ReactVlcPlayerView";
 
     private static final String NOTIFICATION_CHANNEL_ID = "vlc_media_player_channel";
-    private static final int NOTIFICATION_ID = 1001;
 
     // Seek
     private static final long SEEK_TIME_EPSILON_MS = 60L;
@@ -89,6 +77,9 @@ class ReactVlcPlayerView extends TextureView implements
     private static final int RESIZE_DEBOUNCE_MS = 50;
 
     // Best-fit thresholds (hysteresis)
+    /** A real sample aspect ratio reduces to small terms; 32:27 and 64:45 are typical. */
+    private static final int MAX_PLAUSIBLE_SAR_TERM = 1000;
+
     private static final float BEST_FIT_ENTER_CROP_RATIO = 0.06f;
     private static final float BEST_FIT_EXIT_CROP_RATIO = 0.10f;
     private static final float BEST_FIT_ENTER_BAR_RATIO = 0.05f;
@@ -100,11 +91,12 @@ class ReactVlcPlayerView extends TextureView implements
 
     private final VideoEventEmitter eventEmitter;
     private final ThemedReactContext themedReactContext;
+    /** Owns the native LibVLC objects; this view only borrows the player. */
+    private final VlcPlaybackEngine mEngine = new VlcPlaybackEngine();
     private Lifecycle mObservedLifecycle = null;
     private final AudioManager audioManager;
 
     // Player instances
-    private LibVLC libvlc;
     private MediaPlayer mMediaPlayer = null;
 
     // Surface
@@ -176,6 +168,8 @@ class ReactVlcPlayerView extends TextureView implements
 
     // True once Buffering=100% should trigger play() after a codec-flush seek
     private volatile boolean mPlayAfterBufferComplete = false;
+    /** Mirrors the last buffering event, so the media session can report STATE_BUFFERING. */
+    private volatile boolean mIsBuffering = false;
 
     // Monotonic counter; incremented on every new seek. Lets delayed callbacks
     // discard themselves if a newer seek has already taken over.
@@ -218,7 +212,6 @@ class ReactVlcPlayerView extends TextureView implements
 
     private ExecutorService seekExecutor = Executors.newSingleThreadExecutor();
     private String mVideoInfoHash = null;
-    private ParcelFileDescriptor currentPfd = null;
 
     // Cached equalizer instance — reused rather than re-allocated on every call
     private MediaPlayer.Equalizer mEqualizer = null;
@@ -242,8 +235,6 @@ class ReactVlcPlayerView extends TextureView implements
 
     // ─── MEDIA SESSION ───────────────────────────────────────────────────────
 
-    private MediaSessionCompat mMediaSession;
-    private NotificationManagerCompat mNotificationManager;
     private String mVideoTitle = "Video";
     private String mVideoArtist = "Glide";
 
@@ -316,7 +307,6 @@ class ReactVlcPlayerView extends TextureView implements
         this.setSurfaceTextureListener(this);
         this.addOnLayoutChangeListener(onLayoutChangeListener);
         context.addLifecycleEventListener(this);
-        initMediaSession();
     }
 
     @Override
@@ -367,7 +357,7 @@ class ReactVlcPlayerView extends TextureView implements
         }
         Activity activity = themedReactContext.getCurrentActivity();
         if (!(activity instanceof LifecycleOwner)) {
-            Log.w(TAG, "[LIFECYCLE] host Activity is not a LifecycleOwner; ON_STOP pausing unavailable");
+            VlcLog.warn("LIFECYCLE", "host Activity is not a LifecycleOwner; ON_STOP pausing unavailable");
             return;
         }
         mObservedLifecycle = ((LifecycleOwner) activity).getLifecycle();
@@ -382,7 +372,7 @@ class ReactVlcPlayerView extends TextureView implements
     }
 
     private void onHostStart() {
-        Log.d(TAG, "[LIFECYCLE] ON_START | isSurfaceViewDestroyed=" + isSurfaceViewDestroyed
+        VlcLog.trace("LIFECYCLE", "ON_START | isSurfaceViewDestroyed=" + isSurfaceViewDestroyed
                 + " wasPlayingBeforeHostStop=" + wasPlayingBeforeHostStop
                 + " isHostStopped=" + isHostStopped
                 + " isPaused=" + isPaused);
@@ -392,12 +382,12 @@ class ReactVlcPlayerView extends TextureView implements
             if (!vlcOut.areViewsAttached()) {
                 vlcOut.attachViews(onNewVideoLayoutListener);
                 isSurfaceViewDestroyed = false;
-                Log.d(TAG, "[LIFECYCLE] ON_START: re-attached VLC views");
+                VlcLog.trace("LIFECYCLE", "ON_START: re-attached VLC views");
             }
             if (wasPlayingBeforeHostStop && mPausedForHostStop && !isPaused) {
                 if (requestAudioFocusInternal()) {
                     mMediaPlayer.play();
-                    Log.i(TAG, "[LIFECYCLE] ON_START: resumed playback");
+                    VlcLog.trace("LIFECYCLE", "ON_START: resumed playback");
                 }
             }
         }
@@ -409,7 +399,7 @@ class ReactVlcPlayerView extends TextureView implements
         wasPlayingBeforeHostStop = (mMediaPlayer != null && mMediaPlayer.isPlaying()) || !isPaused;
         isHostStopped = true;
 
-        Log.d(TAG, "[LIFECYCLE] ON_STOP | wasPlaying=" + wasPlayingBeforeHostStop
+        VlcLog.trace("LIFECYCLE", "ON_STOP | wasPlaying=" + wasPlayingBeforeHostStop
                 + " playInBackground=" + playInBackground);
 
         // Reaching ON_STOP means this is a real background transition, never PiP.
@@ -449,13 +439,13 @@ class ReactVlcPlayerView extends TextureView implements
         @Override
         public void onSurfacesCreated(IVLCVout ivlcVout) {
             isSurfaceViewDestroyed = false;
-            Log.d(TAG, "[SURFACE] onSurfacesCreated");
+            VlcLog.trace("SURFACE", "onSurfacesCreated");
         }
 
         @Override
         public void onSurfacesDestroyed(IVLCVout ivlcVout) {
             isSurfaceViewDestroyed = true;
-            Log.d(TAG, "[SURFACE] onSurfacesDestroyed | isHostStopped=" + isHostStopped + " playInBackground="
+            VlcLog.trace("SURFACE", "onSurfacesDestroyed | isHostStopped=" + isHostStopped + " playInBackground="
                     + playInBackground);
 
             if (isHostStopped && !shouldKeepPlayingWhileHostStopped()) {
@@ -470,7 +460,7 @@ class ReactVlcPlayerView extends TextureView implements
 
     @Override
     public void onAudioFocusChange(int focusChange) {
-        Log.d(TAG, "[AUDIO_FOCUS] change=" + focusChange);
+        VlcLog.trace("AUDIO_FOCUS", "change=" + focusChange);
         switch (focusChange) {
             case AudioManager.AUDIOFOCUS_GAIN:
                 mHasAudioFocus = true;
@@ -485,12 +475,12 @@ class ReactVlcPlayerView extends TextureView implements
                         if (allowResume && !isPaused) {
                             mMediaPlayer.play();
                             setKeepScreenOn(true);
-                            Log.i(TAG, "[AUDIO_FOCUS] GAIN → resumed playback");
+                            VlcLog.trace("AUDIO_FOCUS", "GAIN → resumed playback");
                             WritableMap map = createEventMap();
                             if (map != null)
                                 emitPlayingEvent(map);
                         } else {
-                            Log.i(TAG, "[AUDIO_FOCUS] GAIN -> host paused, background disabled; skip resume");
+                            VlcLog.trace("AUDIO_FOCUS", "GAIN -> host paused, background disabled; skip resume");
                         }
                     }
                 }
@@ -505,7 +495,7 @@ class ReactVlcPlayerView extends TextureView implements
                     mPausedForAudioFocus = true;
                     mMediaPlayer.pause();
                     setKeepScreenOn(false);
-                    Log.i(TAG, "[AUDIO_FOCUS] LOSS → paused");
+                    VlcLog.trace("AUDIO_FOCUS", "LOSS → paused");
                     WritableMap map = createEventMap();
                     if (map != null)
                         emitPausedEvent(map);
@@ -519,7 +509,7 @@ class ReactVlcPlayerView extends TextureView implements
                         mPausedForAudioFocus = true;
                         mMediaPlayer.pause();
                         setKeepScreenOn(false);
-                        Log.i(TAG, "[AUDIO_FOCUS] LOSS_TRANSIENT → paused");
+                        VlcLog.trace("AUDIO_FOCUS", "LOSS_TRANSIENT → paused");
                         WritableMap map = createEventMap();
                         if (map != null)
                             emitPausedEvent(map);
@@ -531,7 +521,7 @@ class ReactVlcPlayerView extends TextureView implements
                 if (mMediaPlayer != null) {
                     mVolumeBeforeDuck = preVolume;
                     mMediaPlayer.setVolume(30);
-                    Log.d(TAG, "[AUDIO_FOCUS] DUCK → volume set to 30%");
+                    VlcLog.trace("AUDIO_FOCUS", "DUCK → volume set to 30%");
                 }
                 break;
         }
@@ -550,7 +540,7 @@ class ReactVlcPlayerView extends TextureView implements
                             mResumeOnFocusGain = false;
                             mMediaPlayer.pause();
                             setKeepScreenOn(false);
-                            Log.i(TAG, "[NOISY] headphones disconnected → paused");
+                            VlcLog.trace("NOISY", "headphones disconnected → paused");
                             WritableMap map = createEventMap();
                             if (map != null)
                                 emitPausedEvent(map);
@@ -560,9 +550,9 @@ class ReactVlcPlayerView extends TextureView implements
             };
             IntentFilter filter = new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY);
             themedReactContext.registerReceiver(mNoisyReceiver, filter);
-            Log.d(TAG, "[NOISY] receiver registered");
+            VlcLog.trace("NOISY", "receiver registered");
         } catch (Exception e) {
-            Log.e(TAG, "[NOISY] register error: " + e.getMessage());
+            VlcLog.error("NOISY", "register error: " + e.getMessage());
         }
     }
 
@@ -571,9 +561,9 @@ class ReactVlcPlayerView extends TextureView implements
             try {
                 themedReactContext.unregisterReceiver(mNoisyReceiver);
                 mNoisyReceiver = null;
-                Log.d(TAG, "[NOISY] receiver unregistered");
+                VlcLog.trace("NOISY", "receiver unregistered");
             } catch (Exception e) {
-                Log.e(TAG, "[NOISY] unregister error: " + e.getMessage());
+                VlcLog.error("NOISY", "unregister error: " + e.getMessage());
             }
         }
     }
@@ -601,16 +591,16 @@ class ReactVlcPlayerView extends TextureView implements
                 mHasAudioFocus = true;
                 mResumeOnFocusGain = false;
                 registerNoisyReceiver();
-                Log.d(TAG, "[AUDIO_FOCUS] request GRANTED");
+                VlcLog.trace("AUDIO_FOCUS", "request GRANTED");
             } else if (result == AudioManager.AUDIOFOCUS_REQUEST_DELAYED) {
                 mHasAudioFocus = false;
                 mResumeOnFocusGain = true;
-                Log.i(TAG, "[AUDIO_FOCUS] request DELAYED — will resume on gain");
+                VlcLog.trace("AUDIO_FOCUS", "request DELAYED — will resume on gain");
                 return false;
             } else {
                 mHasAudioFocus = false;
                 mResumeOnFocusGain = false;
-                Log.w(TAG, "[AUDIO_FOCUS] request FAILED result=" + result);
+                VlcLog.warn("AUDIO_FOCUS", "request FAILED result=" + result);
             }
         }
 
@@ -630,7 +620,7 @@ class ReactVlcPlayerView extends TextureView implements
             audioManager.abandonAudioFocus(this);
         }
         mHasAudioFocus = false;
-        Log.d(TAG, "[AUDIO_FOCUS] abandoned");
+        VlcLog.trace("AUDIO_FOCUS", "abandoned");
     }
 
     // =========================================================================
@@ -723,7 +713,7 @@ class ReactVlcPlayerView extends TextureView implements
             if (width > 0 && height > 0) {
                 boolean sizeChanged = (width != (oldRight - oldLeft)) || (height != (oldBottom - oldTop));
                 if (sizeChanged) {
-                    Log.d(TAG, "[LAYOUT] size changed → " + width + "x" + height);
+                    VlcLog.trace("LAYOUT", "size changed → " + width + "x" + height);
                     if (mMediaPlayer != null) {
                         requestResizeMode();
                     }
@@ -750,7 +740,7 @@ class ReactVlcPlayerView extends TextureView implements
     private void emitPausedEvent(WritableMap map) {
         WritableMap eventMap = map != null ? map : Arguments.createMap();
         eventMap.putString("type", "Paused");
-        Log.d(TAG, "[EVENT] → Paused");
+        VlcLog.trace("EVENT", "→ Paused");
         eventEmitter.sendEvent(eventMap, VideoEventEmitter.EVENT_ON_PAUSED);
     }
 
@@ -758,10 +748,10 @@ class ReactVlcPlayerView extends TextureView implements
         WritableMap eventMap = map != null ? map : Arguments.createMap();
         eventMap.putString("type", "Playing");
         if (isPaused) {
-            Log.d(TAG, "[EVENT] Playing suppressed — isPaused=true (user intent)");
+            VlcLog.trace("EVENT", "Playing suppressed — isPaused=true (user intent)");
             return;
         }
-        Log.d(TAG, "[EVENT] → Playing");
+        VlcLog.trace("EVENT", "→ Playing");
         eventEmitter.sendEvent(eventMap, VideoEventEmitter.EVENT_ON_IS_PLAYING);
     }
 
@@ -814,7 +804,7 @@ class ReactVlcPlayerView extends TextureView implements
             }
             return applied;
         } catch (Exception e) {
-            Log.w(TAG, "[ENHANCE] live apply failed: " + e.getMessage());
+            VlcLog.warn("ENHANCE", "live apply failed: " + e.getMessage());
             return false;
         }
     }
@@ -855,25 +845,25 @@ class ReactVlcPlayerView extends TextureView implements
                     // actual playback at the new position.
                     if (pendingSeekPlay != null) {
                         pendingSeekPlay = null;
-                        Log.d(TAG, "[VLC_EVENT] Playing: cleared seek suppression sentinel");
+                        VlcLog.trace("VLC_EVENT", "Playing: cleared seek suppression sentinel");
                     }
                     mLastSeekPlayTimestampMs = -1L;
                     mPausedForAudioFocus = false;
                     mPausedForNoisyEvent = false;
 
-                    Log.i(TAG, "[VLC_EVENT] Playing | isPaused=" + isPaused + " pos=" + mMediaPlayer.getPosition()
+                    VlcLog.trace("VLC_EVENT", "Playing | isPaused=" + isPaused + " pos=" + mMediaPlayer.getPosition()
                             + " time=" + mMediaPlayer.getTime() + " duration=" + mMediaPlayer.getLength());
 
                     // If user intent is paused, suppress this transient Playing and re-pause.
                     if (isPaused) {
-                        Log.w(TAG, "[VLC_EVENT] Playing suppressed (user intent=paused) → re-pausing");
+                        VlcLog.warn("VLC_EVENT", "Playing suppressed (user intent=paused) → re-pausing");
                         try {
                             if (mMediaPlayer.isPlaying())
                                 mMediaPlayer.pause();
                         } catch (Exception ignored) {
                         }
                         setKeepScreenOn(false);
-                        updatePlayPauseState(PlaybackStateCompat.STATE_PAUSED);
+                        notifyMediaSession();
                         break;
                     }
 
@@ -905,15 +895,15 @@ class ReactVlcPlayerView extends TextureView implements
                             // sources on the many files where onNewVideoLayout never
                             // fires were treated as square-pixel and rendered at the
                             // wrong shape in every mode that corrects for SAR.
-                            mSarNum = videoTrack.sarNum;
-                            mSarDen = videoTrack.sarDen;
-                            Log.i(TAG, "[VLC_EVENT] Playing: fallback dimensions=" + mVideoWidth + "x" + mVideoHeight
-                                    + " SAR=" + mSarNum + ":" + mSarDen);
+                            setSampleAspectRatio(videoTrack.sarNum, videoTrack.sarDen);
+                            VlcLog.trace("VLC_EVENT", "Playing: fallback dimensions=" + mVideoWidth + "x" + mVideoHeight
+                                    + " SAR=" + videoTrack.sarNum + ":" + videoTrack.sarDen
+                                    + " stored=" + mSarNum + ":" + mSarDen);
                             // onNewVideoLayout never fires on many files, so this is
                             // the only source of truth for the video size. Without it the
                             // PiP controller has no aspect ratio to give the window.
                             mPipController.setVideoGeometry(
-                                    mVideoWidth, mVideoHeight, videoTrack.sarNum, videoTrack.sarDen);
+                                    mVideoWidth, mVideoHeight, mSarNum, mSarDen);
                             requestResizeMode();
                         }
                     }
@@ -926,8 +916,7 @@ class ReactVlcPlayerView extends TextureView implements
                     maybeMarkEnhancementAppliedFromNormalCreate();
                     emitPlayingEvent(map);
                     updateVideoInfo();
-                    updateMediaMetadata();
-                    updatePlayPauseState(PlaybackStateCompat.STATE_PLAYING);
+                    notifyMediaSession();
                     break;
                 }
 
@@ -939,7 +928,7 @@ class ReactVlcPlayerView extends TextureView implements
                     // pendingSeekPlay (non-null sentinel) means we are between
                     // pause()+setTime() and the subsequent play() call.
                     if (pendingSeekPlay != null) {
-                        Log.d(TAG, "[VLC_EVENT] Paused suppressed — codec flush in progress");
+                        VlcLog.trace("VLC_EVENT", "Paused suppressed — codec flush in progress");
                         break;
                     }
 
@@ -947,16 +936,19 @@ class ReactVlcPlayerView extends TextureView implements
                     // shortly after the seek-triggered play() call fires.
                     if (mLastSeekPlayTimestampMs > 0 && System.currentTimeMillis()
                             - mLastSeekPlayTimestampMs < POST_SEEK_PAUSED_SUPPRESSION_MS) {
-                        Log.d(TAG, "[VLC_EVENT] Paused suppressed — post-seek suppression window");
+                        VlcLog.trace("VLC_EVENT", "Paused suppressed — post-seek suppression window");
                         break;
                     }
                     mLastSeekPlayTimestampMs = -1L;
 
-                    Log.i(TAG, "[VLC_EVENT] Paused | isPaused=" + isPaused + " pos=" + mMediaPlayer.getPosition()
+                    VlcLog.trace("VLC_EVENT", "Paused | isPaused=" + isPaused + " pos=" + mMediaPlayer.getPosition()
                             + " time=" + mMediaPlayer.getTime());
 
                     if (mPausedForHostStop && !isPaused) {
-                        Log.d(TAG, "[VLC_EVENT] Paused suppressed — host lifecycle pause");
+                        VlcLog.trace("VLC_EVENT", "Paused suppressed — host lifecycle pause");
+                        // React must not see this as a user pause, but the media session
+                        // reports what playback is actually doing, so it still gets told.
+                        notifyMediaSession();
                         break;
                     }
 
@@ -965,17 +957,18 @@ class ReactVlcPlayerView extends TextureView implements
                         return;
                     setKeepScreenOn(false);
                     emitPausedEvent(map);
-                    updatePlayPauseState(PlaybackStateCompat.STATE_PAUSED);
+                    notifyMediaSession();
                     break;
                 }
 
                 // ─────────────────────────────────────────────────────────────
                 case MediaPlayer.Event.Buffering: {
                     final float bufferRate = event.getBuffering();
-                    Log.d(TAG, "[VLC_EVENT] Buffering rate=" + bufferRate + "%");
+                    VlcLog.trace("VLC_EVENT", "Buffering rate=" + bufferRate + "%");
 
                     // FIX (primary seek freeze): trigger play() when the buffer
                     // fills after a codec-flush seek, instead of using a fixed timer.
+                    mIsBuffering = bufferRate < 100f;
                     if (bufferRate >= 100f && mPlayAfterBufferComplete && !isPaused) {
                         final long capturedVersion = mSeekVersion;
                         mPlayAfterBufferComplete = false;
@@ -983,7 +976,7 @@ class ReactVlcPlayerView extends TextureView implements
                         // Post to main thread so VLC's state fully settles before play()
                         mSeekHandler.post(() -> {
                             if (mMediaPlayer != null && !isPaused && mSeekVersion == capturedVersion) {
-                                Log.i(TAG, "[SEEK] buffer=100% -> resuming play");
+                                VlcLog.trace("SEEK", "buffer=100% -> resuming play");
                                 mLastSeekPlayTimestampMs = System.currentTimeMillis();
                                 requestAudioFocusInternal();
                                 mMediaPlayer.play();
@@ -1014,7 +1007,7 @@ class ReactVlcPlayerView extends TextureView implements
 
                 // ─────────────────────────────────────────────────────────────
                 case MediaPlayer.Event.Opening: {
-                    Log.d(TAG, "[VLC_EVENT] Opening");
+                    VlcLog.trace("VLC_EVENT", "Opening");
                     WritableMap map = createEventMap();
                     if (map == null)
                         return;
@@ -1025,7 +1018,7 @@ class ReactVlcPlayerView extends TextureView implements
 
                 // ─────────────────────────────────────────────────────────────
                 case MediaPlayer.Event.EndReached: {
-                    Log.i(TAG, "[VLC_EVENT] EndReached | pos=" + mMediaPlayer.getPosition());
+                    VlcLog.trace("VLC_EVENT", "EndReached | pos=" + mMediaPlayer.getPosition());
                     mNativeStopped = true;
 
                     // Emit final 100% progress so UI snaps to end
@@ -1047,7 +1040,7 @@ class ReactVlcPlayerView extends TextureView implements
 
                 // ─────────────────────────────────────────────────────────────
                 case MediaPlayer.Event.Stopped: {
-                    Log.i(TAG, "[VLC_EVENT] Stopped | isPaused=" + isPaused);
+                    VlcLog.trace("VLC_EVENT", "Stopped | isPaused=" + isPaused);
                     isPaused = true;
                     mNativeStopped = true;
                     WritableMap map = createEventMap();
@@ -1056,13 +1049,13 @@ class ReactVlcPlayerView extends TextureView implements
                     map.putString("type", "Stopped");
                     setKeepScreenOn(false);
                     eventEmitter.sendEvent(map, VideoEventEmitter.EVENT_ON_VIDEO_STOPPED);
-                    updatePlayPauseState(PlaybackStateCompat.STATE_STOPPED);
+                    notifyMediaSession();
                     break;
                 }
 
                 // ─────────────────────────────────────────────────────────────
                 case MediaPlayer.Event.EncounteredError: {
-                    Log.e(TAG, "[VLC_EVENT] EncounteredError");
+                    VlcLog.error("VLC_EVENT", "EncounteredError");
                     mNativeStopped = true;
                     WritableMap map = createEventMap();
                     if (map == null)
@@ -1080,7 +1073,7 @@ class ReactVlcPlayerView extends TextureView implements
 
                 // ─────────────────────────────────────────────────────────────
                 case MediaPlayer.Event.RecordChanged: {
-                    Log.d(TAG, "[VLC_EVENT] RecordChanged isRecording=" + event.getRecording());
+                    VlcLog.trace("VLC_EVENT", "RecordChanged isRecording=" + event.getRecording());
                     WritableMap map = createEventMap();
                     if (map == null)
                         return;
@@ -1114,16 +1107,15 @@ class ReactVlcPlayerView extends TextureView implements
             mVideoHeight = height;
             mVideoVisibleWidth = visibleWidth;
             mVideoVisibleHeight = visibleHeight;
-            mSarNum = sarNum;
-            mSarDen = sarDen;
+            setSampleAspectRatio(sarNum, sarDen);
 
             mPipController.setVideoGeometry(
                     mVideoVisibleWidth > 0 ? mVideoVisibleWidth : mVideoWidth,
                     mVideoVisibleHeight > 0 ? mVideoVisibleHeight : mVideoHeight,
-                    sarNum, sarDen);
+                    mSarNum, mSarDen);
 
-            Log.d(TAG, "[VIDEO_LAYOUT] " + width + "x" + height + " visible=" + visibleWidth + "x" + visibleHeight
-                    + " SAR=" + sarNum + ":" + sarDen);
+            VlcLog.trace("VIDEO_LAYOUT", width + "x" + height + " visible=" + visibleWidth + "x" + visibleHeight
+                    + " SAR=" + sarNum + ":" + sarDen + " stored=" + mSarNum + ":" + mSarDen);
 
             requestResizeMode();
 
@@ -1145,16 +1137,22 @@ class ReactVlcPlayerView extends TextureView implements
     // =========================================================================
 
     private void logSeekVerification() {
-        if (mLastSeekTargetMs >= 0 && mMediaPlayer != null) {
-            long actualMs = mMediaPlayer.getTime();
-            long delta = Math.abs(actualMs - mLastSeekTargetMs);
-            if (delta > 500) {
-                Log.w(TAG, "[SEEK_VERIFY] drift: target=" + mLastSeekTargetMs
-                        + "ms actual=" + actualMs + "ms delta=" + delta + "ms");
-            } else {
-                Log.d(TAG, "[SEEK_VERIFY] target=" + mLastSeekTargetMs
-                        + "ms actual=" + actualMs + "ms delta=" + delta + "ms");
-            }
+        if (mLastSeekTargetMs < 0 || mMediaPlayer == null) {
+            return;
+        }
+        final long targetMs = mLastSeekTargetMs;
+        // Answer once per seek. Leaving the target set meant every later Playing event —
+        // resuming from a pause, returning from PiP — compared the live position against
+        // a seek from minutes ago and reported drift that was simply playback progressing.
+        mLastSeekTargetMs = -1L;
+
+        final long actualMs = mMediaPlayer.getTime();
+        final long delta = Math.abs(actualMs - targetMs);
+        final String detail = "target=" + targetMs + "ms actual=" + actualMs + "ms delta=" + delta + "ms";
+        if (delta > 500) {
+            VlcLog.warn("SEEK_VERIFY", "drift: " + detail);
+        } else {
+            VlcLog.trace("SEEK_VERIFY", detail);
         }
     }
 
@@ -1176,9 +1174,53 @@ class ReactVlcPlayerView extends TextureView implements
         }
     }
 
+    /**
+     * Record the sample aspect ratio, defending against the values LibVLC actually hands
+     * back. {@code Media.VideoTrack} has been observed reporting the frame *area* in both
+     * fields — 2073600:2073600 for 1920x1080 — which is not a ratio at all. It reduces to
+     * 1:1 so the arithmetic survives, but the raw numbers are meaningless and anything
+     * equally implausible should not be trusted to correct a picture's shape.
+     */
+    private void setSampleAspectRatio(int sarNum, int sarDen) {
+        if (sarNum <= 0 || sarDen <= 0) {
+            mSarNum = 0;
+            mSarDen = 0;
+            return;
+        }
+        int divisor = sarNum;
+        int remainder = sarDen;
+        while (remainder != 0) {
+            int next = divisor % remainder;
+            divisor = remainder;
+            remainder = next;
+        }
+        int num = sarNum / divisor;
+        int den = sarDen / divisor;
+
+        // A real sample aspect ratio is a small rational: 1:1, 32:27, 64:45, 8:9.
+        // Anything that stays large after reduction is not one.
+        if (num > MAX_PLAUSIBLE_SAR_TERM || den > MAX_PLAUSIBLE_SAR_TERM) {
+            VlcLog.warn("VIDEO_INFO", "implausible SAR " + sarNum + ":" + sarDen
+                    + " reduced to " + num + ":" + den + " — assuming square pixels");
+            mSarNum = 1;
+            mSarDen = 1;
+            return;
+        }
+        mSarNum = num;
+        mSarDen = den;
+    }
+
+    private static List<String> toStringList(ReadableArray array) {
+        final List<String> out = new ArrayList<>(array.size());
+        for (Object option : array.toArrayList()) {
+            out.add(String.valueOf(option));
+        }
+        return out;
+    }
+
     private void createPlayer(boolean autoplayResume, boolean isResume) {
         if (mCreatingPlayer) {
-            Log.w(TAG, "[CREATE_PLAYER] already in progress, ignoring concurrent call");
+            VlcLog.warn("CREATE_PLAYER", "already in progress, ignoring concurrent call");
             return;
         }
         mCreatingPlayer = true;
@@ -1198,23 +1240,23 @@ class ReactVlcPlayerView extends TextureView implements
             if (mForceSeekOnCreate >= 0f) {
                 mSavedPosition = mForceSeekOnCreate;
                 mForceSeekOnCreate = -1f;
-                Log.i(TAG, "[CREATE_PLAYER] override savedPos=" + mSavedPosition
+                VlcLog.trace("CREATE_PLAYER", "override savedPos=" + mSavedPosition
                         + " from stopped revive");
             }
 
             if (this.getSurfaceTexture() == null) {
-                Log.w(TAG, "[CREATE_PLAYER] no surface texture yet, aborting");
+                VlcLog.warn("CREATE_PLAYER", "no surface texture yet, aborting");
                 return;
             }
             if (srcMap == null) {
-                Log.w(TAG, "[CREATE_PLAYER] srcMap is null, aborting");
+                VlcLog.warn("CREATE_PLAYER", "srcMap is null, aborting");
                 return;
             }
 
             final ArrayList<String> cOptions = new ArrayList<>();
             String uriString = srcMap.hasKey("uri") ? srcMap.getString("uri") : null;
             if (TextUtils.isEmpty(uriString)) {
-                Log.w(TAG, "[CREATE_PLAYER] URI is empty, aborting");
+                VlcLog.warn("CREATE_PLAYER", "URI is empty, aborting");
                 return;
             }
             if (srcMap.hasKey("decoderMode") && !srcMap.isNull("decoderMode")) {
@@ -1228,7 +1270,7 @@ class ReactVlcPlayerView extends TextureView implements
             int hwDecoderEnabled = srcMap.hasKey("hwDecoderEnabled") ? srcMap.getInt("hwDecoderEnabled") : 1;
             int hwDecoderForced = srcMap.hasKey("hwDecoderForced") ? srcMap.getInt("hwDecoderForced") : 0;
 
-            Log.i(TAG, "[CREATE_PLAYER] uri=" + uriString
+            VlcLog.trace("CREATE_PLAYER", "uri=" + uriString
                     + " autoplay=" + autoplay + " isNetwork=" + isNetwork
                     + " initType=" + initType + " hw=" + hwDecoderEnabled + "/" + hwDecoderForced
                     + " savedPos=" + mSavedPosition);
@@ -1237,18 +1279,19 @@ class ReactVlcPlayerView extends TextureView implements
             // used for a specific in-flight enhancement recreate target.
             if (mEffectiveInitOptionsOverride != null) {
                 cOptions.addAll(mEffectiveInitOptionsOverride);
-                Log.i(TAG, "[CREATE_PLAYER] using enhancement init options override (" + cOptions.size() + " options)");
+                VlcLog.trace("CREATE_PLAYER", "using enhancement init options override (" + cOptions.size() + " options)");
             } else {
                 cOptions.addAll(buildEffectiveInitOptions(mRequestedEnhancement));
             }
             mEnhancementCompatiblePipeline = shouldUseEnhancementCompatiblePipeline(mRequestedEnhancement);
 
-            libvlc = (initType == 1) ? new LibVLC(getContext()) : new LibVLC(getContext(), cOptions);
-            mMediaPlayer = new MediaPlayer(libvlc);
-            setMutedModifier(mMuted);
-            mMediaPlayer.setEventListener(mPlayerListener);
+            VlcPlaybackEngine.Source engineSource = new VlcPlaybackEngine.Source(
+                    uriString, isNetwork, initType, cOptions,
+                    mediaOptions != null ? toStringList(mediaOptions) : null,
+                    hwDecoderEnabled >= 1, hwDecoderForced >= 1, mAudioDelay);
 
-            Dialog.setCallbacks(libvlc, new Dialog.Callbacks() {
+            mMediaPlayer = mEngine.open(getContext(), engineSource, mPlayerListener, mMediaListener,
+                    new Dialog.Callbacks() {
                 @Override
                 public void onDisplay(Dialog.QuestionDialog dialog) {
                     handleCertificateDialog(dialog);
@@ -1275,6 +1318,15 @@ class ReactVlcPlayerView extends TextureView implements
                 }
             });
 
+            if (mMediaPlayer == null) {
+                VlcLog.error("CREATE_PLAYER", "engine could not open " + uriString);
+                return;
+            }
+            setMutedModifier(mMuted);
+
+            // The session describes a live player, so publish only once one exists.
+            VlcPlaybackHost.start(getContext(), this);
+
             IVLCVout vlcOut = mMediaPlayer.getVLCVout();
             int viewWidth = getWidth();
             int viewHeight = getHeight();
@@ -1282,56 +1334,6 @@ class ReactVlcPlayerView extends TextureView implements
                 vlcOut.setWindowSize(viewWidth, viewHeight);
                 if (autoAspectRatio)
                     mMediaPlayer.setAspectRatio(viewWidth + ":" + viewHeight);
-            }
-
-            // Build media object
-            Media m;
-            if (isNetwork) {
-                m = new Media(libvlc, Uri.parse(uriString));
-            } else if (uriString.startsWith("content://")) {
-                try {
-                    Uri uri = Uri.parse(uriString);
-                    ParcelFileDescriptor pfd = getContext().getContentResolver()
-                            .openFileDescriptor(uri, "r");
-                    if (pfd != null) {
-                        if (currentPfd != null) {
-                            try {
-                                currentPfd.close();
-                            } catch (Exception ignored) {
-                            }
-                        }
-                        currentPfd = pfd;
-                        m = new Media(libvlc, pfd.getFileDescriptor());
-                    } else {
-                        throw new Exception("null PFD for " + uriString);
-                    }
-                } catch (Exception e) {
-                    Log.e(TAG, "[CREATE_PLAYER] content:// FD failed: " + e.getMessage()
-                            + " — falling back to URI");
-                    m = new Media(libvlc, Uri.parse(uriString));
-                }
-            } else {
-                m = new Media(libvlc, uriString);
-            }
-
-            m.setEventListener(mMediaListener);
-            boolean hmEnabled = (hwDecoderEnabled >= 1);
-            boolean hmForced = (hwDecoderForced >= 1);
-            m.setHWDecoderEnabled(hmEnabled, hmForced);
-            Log.i(TAG, "[CREATE_PLAYER] HW decoder enabled=" + hmEnabled + " forced=" + hmForced);
-
-            if (mediaOptions != null) {
-                ArrayList options = mediaOptions.toArrayList();
-                for (Object option : options)
-                    m.addOption((String) option);
-            }
-
-            if (mAudioDelay != 0) {
-                m.addOption(":audio-desync=" + mAudioDelay);
-            }
-
-            if (!isNetwork) {
-                m.addOption(":input-fast-seek");
             }
 
             // Reset per-media state.
@@ -1346,8 +1348,6 @@ class ReactVlcPlayerView extends TextureView implements
             // NOTE: mLastBridgeSeekValue and mLastSeekTargetMs are intentionally
             // NOT reset here — managed by callers to prevent stale React prop re-sends.
 
-            mMediaPlayer.setMedia(m);
-            m.release();
             mMediaPlayer.setScale(0);
 
             applyVideoEnhancementLive(mRequestedEnhancement);
@@ -1373,7 +1373,7 @@ class ReactVlcPlayerView extends TextureView implements
             if (mSavedPosition > 0f) {
                 final float positionToRestore = mSavedPosition;
                 mSavedPosition = 0f;
-                Log.i(TAG, "[CREATE_PLAYER] restoring saved position=" + positionToRestore);
+                VlcLog.trace("CREATE_PLAYER", "restoring saved position=" + positionToRestore);
 
                 if (shouldPlay) {
                     isPaused = false;
@@ -1385,7 +1385,7 @@ class ReactVlcPlayerView extends TextureView implements
                     if (mMediaPlayer != null) {
                         long lengthMs = mMediaPlayer.getLength();
                         long targetMs = lengthMs > 0 ? (long) (positionToRestore * lengthMs) : -1L;
-                        Log.i(TAG, "[SEEK] restoring position=" + positionToRestore
+                        VlcLog.trace("SEEK", "restoring position=" + positionToRestore
                                 + " targetMs=" + targetMs + " lengthMs=" + lengthMs);
                         if (targetMs >= 0) {
                             mMediaPlayer.setTime(targetMs);
@@ -1406,7 +1406,7 @@ class ReactVlcPlayerView extends TextureView implements
             setProgressUpdateRunnable();
 
         } catch (Exception e) {
-            Log.e(TAG, "[CREATE_PLAYER] Error: " + e.getMessage(), e);
+            VlcLog.error("CREATE_PLAYER", "Error: " + e.getMessage(), e);
         } finally {
             mCreatingPlayer = false;
         }
@@ -1436,10 +1436,10 @@ class ReactVlcPlayerView extends TextureView implements
                 // setPausedModifier)
                 if (currentPos > 0.01f && currentPos < 0.95f && !mNativeStopped) {
                     mSavedPosition = currentPos;
-                    Log.d(TAG, "[RELEASE] saved position=" + mSavedPosition);
+                    VlcLog.trace("RELEASE", "saved position=" + mSavedPosition);
                 } else {
                     // Respect caller's explicit zero — don't overwrite with EOF position
-                    Log.d(TAG, "[RELEASE] NOT saving position=" + currentPos
+                    VlcLog.trace("RELEASE", "NOT saving position=" + currentPos
                             + " mNativeStopped=" + mNativeStopped
                             + " (keeping mSavedPosition=" + mSavedPosition + ")");
                 }
@@ -1447,33 +1447,15 @@ class ReactVlcPlayerView extends TextureView implements
                 mSavedPosition = 0f;
             }
 
+            // Detach this view's output before the engine releases the player; the
+            // engine has no idea which views are attached.
             final IVLCVout vout = mMediaPlayer.getVLCVout();
             vout.removeCallback(callback);
             vout.detachViews();
-
-            // FIX C4: clear dialog callbacks before releasing to avoid
-            // dangling closure references to this view instance.
-            if (libvlc != null) {
-                Dialog.setCallbacks(libvlc, null);
-            }
-
-            mMediaPlayer.release();
             mMediaPlayer = null;
-            Log.d(TAG, "[RELEASE] MediaPlayer released");
         }
 
-        if (libvlc != null) {
-            libvlc.release();
-            libvlc = null;
-        }
-
-        if (currentPfd != null) {
-            try {
-                currentPfd.close();
-            } catch (Exception ignored) {
-            }
-            currentPfd = null;
-        }
+        mEngine.close();
 
         // Reset per-player state (but NOT mLastBridgeSeekValue / mLastSeekTargetMs —
         // those are managed by callers to prevent React stale-prop re-sends).
@@ -1575,17 +1557,17 @@ class ReactVlcPlayerView extends TextureView implements
      */
     public void setPosition(final float position) {
         if (mMediaPlayer == null) {
-            Log.w(TAG, "[SEEK] setPosition(" + position + ") — player is null, ignoring");
+            VlcLog.warn("SEEK", "setPosition(" + position + ") — player is null, ignoring");
             return;
         }
         if (position < 0 || position > 1) {
-            Log.w(TAG, "[SEEK] setPosition(" + position + ") — out of range, ignoring");
+            VlcLog.warn("SEEK", "setPosition(" + position + ") — out of range, ignoring");
             return;
         }
 
         mSeekHandler.post(() -> {
             if (mMediaPlayer == null) {
-                Log.w(TAG, "[SEEK] player gone before seek executed");
+                VlcLog.warn("SEEK", "player gone before seek executed");
                 return;
             }
 
@@ -1598,7 +1580,7 @@ class ReactVlcPlayerView extends TextureView implements
             if (targetMs >= 0) {
                 if (mLastSeekTargetMs >= 0
                         && Math.abs(targetMs - mLastSeekTargetMs) < SEEK_TIME_EPSILON_MS) {
-                    Log.d(TAG, "[SEEK] duplicate (delta < " + SEEK_TIME_EPSILON_MS + "ms), skipping"
+                    VlcLog.trace("SEEK", "duplicate (delta < " + SEEK_TIME_EPSILON_MS + "ms), skipping"
                             + " targetMs=" + targetMs + " lastMs=" + mLastSeekTargetMs);
                     return;
                 }
@@ -1614,7 +1596,7 @@ class ReactVlcPlayerView extends TextureView implements
             cancelPendingSeek();
             final long thisSeekVersion = ++mSeekVersion;
 
-            Log.i(TAG, "[SEEK] ► position=" + position
+            VlcLog.trace("SEEK", "► position=" + position
                     + " targetMs=" + targetMs
                     + " lengthMs=" + lengthMs
                     + " nativePlaying=" + nativePlaying
@@ -1623,7 +1605,7 @@ class ReactVlcPlayerView extends TextureView implements
 
             // ── Case 1: Native player stopped/ended ───────────────────────────
             if (mNativeStopped) {
-                Log.i(TAG, "[SEEK] native stopped — restarting via createPlayer."
+                VlcLog.trace("SEEK", "native stopped — restarting via createPlayer."
                         + " position=" + position + " isPaused=" + isPaused);
                 isPaused = false;
                 mForceSeekOnCreate = position;
@@ -1631,7 +1613,7 @@ class ReactVlcPlayerView extends TextureView implements
                 createPlayer(true, true);
                 mLastBridgeSeekValue = position;
                 mLastSeekTargetMs = targetMs;
-                Log.i(TAG, "[SEEK] createPlayer dispatched with forceSeek=" + position);
+                VlcLog.trace("SEEK", "createPlayer dispatched with forceSeek=" + position);
                 emitSeekEvent();
                 return;
             }
@@ -1657,19 +1639,19 @@ class ReactVlcPlayerView extends TextureView implements
                 /* sentinel — play() triggered by Buffering=100% or timeout */ };
 
             if (needsCodecFlush) {
-                Log.i(TAG, "[SEEK] playing seek -> pausing to flush codec drain");
+                VlcLog.trace("SEEK", "playing seek -> pausing to flush codec drain");
                 mMediaPlayer.pause();
             }
 
             if (targetMs >= 0) {
-                Log.i(TAG, "[SEEK] setTime(" + targetMs + "ms)");
+                VlcLog.trace("SEEK", "setTime(" + targetMs + "ms)");
                 mMediaPlayer.setTime(targetMs);
             } else {
-                Log.i(TAG, "[SEEK] setPosition(" + position + ") [no duration]");
+                VlcLog.trace("SEEK", "setPosition(" + position + ") [no duration]");
                 mMediaPlayer.setPosition(position);
             }
 
-            Log.i(TAG, "[SEEK] seek dispatched | isPaused=" + isPaused
+            VlcLog.trace("SEEK", "seek dispatched | isPaused=" + isPaused
                     + " codecFlush=" + needsCodecFlush);
 
             if (!isPaused) {
@@ -1678,7 +1660,7 @@ class ReactVlcPlayerView extends TextureView implements
                 mSeekHandler.postDelayed(() -> {
                     if (mSeekVersion == thisSeekVersion && mPlayAfterBufferComplete
                             && mMediaPlayer != null && !isPaused) {
-                        Log.w(TAG, "[SEEK] buffer timeout (" + SEEK_BUFFER_TIMEOUT_MS
+                        VlcLog.warn("SEEK", "buffer timeout (" + SEEK_BUFFER_TIMEOUT_MS
                                 + "ms) -> forcing play()");
                         mPlayAfterBufferComplete = false;
                         mLastSeekPlayTimestampMs = System.currentTimeMillis();
@@ -1730,7 +1712,7 @@ class ReactVlcPlayerView extends TextureView implements
         String newUri = src.hasKey("uri") ? src.getString("uri") : null;
 
         if (newUri != null && this.src != null && newUri.equals(this.src) && mMediaPlayer != null) {
-            Log.i(TAG, "[SET_SRC] URI unchanged, skipping recreation: " + newUri);
+            VlcLog.trace("SET_SRC", "URI unchanged, skipping recreation: " + newUri);
             this.srcMap = src;
             return;
         }
@@ -1740,7 +1722,7 @@ class ReactVlcPlayerView extends TextureView implements
         mAppliedEnhancement = false;
         mEnhancementCompatiblePipeline = false;
 
-        Log.i(TAG, "[SET_SRC] new URI: " + newUri);
+        VlcLog.trace("SET_SRC", "new URI: " + newUri);
         this.src = newUri;
         this.srcMap = src;
         releasePlayer();
@@ -1768,9 +1750,7 @@ class ReactVlcPlayerView extends TextureView implements
                 }
                 mMediaPlayer.setRate(rateToApply);
                 mLastAppliedRate = rateToApply;
-                updatePlayPauseState(mMediaPlayer.isPlaying()
-                        ? PlaybackStateCompat.STATE_PLAYING
-                        : PlaybackStateCompat.STATE_PAUSED);
+                notifyMediaSession();
                 mPendingRateRunnable = null;
             };
             mRateHandler.post(mPendingRateRunnable);
@@ -1836,36 +1816,36 @@ class ReactVlcPlayerView extends TextureView implements
 
     public void setAudioDelay(long delayMs) {
         mAudioDelay = delayMs;
-        Log.i(TAG, "[AUDIO_DELAY] set=" + delayMs + "ms");
+        VlcLog.trace("AUDIO_DELAY", "set=" + delayMs + "ms");
         if (mMediaPlayer != null) {
             final long delayUs = mAudioDelay * 1000;
             boolean ok = mMediaPlayer.setAudioDelay(delayUs);
-            Log.i(TAG, "[AUDIO_DELAY] applied " + delayMs + "ms (" + delayUs + "μs) ok=" + ok);
+            VlcLog.trace("AUDIO_DELAY", "applied " + delayMs + "ms (" + delayUs + "μs) ok=" + ok);
 
             if (mMediaPlayer.isPlaying()) {
                 new Handler(Looper.getMainLooper()).postDelayed(() -> {
                     if (mMediaPlayer != null) {
                         boolean retryOk = mMediaPlayer.setAudioDelay(delayUs);
-                        Log.d(TAG, "[AUDIO_DELAY] retry ok=" + retryOk);
+                        VlcLog.trace("AUDIO_DELAY", "retry ok=" + retryOk);
                     }
                 }, 150);
             }
         } else {
-            Log.w(TAG, "[AUDIO_DELAY] player null — will apply on createPlayer");
+            VlcLog.warn("AUDIO_DELAY", "player null — will apply on createPlayer");
         }
     }
 
     public void setVolumeModifier(int volumeModifier) {
         int clamped = Math.max(0, Math.min(200, volumeModifier));
         this.preVolume = clamped;
-        // Log.d(TAG, "[VOLUME] set=" + clamped);
+        // VlcLog.trace("VOLUME", "set=" + clamped);
         if (mMediaPlayer != null)
             mMediaPlayer.setVolume(clamped);
     }
 
     public void setMutedModifier(boolean muted) {
         mMuted = muted;
-        Log.d(TAG, "[MUTE] muted=" + muted);
+        VlcLog.trace("MUTE", "muted=" + muted);
         if (mMediaPlayer != null) {
             mMediaPlayer.setVolume(muted ? 0 : preVolume);
         }
@@ -1880,7 +1860,7 @@ class ReactVlcPlayerView extends TextureView implements
      * paused=false + no player → createPlayer
      */
     public void setPausedModifier(boolean paused) {
-        Log.i(TAG, "[PAUSE_MOD] paused=" + paused
+        VlcLog.trace("PAUSE_MOD", "paused=" + paused
                 + " | current isPaused=" + isPaused
                 + " nativePlaying=" + (mMediaPlayer != null && mMediaPlayer.isPlaying())
                 + " mNativeStopped=" + mNativeStopped);
@@ -1893,17 +1873,17 @@ class ReactVlcPlayerView extends TextureView implements
         }
 
         if (mMediaPlayer == null) {
-            Log.i(TAG, "[PAUSE_MOD] no player → createPlayer(autoplay=" + !paused + ")");
+            VlcLog.trace("PAUSE_MOD", "no player → createPlayer(autoplay=" + !paused + ")");
             createPlayer(!paused, false);
             return;
         }
 
         if (paused) {
             mMediaPlayer.pause();
-            Log.i(TAG, "[PAUSE_MOD] pause() called");
+            VlcLog.trace("PAUSE_MOD", "pause() called");
         } else {
             if (mNativeStopped) {
-                Log.i(TAG, "[PAUSE_MOD] mNativeStopped=true → createPlayer(restart from 0)");
+                VlcLog.trace("PAUSE_MOD", "mNativeStopped=true → createPlayer(restart from 0)");
                 isPaused = false;
                 // Clear stale force-seek target so createPlayer doesn't restore it.
                 mForceSeekOnCreate = -1f;
@@ -1922,16 +1902,16 @@ class ReactVlcPlayerView extends TextureView implements
                 requestAudioFocusInternal();
                 if (!mMediaPlayer.isPlaying()) {
                     mMediaPlayer.play();
-                    Log.i(TAG, "[PAUSE_MOD] play() called");
+                    VlcLog.trace("PAUSE_MOD", "play() called");
                 } else {
-                    Log.i(TAG, "[PAUSE_MOD] play() skipped — already playing (redundant call)");
+                    VlcLog.trace("PAUSE_MOD", "play() skipped — already playing (redundant call)");
                 }
             }
         }
     }
 
     public void doResume(boolean autoplay) {
-        Log.i(TAG, "[RESUME] doResume autoplay=" + autoplay);
+        VlcLog.trace("RESUME", "doResume autoplay=" + autoplay);
         createPlayer(autoplay, true);
     }
 
@@ -1942,7 +1922,7 @@ class ReactVlcPlayerView extends TextureView implements
      * without recreating the player.
      */
     public void setRepeatModifier(boolean repeat) {
-        Log.d(TAG, "[REPEAT] repeat=" + repeat + " (applied via mediaOptions at createPlayer time)");
+        VlcLog.trace("REPEAT", "repeat=" + repeat + " (applied via mediaOptions at createPlayer time)");
     }
 
     public void setAspectRatio(String aspectRatio) {
@@ -1959,13 +1939,13 @@ class ReactVlcPlayerView extends TextureView implements
     }
 
     public void setAudioTrack(int track) {
-        Log.d(TAG, "[AUDIO_TRACK] set=" + track);
+        VlcLog.trace("AUDIO_TRACK", "set=" + track);
         _audioTrack = track;
         scheduleAudioTrackApply(true);
     }
 
     public void setTextTrack(int track) {
-        Log.d(TAG, "[TEXT_TRACK] set=" + track);
+        VlcLog.trace("TEXT_TRACK", "set=" + track);
         _textTrack = track;
         if (mMediaPlayer != null)
             mMediaPlayer.setSpuTrack(track);
@@ -1986,7 +1966,7 @@ class ReactVlcPlayerView extends TextureView implements
     public void stopPlayer() {
         if (mMediaPlayer == null)
             return;
-        Log.i(TAG, "[STOP] stopPlayer()");
+        VlcLog.trace("STOP", "stopPlayer()");
         abandonAudioFocusInternal();
         mNativeStopped = true;
         mMediaPlayer.stop();
@@ -1999,7 +1979,7 @@ class ReactVlcPlayerView extends TextureView implements
             isPaused = true;
             mMediaPlayer.pause();
             setKeepScreenOn(false);
-            Log.i(TAG, "[STOP] pausePlayer()");
+            VlcLog.trace("STOP", "pausePlayer()");
             WritableMap map = createEventMap();
             if (map != null)
                 emitPausedEvent(map);
@@ -2016,21 +1996,21 @@ class ReactVlcPlayerView extends TextureView implements
     private void handleCertificateDialog(Dialog.QuestionDialog dialog) {
         if (acceptInvalidCertificates) {
             dialog.postAction(1); // Accept / "Yes"
-            Log.i(TAG, "[CERT] auto-accepted (acceptInvalidCertificates=true)");
+            VlcLog.trace("CERT", "auto-accepted (acceptInvalidCertificates=true)");
         } else {
             dialog.postAction(2); // Reject / "No"
-            Log.i(TAG, "[CERT] rejected (acceptInvalidCertificates=false)");
+            VlcLog.trace("CERT", "rejected (acceptInvalidCertificates=false)");
         }
     }
 
     public void setAcceptInvalidCertificates(boolean accept) {
         this.acceptInvalidCertificates = accept;
-        Log.i(TAG, "[CONFIG] acceptInvalidCertificates=" + accept);
+        VlcLog.trace("CONFIG", "acceptInvalidCertificates=" + accept);
     }
 
     public void setPlayInBackground(boolean playInBackground) {
         this.playInBackground = playInBackground;
-        Log.i(TAG, "[CONFIG] playInBackground=" + playInBackground);
+        VlcLog.trace("CONFIG", "playInBackground=" + playInBackground);
     }
 
     /**
@@ -2041,7 +2021,7 @@ class ReactVlcPlayerView extends TextureView implements
     public void setPipEnabled(boolean pipEnabled) {
         this.mPipEnabled = pipEnabled;
         mPipController.setEnabled(pipEnabled);
-        Log.d(TAG, "[PIP] enabled=" + pipEnabled);
+        VlcLog.trace("PIP", "enabled=" + pipEnabled);
     }
 
     public void enterPictureInPicture() {
@@ -2056,7 +2036,7 @@ class ReactVlcPlayerView extends TextureView implements
     /** Called by {@link VlcPipController} once the Activity has changed PiP state. */
     void onPipModeChangedInternal(boolean inPipMode) {
         if (!inPipMode && isHostStopped && !playInBackground) {
-            Log.i(TAG, "[PIP] PiP closed while host paused → pausing");
+            VlcLog.trace("PIP", "PiP closed while host paused → pausing");
             pauseForHostBackground("pipExit");
         }
 
@@ -2096,7 +2076,7 @@ class ReactVlcPlayerView extends TextureView implements
                     this.resizeMode = "none";
                     break;
                 default:
-                    Log.w(TAG, "[RESIZE] invalid mode: " + mode + " → contain");
+                    VlcLog.warn("RESIZE", "invalid mode: " + mode + " → contain");
                     this.resizeMode = "contain";
                     break;
             }
@@ -2108,7 +2088,7 @@ class ReactVlcPlayerView extends TextureView implements
             mBestFitUsingCover = null;
         }
 
-        Log.d(TAG, "[RESIZE] mode=" + this.resizeMode);
+        VlcLog.trace("RESIZE", "mode=" + this.resizeMode);
         requestResizeMode();
     }
 
@@ -2153,9 +2133,9 @@ class ReactVlcPlayerView extends TextureView implements
                 mMediaPlayer.setScale(0);
                 recordAppliedResizeState(viewWidth, viewHeight);
                 isResizeModeApplied = true;
-                Log.d(TAG, "[RESIZE] autoAR applied " + viewWidth + ":" + viewHeight);
+                VlcLog.trace("RESIZE", "autoAR applied " + viewWidth + ":" + viewHeight);
             } catch (Exception e) {
-                Log.e(TAG, "[RESIZE] autoAR error: " + e.getMessage());
+                VlcLog.error("RESIZE", "autoAR error: " + e.getMessage());
             }
             return;
         }
@@ -2169,7 +2149,7 @@ class ReactVlcPlayerView extends TextureView implements
             recordAppliedResizeState(viewWidth, viewHeight);
             isResizeModeApplied = true;
         } catch (Exception e) {
-            Log.e(TAG, "[RESIZE] error: " + e.getMessage(), e);
+            VlcLog.error("RESIZE", "error: " + e.getMessage(), e);
         }
     }
 
@@ -2197,7 +2177,7 @@ class ReactVlcPlayerView extends TextureView implements
             mMediaPlayer.setScale(0f);
             invalidate();
         } catch (Exception e) {
-            Log.w(TAG, "[PIP_RESIZE] failed: " + e.getMessage());
+            VlcLog.warn("PIP_RESIZE", "failed: " + e.getMessage());
             return;
         }
 
@@ -2205,18 +2185,21 @@ class ReactVlcPlayerView extends TextureView implements
         mLastAppliedViewWidth = -1;
         mLastAppliedViewHeight = -1;
 
-        android.app.Activity activity = getReactActivity();
-        String decorSize = "?";
-        if (activity != null && activity.getWindow() != null) {
-            View decor = activity.getWindow().getDecorView();
-            decorSize = decor.getWidth() + "x" + decor.getHeight();
+        // A PiP window is resized continuously while the user drags it, and reading the
+        // decor view to describe it is real work. Do none of it unless tracing is on.
+        if (VlcLog.tracing()) {
+            android.app.Activity activity = getReactActivity();
+            String decorSize = "?";
+            if (activity != null && activity.getWindow() != null) {
+                View decor = activity.getWindow().getDecorView();
+                decorSize = decor.getWidth() + "x" + decor.getHeight();
+            }
+            VlcLog.trace("PIP_RESIZE", "bounds=" + getWidth() + "x" + getHeight()
+                    + " decor=" + decorSize
+                    + " buffer<-" + viewWidth + "x" + viewHeight
+                    + " video=" + mVideoWidth + "x" + mVideoHeight
+                    + " mode=" + resizeMode);
         }
-
-        Log.i(TAG, "[PIP_RESIZE] bounds=" + getWidth() + "x" + getHeight()
-                + " decor=" + decorSize
-                + " buffer<-" + viewWidth + "x" + viewHeight
-                + " video=" + mVideoWidth + "x" + mVideoHeight
-                + " mode=" + resizeMode);
     }
 
     private boolean isResizeConfigurationAlreadyApplied(int viewWidth, int viewHeight) {
@@ -2247,16 +2230,12 @@ class ReactVlcPlayerView extends TextureView implements
         return playInBackground || isInPipMode();
     }
 
-    private boolean shouldShowBackgroundNotification() {
-        return playInBackground || (isHostStopped && !isInPipMode());
-    }
-
     private void pauseForHostBackground(String reason) {
         if (mMediaPlayer != null && mMediaPlayer.isPlaying()) {
             mPausedForHostStop = true;
             mMediaPlayer.pause();
             setKeepScreenOn(false);
-            Log.i(TAG, "[LIFECYCLE] paused for host background reason=" + reason);
+            VlcLog.trace("LIFECYCLE", "paused for host background reason=" + reason);
         }
     }
 
@@ -2280,11 +2259,13 @@ class ReactVlcPlayerView extends TextureView implements
         mMediaPlayer.setAspectRatio(spec.aspectRatio);
         mMediaPlayer.setScale(spec.scale);
 
-        Log.d(TAG, "[RESIZE] mode=" + resizeMode
-                + " view=" + viewWidth + "x" + viewHeight
-                + " video=" + getEffectiveVideoWidth() + "x" + getEffectiveVideoHeight()
-                + " sar=" + mSarNum + ":" + mSarDen
-                + " ar=" + spec.aspectRatio + " scale=" + spec.scale);
+        if (VlcLog.tracing()) {
+            VlcLog.trace("RESIZE", "mode=" + resizeMode
+                    + " view=" + viewWidth + "x" + viewHeight
+                    + " video=" + getEffectiveVideoWidth() + "x" + getEffectiveVideoHeight()
+                    + " sar=" + mSarNum + ":" + mSarDen
+                    + " ar=" + spec.aspectRatio + " scale=" + spec.scale);
+        }
     }
 
     private void resetTextureViewTransform() {
@@ -2477,7 +2458,7 @@ class ReactVlcPlayerView extends TextureView implements
      */
     private PlaybackSnapshot capturePlaybackSnapshot() {
         if (mMediaPlayer == null) {
-            Log.w(TAG, "[ENHANCE] capturePlaybackSnapshot: no player loaded");
+            VlcLog.warn("ENHANCE", "capturePlaybackSnapshot: no player loaded");
             return null;
         }
 
@@ -2489,7 +2470,7 @@ class ReactVlcPlayerView extends TextureView implements
             nativePlaying = mMediaPlayer.isPlaying();
             rate = mMediaPlayer.getRate();
         } catch (Exception e) {
-            Log.w(TAG, "[ENHANCE] capturePlaybackSnapshot: error reading state: " + e.getMessage());
+            VlcLog.warn("ENHANCE", "capturePlaybackSnapshot: error reading state: " + e.getMessage());
             return null;
         }
 
@@ -2602,7 +2583,7 @@ class ReactVlcPlayerView extends TextureView implements
                     mSavedPosition = (float) snapshot.timeMs / lengthMs;
                 }
             } catch (Exception e) {
-                Log.w(TAG, "[ENHANCE] error calculating position: " + e.getMessage());
+                VlcLog.warn("ENHANCE", "error calculating position: " + e.getMessage());
             }
         }
 
@@ -2649,7 +2630,7 @@ class ReactVlcPlayerView extends TextureView implements
         }
 
         if (mMediaPlayer == null) {
-            Log.w(TAG, "[ENHANCE] restorePlaybackSnapshot: no player, skipping");
+            VlcLog.warn("ENHANCE", "restorePlaybackSnapshot: no player, skipping");
             return;
         }
 
@@ -2744,6 +2725,9 @@ class ReactVlcPlayerView extends TextureView implements
         // The Activity outlives this view, so a retained observer would leak it.
         stopObservingActivityLifecycle();
 
+        // The service holds a strong reference to this view as its host.
+        VlcPlaybackHost.clear(getContext(), this);
+
         // Cancel pending enhancement work
         cancelPendingEnhancement();
 
@@ -2759,7 +2743,6 @@ class ReactVlcPlayerView extends TextureView implements
             themedReactContext.removeLifecycleEventListener(this);
         }
         stopPlayback();
-        releaseMediaSession();
         if (surfaceVideo != null) {
             surfaceVideo.release();
             surfaceVideo = null;
@@ -2772,11 +2755,11 @@ class ReactVlcPlayerView extends TextureView implements
 
     @Override
     public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
-        Log.d(TAG, "[SURFACE] onSurfaceTextureAvailable " + width + "x" + height);
+        VlcLog.trace("SURFACE", "onSurfaceTextureAvailable " + width + "x" + height);
         surfaceVideo = new Surface(surface);
 
-        if (mMediaPlayer != null && libvlc != null) {
-            Log.i(TAG, "[SURFACE] restoring surface to existing player");
+        if (mMediaPlayer != null) {
+            VlcLog.trace("SURFACE", "restoring surface to existing player");
             IVLCVout vlcOut = mMediaPlayer.getVLCVout();
             if (!vlcOut.areViewsAttached()) {
                 vlcOut.setVideoSurface(surface);
@@ -2791,7 +2774,7 @@ class ReactVlcPlayerView extends TextureView implements
 
     @Override
     public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {
-        Log.d(TAG, "[SURFACE] buffer size changed " + width + "x" + height);
+        VlcLog.trace("SURFACE", "buffer size changed " + width + "x" + height);
         invalidateAndRefitGeometry();
     }
 
@@ -2805,7 +2788,7 @@ class ReactVlcPlayerView extends TextureView implements
 
     @Override
     public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
-        Log.d(TAG, "[SURFACE] destroyed");
+        VlcLog.trace("SURFACE", "destroyed");
         return true;
     }
 
@@ -2823,16 +2806,16 @@ class ReactVlcPlayerView extends TextureView implements
         public void onEvent(Media.Event event) {
             switch (event.type) {
                 case Media.Event.MetaChanged:
-                    Log.d(TAG, "[MEDIA_EVENT] MetaChanged id=" + event.getMetaId());
+                    VlcLog.trace("MEDIA_EVENT", "MetaChanged id=" + event.getMetaId());
                     break;
                 case Media.Event.ParsedChanged:
-                    Log.d(TAG, "[MEDIA_EVENT] ParsedChanged status=" + event.getParsedStatus());
+                    VlcLog.trace("MEDIA_EVENT", "ParsedChanged status=" + event.getParsedStatus());
                     break;
                 case Media.Event.StateChanged:
-                    Log.d(TAG, "[MEDIA_EVENT] StateChanged meta=" + event.getMetaId());
+                    VlcLog.trace("MEDIA_EVENT", "StateChanged meta=" + event.getMetaId());
                     break;
                 default:
-                    Log.d(TAG, "[MEDIA_EVENT] type=" + event.type);
+                    VlcLog.trace("MEDIA_EVENT", "type=" + event.type);
                     break;
             }
         }
@@ -2873,7 +2856,7 @@ class ReactVlcPlayerView extends TextureView implements
 
         long duration = mMediaPlayer.getLength();
         if (duration <= 1) {
-            Log.d(TAG, "[VIDEO_INFO] skipping — junk duration=" + duration);
+            VlcLog.trace("VIDEO_INFO", "skipping — junk duration=" + duration);
             return;
         }
 
@@ -2893,7 +2876,7 @@ class ReactVlcPlayerView extends TextureView implements
                 arr.pushMap(m);
             }
             info.putArray("audioTracks", arr);
-            Log.d(TAG, "[VIDEO_INFO] audioTracks=" + tracks.length);
+            VlcLog.trace("VIDEO_INFO", "audioTracks=" + tracks.length);
         }
         if (mMediaPlayer.getSpuTracksCount() > 0) {
             MediaPlayer.TrackDescription[] tracks = mMediaPlayer.getSpuTracks();
@@ -2905,7 +2888,7 @@ class ReactVlcPlayerView extends TextureView implements
                 arr.pushMap(m);
             }
             info.putArray("textTracks", arr);
-            Log.d(TAG, "[VIDEO_INFO] textTracks=" + tracks.length);
+            VlcLog.trace("VIDEO_INFO", "textTracks=" + tracks.length);
         }
         if (vt != null) {
             WritableMap sz = Arguments.createMap();
@@ -2914,7 +2897,7 @@ class ReactVlcPlayerView extends TextureView implements
             info.putMap("videoSize", sz);
         }
 
-        Log.i(TAG, "[VIDEO_INFO] emitting load event duration=" + duration + "ms");
+        VlcLog.trace("VIDEO_INFO", "emitting load event duration=" + duration + "ms");
         eventEmitter.sendEvent(info, VideoEventEmitter.EVENT_ON_LOAD);
         mVideoInfoHash = current;
     }
@@ -2923,146 +2906,19 @@ class ReactVlcPlayerView extends TextureView implements
     // Media Session & Notification
     // =========================================================================
 
-    private void initMediaSession() {
-        mMediaSession = new MediaSessionCompat(getContext(), TAG);
-        mMediaSession.setFlags(
-                MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS
-                        | MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS);
-        mMediaSession.setCallback(new MediaSessionCompat.Callback() {
-            @Override
-            public void onPlay() {
-                setPausedModifier(false);
-            }
-
-            @Override
-            public void onPause() {
-                setPausedModifier(true);
-            }
-
-            @Override
-            public void onSeekTo(long pos) {
-                if (mMediaPlayer != null && mMediaPlayer.getLength() > 0) {
-                    Log.d(TAG, "[MEDIA_SESSION] onSeekTo pos=" + pos);
-                    setPosition((float) pos / mMediaPlayer.getLength());
-                }
-            }
-        });
-        mMediaSession.setActive(true);
-        mNotificationManager = NotificationManagerCompat.from(getContext());
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel ch = new NotificationChannel(
-                    NOTIFICATION_CHANNEL_ID, "Media Playback",
-                    NotificationManager.IMPORTANCE_LOW);
-            ch.setDescription("Media playback controls");
-            NotificationManager nm = getContext().getSystemService(NotificationManager.class);
-            if (nm != null)
-                nm.createNotificationChannel(ch);
-        }
-    }
-
-    private void releaseMediaSession() {
-        if (mMediaSession != null) {
-            mMediaSession.setActive(false);
-            mMediaSession.release();
-            mMediaSession = null;
-        }
-        if (mNotificationManager != null)
-            mNotificationManager.cancel(NOTIFICATION_ID);
-    }
-
-    private void updateMediaMetadata() {
-        if (mMediaSession == null)
-            return;
-        MediaMetadataCompat.Builder b = new MediaMetadataCompat.Builder();
-        b.putString(MediaMetadataCompat.METADATA_KEY_TITLE, mVideoTitle);
-        b.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, mVideoArtist);
-        if (mMediaPlayer != null)
-            b.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, mMediaPlayer.getLength());
-        mMediaSession.setMetadata(b.build());
-        // FIX S4: only show notification when appropriate
-        if (mMediaPlayer != null && mMediaPlayer.isPlaying()
-                && shouldShowBackgroundNotification()) {
-            showNotification(PlaybackStateCompat.STATE_PLAYING);
-        }
-    }
+    // =========================================================================
+    // Media metadata
+    // =========================================================================
 
     public void setVideoTitle(String title) {
         mVideoTitle = title;
-        updateMediaMetadata();
+        // The session builds its notification from metadata(), so nudge it to re-read.
+        notifyMediaSession();
     }
 
     public void setVideoArtist(String artist) {
         mVideoArtist = artist;
-        updateMediaMetadata();
-    }
-
-    private void updatePlayPauseState(int state) {
-        if (mMediaSession == null)
-            return;
-        long position = mMediaPlayer != null ? mMediaPlayer.getTime() : 0;
-        // The system extrapolates the position it displays as position + elapsed * speed,
-        // so speed must be 0 unless playback is actually advancing. getRate() is the rate
-        // setting and stays at 1.0 while paused, which left the notification clock running
-        // after a pause, a stop, or closing PiP.
-        float speed = (state == PlaybackStateCompat.STATE_PLAYING && mMediaPlayer != null)
-                ? mMediaPlayer.getRate()
-                : 0f;
-        PlaybackStateCompat.Builder sb = new PlaybackStateCompat.Builder()
-                .setActions(PlaybackStateCompat.ACTION_PLAY
-                        | PlaybackStateCompat.ACTION_PAUSE
-                        | PlaybackStateCompat.ACTION_PLAY_PAUSE
-                        | PlaybackStateCompat.ACTION_SEEK_TO)
-                .setState(state, position, speed);
-        mMediaSession.setPlaybackState(sb.build());
-
-        // FIX S4: only show notification when in background or background-play mode
-        if (shouldShowBackgroundNotification()) {
-            if (state == PlaybackStateCompat.STATE_PLAYING
-                    || state == PlaybackStateCompat.STATE_PAUSED) {
-                showNotification(state);
-            } else {
-                mNotificationManager.cancel(NOTIFICATION_ID);
-            }
-        } else {
-            // Foreground with no background play — dismiss any lingering notification
-            mNotificationManager.cancel(NOTIFICATION_ID);
-        }
-    }
-
-    // No POST_NOTIFICATIONS check: Android exempts MediaStyle notifications carrying an
-    // active media-session token, so gating on it only suppressed controls Android allows.
-    private void showNotification(int state) {
-        if (mMediaSession == null)
-            return;
-
-        int icon = (state == PlaybackStateCompat.STATE_PLAYING)
-                ? android.R.drawable.ic_media_pause
-                : android.R.drawable.ic_media_play;
-        String label = (state == PlaybackStateCompat.STATE_PLAYING) ? "Pause" : "Play";
-        long actionCode = (state == PlaybackStateCompat.STATE_PLAYING)
-                ? PlaybackStateCompat.ACTION_PAUSE
-                : PlaybackStateCompat.ACTION_PLAY;
-
-        Intent launchIntent = getContext().getPackageManager()
-                .getLaunchIntentForPackage(getContext().getPackageName());
-        PendingIntent ci = PendingIntent.getActivity(
-                getContext(), 0, launchIntent, PendingIntent.FLAG_IMMUTABLE);
-
-        NotificationCompat.Builder b = new NotificationCompat.Builder(
-                getContext(), NOTIFICATION_CHANNEL_ID)
-                .addAction(new NotificationCompat.Action(icon, label,
-                        MediaButtonReceiver.buildMediaButtonPendingIntent(getContext(), actionCode)))
-                .setContentTitle(mVideoTitle)
-                .setContentText(mVideoArtist)
-                .setSmallIcon(android.R.drawable.ic_media_play)
-                .setContentIntent(ci)
-                .setStyle(new androidx.media.app.NotificationCompat.MediaStyle()
-                        .setMediaSession(mMediaSession.getSessionToken())
-                        .setShowActionsInCompactView(0))
-                .setPriority(NotificationCompat.PRIORITY_LOW);
-
-        mNotificationManager.notify(NOTIFICATION_ID, b.build());
+        notifyMediaSession();
     }
 
     // =========================================================================
@@ -3086,7 +2942,7 @@ class ReactVlcPlayerView extends TextureView implements
             if (mMediaPlayer != null)
                 applyEqualizer();
         } catch (Exception e) {
-            Log.e(TAG, "[EQ] error: " + e.getMessage());
+            VlcLog.error("EQ", "error: " + e.getMessage());
         }
     }
 
@@ -3095,7 +2951,7 @@ class ReactVlcPlayerView extends TextureView implements
      * allocating a new native object on every call.
      */
     private void applyEqualizer() {
-        if (mMediaPlayer == null || libvlc == null)
+        if (mMediaPlayer == null)
             return;
 
         if (mEqualizerBands != null) {
@@ -3109,9 +2965,9 @@ class ReactVlcPlayerView extends TextureView implements
                 }
                 mEqualizer.setPreAmp(12f);
                 mMediaPlayer.setEqualizer(mEqualizer);
-                Log.d(TAG, "[EQ] applied " + mEqualizerBands.length + " bands");
+                VlcLog.trace("EQ", "applied " + mEqualizerBands.length + " bands");
             } catch (Exception e) {
-                Log.e(TAG, "[EQ] failed: " + e.getMessage());
+                VlcLog.error("EQ", "failed: " + e.getMessage());
             }
         } else {
             mMediaPlayer.setEqualizer(null);
@@ -3150,11 +3006,11 @@ class ReactVlcPlayerView extends TextureView implements
         boolean applied = mMediaPlayer.setAudioTrack(requestedTrack);
         if (applied) {
             currentlyAppliedAudioTrack = requestedTrack;
-            Log.d(TAG, "[AUDIO_TRACK] applied track=" + requestedTrack + " reason=" + reason);
+            VlcLog.trace("AUDIO_TRACK", "applied track=" + requestedTrack + " reason=" + reason);
             return true;
         }
 
-        Log.w(TAG, "[AUDIO_TRACK] apply failed for track=" + requestedTrack + " reason=" + reason);
+        VlcLog.warn("AUDIO_TRACK", "apply failed for track=" + requestedTrack + " reason=" + reason);
 
         if (allowRetryWhenPlaying && mMediaPlayer.isPlaying()) {
             final Runnable retryRunnable = new Runnable() {
@@ -3170,9 +3026,9 @@ class ReactVlcPlayerView extends TextureView implements
                     boolean retryApplied = mMediaPlayer.setAudioTrack(requestedTrack);
                     if (retryApplied) {
                         currentlyAppliedAudioTrack = requestedTrack;
-                        Log.d(TAG, "[AUDIO_TRACK] retry applied track=" + requestedTrack);
+                        VlcLog.trace("AUDIO_TRACK", "retry applied track=" + requestedTrack);
                     } else {
-                        Log.w(TAG, "[AUDIO_TRACK] retry failed for track=" + requestedTrack);
+                        VlcLog.warn("AUDIO_TRACK", "retry failed for track=" + requestedTrack);
                     }
 
                     if (mPendingAudioTrackRunnable == this) {
@@ -3186,5 +3042,97 @@ class ReactVlcPlayerView extends TextureView implements
         }
 
         return false;
+    }
+    // =========================================================================
+    // Media session host — see VlcMedia3Player
+    // =========================================================================
+
+    /**
+     * The service reads playback through this rather than owning it. The view still drives
+     * LibVLC; these methods only report what it is doing and accept transport commands
+     * coming back from the notification, lock screen or a headset button.
+     */
+
+    @Override
+    public MediaPlayer player() {
+        return mMediaPlayer;
+    }
+
+    @Override
+    public boolean playWhenReady() {
+        // Not user intent alone. The notification describes what playback is doing, so an
+        // involuntary pause — the Activity stopping, audio focus lost, headphones pulled —
+        // has to read as not playing. Reporting intent here left the notification showing
+        // a play state after closing PiP, because a lifecycle pause never sets isPaused.
+        return !isPaused
+                && !mPausedForHostStop
+                && !mPausedForAudioFocus
+                && !mPausedForNoisyEvent;
+    }
+
+    @Override
+    public boolean buffering() {
+        return mIsBuffering;
+    }
+
+    @Override
+    public boolean ended() {
+        return mNativeStopped;
+    }
+
+    @Override
+    public androidx.media3.common.MediaMetadata metadata() {
+        return new androidx.media3.common.MediaMetadata.Builder()
+                .setTitle(mVideoTitle)
+                .setArtist(mVideoArtist)
+                .build();
+    }
+
+    @Override
+    public void onTransportPlayWhenReady(boolean playWhenReady) {
+        VlcLog.trace("SESSION", "transport playWhenReady=" + playWhenReady);
+        if (playWhenReady) {
+            // Pressing play from the notification or a headset overrides whatever paused
+            // playback. Without clearing these, playWhenReady() would keep reporting not
+            // playing while audio ran — the same lie as before, inverted.
+            mPausedForHostStop = false;
+            mPausedForAudioFocus = false;
+            mPausedForNoisyEvent = false;
+        }
+        setPausedModifier(!playWhenReady);
+    }
+
+    @Override
+    public void onTransportSeek(long positionMs) {
+        VlcLog.trace("SESSION", "transport seek=" + positionMs + "ms");
+        if (mMediaPlayer == null) {
+            return;
+        }
+        try {
+            mMediaPlayer.setTime(positionMs);
+        } catch (IllegalStateException e) {
+            // The player was released between the session sending this and it arriving.
+            VlcLog.warn("SESSION", "seek dropped, player released");
+        }
+    }
+
+    @Override
+    public void onTransportStop() {
+        VlcLog.trace("SESSION", "transport stop");
+        stopPlayer();
+    }
+
+    @Override
+    public void onTransportSpeed(float speed) {
+        VlcLog.trace("SESSION", "transport speed=" + speed);
+        setRateModifier(speed);
+    }
+
+    /** Tell the session that LibVLC's state moved, so the notification follows it. */
+    private void notifyMediaSession() {
+        final VlcMedia3Player sessionPlayer = VlcPlaybackHost.player();
+        if (sessionPlayer != null) {
+            sessionPlayer.notifyStateChanged();
+        }
     }
 }

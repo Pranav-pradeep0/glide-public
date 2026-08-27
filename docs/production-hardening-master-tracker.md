@@ -740,6 +740,100 @@ Decisions taken 2026-08-27:
 - `[decision]` Until this phase is complete, either label background playback
   experimental or disable its production toggle. Activity-owned playback is not a
   reliable background architecture.
+Implemented 2026-08-27. Five new files in the player module; `ReactVlcPlayerView` came
+out 58 lines shorter despite gaining the integration, because the hand-written session went.
+
+- `[done]` Move player ownership out of the view. `VlcPlaybackEngine` owns the `LibVLC`
+  instance, its `MediaPlayer`, and the file descriptor behind a `content://` source. The
+  view holds no native handles at all now; it borrows a player and gives it back. The 198
+  `mMediaPlayer` call sites were deliberately left alone — moving them would be a
+  3,000-line diff for no benefit.
+- `[done]` Media3 `MediaSessionService`. `GlidePlaybackService` declares
+  `foregroundServiceType="mediaPlayback"` with `FOREGROUND_SERVICE` and
+  `FOREGROUND_SERVICE_MEDIA_PLAYBACK`, all confirmed present in the release merged manifest.
+- `[done]` The smallest LibVLC-backed `Player`: `VlcMedia3Player extends SimpleBasePlayer`,
+  about 170 lines. Only `getState()` is abstract; the rest are optional handlers.
+  **It mirrors LibVLC rather than replacing it** — React still drives the LibVLC player
+  directly, and the adapter reports that state and forwards transport commands back.
+  Making React drive Media3 would mean rewriting every call site in the view to gain
+  nothing the session needs.
+- `[done]` Media3 owns the notification; the view-owned legacy implementation is deleted.
+  `MediaSessionCompat`, `showNotification`, `updatePlayPauseState`, `updateMediaMetadata`,
+  the notification channel and `NOTIFICATION_ID` are all gone.
+- `[done]` This deletes the notification-clock fix made earlier the same day, which is the
+  correct end for it. The adapter exposes position as a `PositionSupplier`, so the session
+  reads the live value instead of extrapolating from a position and a speed. There is no
+  longer a speed to get wrong.
+- `[done]` `onTaskRemoved` stops playback and the service, matching the decision above.
+- `[done]` `POST_NOTIFICATIONS` was **not** reintroduced by Media3, so section 5.1's removal
+  still holds: the Media3 notification is MediaStyle carrying a session token, which
+  Android exempts. Verified against the release merged manifest.
+
+Corrections to earlier assumptions in this section:
+
+- `[keep]` **Audio focus stays in the view.** Media3 does not manage focus for a
+  `SimpleBasePlayer`: `handleSetAudioAttributes(attributes, handleAudioFocus)` is a handler
+  the implementer fills in, and `AudioFocusManager` is a utility ExoPlayer wires up, not
+  something `SimpleBasePlayer` runs. The existing request/abandon, ducking, transient-loss
+  and noisy-device handling works; rewriting it onto `AudioFocusManager` would be churn
+  carrying real regression risk for no functional gain.
+- `[keep]` **PiP needs no service work.** The requirement was that PiP must not create a
+  second player. There is exactly one, owned by the engine, and PiP is the same Activity
+  and the same view entering PiP mode. Already satisfied.
+- `[decision]` **Media3 is pinned to 1.7.1, not 1.11.0.** Verified by building both: 1.11.0
+  requires `compileSdk 36` *and* Kotlin 2.x — it pulls `kotlin-stdlib 2.2.10` against this
+  project's 1.9.24 and fails with an incompatible-metadata error. Both are exactly the
+  AGP 9 / Kotlin 2.2 work in section 10.2. So this phase is coupled to that one after all,
+  which was not previously recorded. 1.7.1 has `SimpleBasePlayer`, `MediaSessionService` and
+  `PositionSupplier`, so nothing above depends on the newer release.
+- `[todo]` Media3 injects `ACCESS_NETWORK_STATE` into the merged manifest. It is a normal
+  permission so it does not prompt, and it is left in place: only `media3-session` and
+  `media3-common` are used, so it is probably unreachable, but removing a permission a
+  library declares without proving it unused risks a `SecurityException` in code this
+  project does not control. Confirm before stripping it.
+- `[done]` Fixed a crash found on the first device run: toggling video enhancement while
+  playing killed the process with `IllegalStateException: can't get VLCObject instance`
+  from `MediaPlayer.getTime`. The position supplier was written as `player::getTime`, a
+  method reference bound to whichever `MediaPlayer` existed when `getState()` ran. Media3
+  keeps suppliers from previous states alive to detect position discontinuities, and the
+  enhancement toggle releases and rebuilds the player, so the supplier outlived its
+  player. A null check cannot catch this: the reference is not null, it is released.
+  Every native read in the adapter now goes through one guarded helper that resolves the
+  player from the host each time and catches `IllegalStateException`, and position falls
+  back to the last good value so a dead player does not read as a seek to zero.
+- `[done]` Fixed no notification appearing at all, found on the second device run. The
+  adapter was reporting correct state — `state=READY playWhenReady=true` with real duration
+  and position — but `onUpdateNotification` was never called even once. Building a
+  `MediaSession` does not hand it to the `MediaSessionService`: `onGetSession` only fires
+  when a `MediaController` connects, and Glide's UI drives the player directly rather than
+  through a controller, so no controller ever connected. The service therefore never
+  adopted the session, never observed the player, and never posted a notification or went
+  foreground. `addSession` is now called explicitly in `onCreate` and `removeSession` in
+  `onDestroy`.
+- Correction: this section previously reasoned that a `MediaController` was optional
+  because the session alone would drive the notification. That was wrong about the
+  mechanism. A controller is still not required — `addSession` covers it — but the
+  registration it would have performed as a side effect is not optional.
+- `[done]` Confirmed on device: `isForeground=true foregroundId=1001 types=0x00000002`
+  (mediaPlayback), one active session, and transport controls from the notification drive
+  playback.
+- `[done]` Fixed the notification showing a play state after closing PiP while playing.
+  Two causes. The host-lifecycle pause path suppresses the VLC `Paused` event so React does
+  not mistake it for a user pause, and that `break` skipped the session too. And
+  `playWhenReady()` returned `!isPaused`, which is user intent — a lifecycle pause never
+  sets `isPaused`, so the session would have reported playing even once told. The session
+  now reports what playback is doing rather than what the user asked for: not playing when
+  paused for host stop, audio-focus loss, or a noisy device. Section 8.2 keeps those as
+  separate flags precisely so this distinction is expressible.
+- `[done]` Closed the inverse: `setPausedModifier` clears the involuntary pause flags only
+  on pause, never on play, so pressing play from the notification while backgrounded would
+  have left the notification reading paused while audio ran. An explicit transport play
+  clears them.
+- `[todo]` Device-test the corrected states: close PiP while playing, lose audio focus to a
+  call, and unplug headphones — the notification must show paused in all three, and pressing
+  play from it must resume and show playing. `[SERVICE] onUpdateNotification startInForeground=true` in the
+  trace is the confirmation; `[SERVICE] session created and registered` alone is not.
+
 - `[todo]` Move player and media-session ownership into a foreground playback service.
 - `[todo]` Prefer Media3 1.11.0 `MediaSessionService`; implement the smallest LibVLC-backed
   `Player` adapter needed by Glide rather than recreating ExoPlayer features.
@@ -935,7 +1029,19 @@ Re-run references immediately before deletion, then remove:
   - gate useful development diagnostics with `__DEV__`;
   - keep actionable production errors without media paths, content, or credentials;
   - enforce the rule in ESLint.
-- `[todo]` Audit all 208 project-owned Android `Log.*` calls at this baseline:
+- `[done]` Give the player a logging facility, 2026-08-27. `VlcLog` replaces every raw
+  `Log.*` call in `ReactVlcPlayerView` and `VlcPipController` — 134 of them — with one tag
+  (`GlideVLC`) and two levels. `trace` carries the play-by-play and is silent unless
+  `adb shell setprop log.tag.GlideVLC VERBOSE` is set, so a release build no longer floods
+  logcat during playback and PiP resize, while a developer can still get the full trace
+  from an installed build without a rebuild. `warn` and `error` stay always-on and carry
+  only what someone would act on. `Log.i` was folded into `trace`: during normal playback
+  info is noise, and anything warranting production visibility is already a warning.
+  The two continuously-running messages, `[PIP_RESIZE]` and `[RESIZE]`, are additionally
+  wrapped in `if (VlcLog.tracing())` because Java builds their strings — and `[PIP_RESIZE]`
+  walks to the Activity decor view — before the call regardless of level.
+- `[todo]` Apply the same treatment to the remaining project-owned Android `Log.*` calls
+  outside the player, and audit the original baseline of 208:
   85 debug, 63 info, 30 warning, and 30 error. Remove hot-path diagnostics, including
   production `Log.i` noise from `[PIP_RESIZE]`/`[PIP_BOUNDS]`; retain actionable warnings
   and errors without media URIs, titles, device content, or credentials. Development-only

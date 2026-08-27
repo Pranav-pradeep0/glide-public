@@ -79,6 +79,9 @@ ios/tmp.xcconfig
 !.env.example
 
 # Release signing keys (never commit)
+# Kotlin compiler scratch output, regenerated on every build
+android/.kotlin/
+
 android/app/glide-release.keystore
 android/app/my-upload-key.keystore
 # Agent/session scratch

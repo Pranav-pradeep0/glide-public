@@ -1,7 +1,24 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Playback continues while the app is backgrounded, which Android only permits
+         from a foreground service. From target SDK 35 audio focus is refused to a
+         background app outright, so this is what makes background playback honest. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+
     <application  android:label="@string/app_name"
         android:supportsRtl="true">
+
+        <!-- Media3 builds the notification and handles media buttons from the session,
+             so no notification code lives in the player view. -->
+        <service
+            android:name="com.yuanzhou.vlc.vlcplayer.GlidePlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+            </intent-filter>
+        </service>
 
     </application>
 

@@ -469,7 +469,7 @@ final class VlcPipController {
 
         int adjusted = layoutChainToWindow(width, height);
         if (adjusted > 0) {
-            Log.i(TAG, "[PIP_BOUNDS] " + adjusted + " view(s) -> " + width + "x" + height
+            VlcLog.trace("PIP_BOUNDS", adjusted + " view(s) -> " + width + "x" + height
                     + " reason=" + reason);
         }
     }
@@ -526,7 +526,7 @@ final class VlcPipController {
             return;
         }
 
-        Log.i(TAG, "[PIP_BOUNDS] surface was re-laid out to " + currentWidth + "x" + currentHeight
+        VlcLog.trace("PIP_BOUNDS", "surface was re-laid out to " + currentWidth + "x" + currentHeight
                 + ", re-asserting " + pipTargetWidth + "x" + pipTargetHeight);
         videoView.post(() -> {
             if (inPipMode) {
@@ -565,7 +565,7 @@ final class VlcPipController {
 
             int adjusted = layoutChainToWindow(width, height);
             if (adjusted > 0) {
-                Log.i(TAG, "[PIP_BOUNDS] restored " + adjusted + " view(s) -> "
+                VlcLog.trace("PIP_BOUNDS", "restored " + adjusted + " view(s) -> "
                         + width + "x" + height);
             }
         });
