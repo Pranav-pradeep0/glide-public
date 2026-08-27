@@ -49,9 +49,8 @@ dependencies {
     implementation 'com.facebook.react:react-android'
     implementation 'org.videolan.android:libvlc-all:3.6.5'
     // Media3 owns the media session, its notification, and media button handling.
-    // Pinned to 1.7.1. Verified 2026-08-27: 1.11.0 needs compileSdk 36 AND Kotlin 2.x
-    // (it pulls kotlin-stdlib 2.2.10, this project is on 1.9.24), which is exactly the
-    // AGP 9 / Kotlin 2.2 migration in tracker section 10.2. Raise it with that, not before.
-    implementation 'androidx.media3:media3-session:1.7.1'
-    implementation 'androidx.media3:media3-common:1.7.1'
+    // Media3 1.10.0 fixed stale foreground-service intents that could crash Android with
+    // ForegroundServiceDidNotStartInTimeException. The new toolchain supports 1.11.0.
+    implementation 'androidx.media3:media3-session:1.11.0'
+    implementation 'androidx.media3:media3-common:1.11.0'
 }
