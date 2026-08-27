@@ -23,6 +23,11 @@
     Print the service and session state and exit, without tailing.
 
 .EXAMPLE
+    .\scripts\glide-trace.ps1 -Verify
+    Check the toolchain-sensitive things a log never shows: 16 KB library alignment
+    in the built APKs, the device page size, and which build is installed.
+
+.EXAMPLE
     .\scripts\glide-trace.ps1 -Off
     Turn tracing back off, so release-level logging resumes.
 #>
@@ -37,7 +42,9 @@ param(
     # Keep the app running instead of restarting it to pick up tracing.
     [switch] $NoRestart,
     # Disable tracing and exit.
-    [switch] $Off
+    [switch] $Off,
+    # Verify the built APKs and the installed app, then exit.
+    [switch] $Verify
 )
 
 $ErrorActionPreference = 'Stop'
@@ -47,7 +54,9 @@ $tag = 'GlideVLC'
 if (-not (Get-Command adb -ErrorAction SilentlyContinue)) {
     throw "adb is not on PATH. Add <sdk>\platform-tools to PATH, or run it from there."
 }
-if (-not (adb devices | Select-String -Pattern '\bdevice$')) {
+# The APK checks in -Verify are local, so only the device-facing modes need one.
+$hasDevice = [bool](adb devices | Select-String -Pattern 'device$')
+if (-not $hasDevice -and -not $Verify) {
     throw "No device is connected. Check 'adb devices'."
 }
 
@@ -69,13 +78,67 @@ function Show-Snapshot {
     if ($session) { $session } else { Write-Host "  no session registered" -ForegroundColor DarkGray }
 
     Write-Host "`n=== notifications posted ===" -ForegroundColor Cyan
-    $notes = adb shell dumpsys notification --noredact | Select-String -Pattern $package -Context 0, 3
+    $notes = adb shell dumpsys notification --noredact |
+        Select-String -SimpleMatch "StatusBarNotification(pkg=$package" |
+        ForEach-Object {
+            # Only the parts that say whether this is a foreground media notification.
+            $line = $_.ToString()
+            $id = if ($line -match 'id=([0-9]+)') { $matches[1] } else { '?' }
+            $chan = if ($line -match 'channel=([^ ]+)') { $matches[1] } else { '?' }
+            $flags = if ($line -match 'flags=([^ ]+)') { $matches[1] } else { '' }
+            $fg = if ($flags -match 'FOREGROUND_SERVICE') { 'FOREGROUND' } else { 'not foreground' }
+            "  id=$id channel=$chan  [$fg]  $flags"
+        }
     if ($notes) { $notes } else { Write-Host "  none" -ForegroundColor DarkGray }
 
     Write-Host "`n=== granted permissions ===" -ForegroundColor Cyan
     adb shell dumpsys package $package |
         Select-String -Pattern 'android.permission\.[A-Z_]+: granted=true' |
         ForEach-Object { "  " + ($_ -replace '.*android\.permission\.', '') }
+}
+
+function Show-Verification {
+    # 16 KB pages: Android 15 and later can run with them, and every shared library in
+    # the APK must be 16 KB aligned or it will not load. NDK r27 only does this when
+    # ANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES is on, which React Native's Gradle plugin sets
+    # for us, so this is the check that the arrangement actually held.
+    Write-Host "`n=== 16 KB library alignment ===" -ForegroundColor Cyan
+    $zipalign = Get-ChildItem "$env:ANDROID_HOME\build-tools\*\zipalign.exe" -ErrorAction SilentlyContinue |
+        Sort-Object FullName -Descending | Select-Object -First 1
+    $apks = Get-ChildItem -Path "android\app\build\outputs\apk" -Filter *.apk -Recurse -ErrorAction SilentlyContinue
+    if (-not $zipalign) {
+        Write-Host "  zipalign not found under ANDROID_HOME; skipped." -ForegroundColor DarkGray
+    } elseif (-not $apks) {
+        Write-Host "  no APK built yet." -ForegroundColor DarkGray
+    } else {
+        foreach ($apk in $apks) {
+            $result = & $zipalign.FullName -c -P 16 4 $apk.FullName 2>&1
+            $ok = $LASTEXITCODE -eq 0
+            $colour = if ($ok) { 'Green' } else { 'Red' }
+            Write-Host ("  {0}: {1}" -f $apk.Name, $(if ($ok) { 'aligned' } else { 'NOT ALIGNED' })) -ForegroundColor $colour
+            if (-not $ok) { $result | Select-Object -First 5 }
+        }
+    }
+
+    if (-not $hasDevice) {
+        Write-Host "`nNo device attached; skipping device checks." -ForegroundColor DarkGray
+        return
+    }
+
+    Write-Host "`n=== device ===" -ForegroundColor Cyan
+    $pageSize = (adb shell getconf PAGE_SIZE).Trim()
+    Write-Host "  page size:  $pageSize$(if ($pageSize -eq '16384') { '  (16 KB device)' })"
+    Write-Host "  android:    $((adb shell getprop ro.build.version.release).Trim()) (API $((adb shell getprop ro.build.version.sdk).Trim()))"
+
+    Write-Host "`n=== installed build ===" -ForegroundColor Cyan
+    $info = adb shell dumpsys package $package | Select-String -Pattern 'versionName=|versionCode=|targetSdk='
+    if ($info) { $info | ForEach-Object { "  " + $_.ToString().Trim() } }
+    else { Write-Host "  not installed" -ForegroundColor DarkGray }
+}
+
+if ($Verify) {
+    Show-Verification
+    return
 }
 
 if ($Snapshot) {
@@ -91,6 +154,26 @@ if (-not $NoRestart) {
     Write-Host "Tracing on, app stopped. Open Glide now." -ForegroundColor Green
 } else {
     Write-Host "Tracing on. It applies from the next app launch." -ForegroundColor Yellow
+}
+
+if (-not $NoRestart) {
+    Write-Host "`nWaiting for playback to start - open a video now (Ctrl+C to skip)..." -ForegroundColor DarkGray
+    # The service only exists while something is playing, so waiting for the app process
+    # is not enough: the snapshot would describe an idle app every time.
+    $waited = 0
+    while ($waited -lt 180) {
+        $running = adb shell dumpsys activity services $package 2>$null |
+            Select-String -SimpleMatch "GlidePlaybackService"
+        if ($running) { break }
+        Start-Sleep -Seconds 1
+        $waited++
+    }
+    if ($waited -ge 180) {
+        Write-Host "No playback service appeared; snapshot describes an idle app." -ForegroundColor Yellow
+    } else {
+        # Let the session settle before asking what it looks like.
+        Start-Sleep -Seconds 2
+    }
 }
 
 Show-Snapshot

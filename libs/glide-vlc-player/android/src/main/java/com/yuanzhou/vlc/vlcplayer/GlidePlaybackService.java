@@ -1,9 +1,14 @@
 package com.yuanzhou.vlc.vlcplayer;
 
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.Service;
 import android.content.Intent;
 import android.os.Looper;
 
 import androidx.annotation.Nullable;
+import androidx.media3.session.DefaultMediaNotificationProvider;
 import androidx.media3.session.MediaSession;
 import androidx.media3.session.MediaSessionService;
 
@@ -24,6 +29,14 @@ import androidx.media3.session.MediaSessionService;
  */
 public final class GlidePlaybackService extends MediaSessionService {
 
+    /**
+     * Set once the service has begun stopping, so the settle-then-stop below runs at most
+     * once. A start command is still delivered after {@link #onCreate} calls it, which
+     * would otherwise post and withdraw a second notification and log the same warning
+     * twice.
+     */
+    private boolean stopping;
+
     @Nullable
     private MediaSession session;
     @Nullable
@@ -37,7 +50,7 @@ public final class GlidePlaybackService extends MediaSessionService {
         if (host == null) {
             // Nothing is playing; there is no state for a session to describe.
             VlcLog.warn("SERVICE", "started with no playback host, stopping");
-            stopSelf();
+            stopWithoutStrandingForeground();
             return;
         }
 
@@ -59,6 +72,78 @@ public final class GlidePlaybackService extends MediaSessionService {
     @Override
     public MediaSession onGetSession(MediaSession.ControllerInfo controllerInfo) {
         return session;
+    }
+
+    /**
+     * Media3 returns {@code START_STICKY}, which is right for a player that owns its own
+     * media and can rebuild after the process dies. This one cannot. The LibVLC player
+     * lives in the React view and {@link VlcPlaybackHost} is static, so both die with the
+     * process; a restarted service would have no player to describe and no session to
+     * rebuild. Left sticky, the platform restarts it, the restart lands in the no-host
+     * path, and the service is killed for never going foreground — forever.
+     *
+     * <p>A sticky restart is recognisable by its null intent.
+     */
+    @Override
+    public int onStartCommand(@Nullable Intent intent, int flags, int startId) {
+        if (intent == null || VlcPlaybackHost.get() == null) {
+            VlcLog.warn("SERVICE", "start with no playback state (intent="
+                    + (intent == null ? "null/restart" : "present") + "), stopping");
+            stopWithoutStrandingForeground();
+            return Service.START_NOT_STICKY;
+        }
+        super.onStartCommand(intent, flags, startId);
+        return Service.START_NOT_STICKY;
+    }
+
+    /**
+     * Stop in a way the platform accepts.
+     *
+     * <p>If this service was started with {@code startForegroundService()} — which Media3
+     * does itself, and which the platform does when restarting a service that had been in
+     * the foreground — then returning without a {@code startForeground()} call is a
+     * {@code ForegroundServiceDidNotStartInTimeException}, and the whole process is killed.
+     * Posting a notification and immediately withdrawing it settles that debt. When the
+     * start did not require foreground, this costs one notification the user never sees.
+     */
+    private void stopWithoutStrandingForeground() {
+        if (stopping) {
+            return;
+        }
+        stopping = true;
+        try {
+            startForeground(DefaultMediaNotificationProvider.DEFAULT_NOTIFICATION_ID,
+                    buildHandoffNotification());
+            stopForeground(Service.STOP_FOREGROUND_REMOVE);
+        } catch (Exception e) {
+            // Android 12+ can refuse a foreground start from the background. Nothing more
+            // can be done here, and crashing on the way out helps no one.
+            VlcLog.warn("SERVICE", "could not settle foreground state: " + e);
+        }
+        stopSelf();
+    }
+
+    /**
+     * Deliberately Media3's own channel and notification id rather than a second set.
+     * A channel is permanently visible in the app's notification settings once created, so
+     * inventing one here would leave the user a category for a notification that only ever
+     * exists for the microseconds between posting and withdrawing it. Reusing Media3's
+     * means nothing new appears, and there is no session posting under this id in the only
+     * path that reaches here.
+     */
+    private Notification buildHandoffNotification() {
+        final NotificationManager manager = getSystemService(NotificationManager.class);
+        final String channelId = DefaultMediaNotificationProvider.DEFAULT_CHANNEL_ID;
+        if (manager != null && manager.getNotificationChannel(channelId) == null) {
+            final NotificationChannel channel = new NotificationChannel(channelId,
+                    getString(DefaultMediaNotificationProvider.DEFAULT_CHANNEL_NAME_RESOURCE_ID),
+                    NotificationManager.IMPORTANCE_LOW);
+            manager.createNotificationChannel(channel);
+        }
+        return new Notification.Builder(this, channelId)
+                .setSmallIcon(android.R.drawable.ic_media_play)
+                .setOngoing(false)
+                .build();
     }
 
     /**
