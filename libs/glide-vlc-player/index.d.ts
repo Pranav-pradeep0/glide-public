@@ -207,16 +207,6 @@ export type VLCPlayerCallbackProps = {
    */
   onRecordingCreated?: (recordingPath: string) => void;
 
-  /**
-   * Called when a new snapshot is created
-   *
-   * @param event - Event properties
-   */
-  onSnapshot?: (event: {
-    success: boolean;
-    path?: string;
-    error?: string;
-  }) => void;
 
   /**
    * Called when a seek operation completes
@@ -408,7 +398,6 @@ declare class PlaybackMethods<T> extends Component<T> {
    *
    * @param path The file path where to save the screenshot
    */
-  snapshot(path: string);
 
   /**
    * Seek to the given position

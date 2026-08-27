@@ -165,7 +165,16 @@ export function useUpdateInstaller({
     const currentVersion = normalizeVersion(String(pkg.version || '0.0.0'));
     // Without a checksum there is nothing to verify the download against, so treat the
     // release as browser-only rather than installing bytes we cannot check.
-    const canDownload = isTrustedAssetUrl(apkUrl) && Boolean(apkSha256Url);
+    const hasInstaller = isTrustedAssetUrl(apkUrl);
+    const canDownload = hasInstaller && Boolean(apkSha256Url);
+
+    // Two different situations disable the button, and the user can act on them
+    // differently, so name the one that applies instead of collapsing both.
+    const unavailableReason: string | null = canDownload
+        ? null
+        : hasInstaller
+            ? 'That release publishes no checksum, so the download cannot be verified here. Open the release page to install it manually.'
+            : 'No installer for this device in that release. Open the release page to see what it offers.';
     const hasCachedApk = Boolean(cachedApk?.path);
 
     const cancelActiveDownload = useCallback(() => {
@@ -388,6 +397,7 @@ export function useUpdateInstaller({
 
     return {
         canDownload,
+        unavailableReason,
         cachedApk,
         clearError,
         downloadProgress,

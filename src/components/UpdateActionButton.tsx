@@ -63,66 +63,57 @@ export function UpdateActionButton({
         ? onOpenRelease
         : (hasCachedApk ? onInstallCached : onDownloadAndInstall);
 
-    // Say why the in-app download is unavailable instead of silently offering a browser.
-    const notice = error?.message
-        ?? (!canDownload ? 'This release has no verified download for your device.' : null);
-
     return (
         <View style={style}>
-            {notice ? (
-                <Text style={[styles.noticeText, { color: theme.dark ? '#FCA5A5' : '#B91C1C' }]}>
-                    {notice}
-                </Text>
-            ) : null}
-        <TouchableOpacity
-            style={[
-                styles.primaryButton,
-                isDownloading
-                    ? { backgroundColor: theme.dark ? '#2A2A2A' : '#F0F0F0' }
-                    : { backgroundColor: theme.dark ? '#FFFFFF' : '#000000' },
-            ]}
-            onLayout={(event) => setButtonWidth(event.nativeEvent.layout.width)}
-            onPress={action}
-            activeOpacity={isDownloading ? 1 : 0.85}
-            disabled={isDownloading}
-        >
-            {isDownloading ? (
-                <>
-                    <Animated.View
-                        style={[
-                            styles.progressFill,
-                            { backgroundColor: fillColor },
-                            progressFillStyle,
-                        ]}
-                    />
-                    <View style={styles.progressLabel}>
-                        <Text style={[styles.primaryText, { color: baseTextColor }]}>
-                            {downloadProgress !== null ? `Downloading ${downloadProgress}%` : 'Downloading...'}
-                        </Text>
-                    </View>
-                    <Animated.View style={[styles.progressTextClip, progressClipStyle]}>
-                        <View
+            <TouchableOpacity
+                style={[
+                    styles.primaryButton,
+                    isDownloading
+                        ? { backgroundColor: theme.dark ? '#2A2A2A' : '#F0F0F0' }
+                        : { backgroundColor: theme.dark ? '#FFFFFF' : '#000000' },
+                ]}
+                onLayout={(event) => setButtonWidth(event.nativeEvent.layout.width)}
+                onPress={action}
+                activeOpacity={isDownloading ? 1 : 0.85}
+                disabled={isDownloading}
+            >
+                {isDownloading ? (
+                    <>
+                        <Animated.View
                             style={[
-                                styles.progressTextInner,
-                                buttonWidth ? { width: buttonWidth } : null,
+                                styles.progressFill,
+                                { backgroundColor: fillColor },
+                                progressFillStyle,
                             ]}
-                        >
-                            <Text
-                                style={[
-                                    styles.primaryText,
-                                    { color: fillTextColor },
-                                ]}
-                                numberOfLines={1}
-                            >
+                        />
+                        <View style={styles.progressLabel}>
+                            <Text style={[styles.primaryText, { color: baseTextColor }]}>
                                 {downloadProgress !== null ? `Downloading ${downloadProgress}%` : 'Downloading...'}
                             </Text>
                         </View>
-                    </Animated.View>
-                </>
-            ) : (
-                <Text style={[styles.primaryText, { color: fillTextColor }]}>{label}</Text>
-            )}
-        </TouchableOpacity>
+                        <Animated.View style={[styles.progressTextClip, progressClipStyle]}>
+                            <View
+                                style={[
+                                    styles.progressTextInner,
+                                    buttonWidth ? { width: buttonWidth } : null,
+                                ]}
+                            >
+                                <Text
+                                    style={[
+                                        styles.primaryText,
+                                        { color: fillTextColor },
+                                    ]}
+                                    numberOfLines={1}
+                                >
+                                    {downloadProgress !== null ? `Downloading ${downloadProgress}%` : 'Downloading...'}
+                                </Text>
+                            </View>
+                        </Animated.View>
+                    </>
+                ) : (
+                    <Text style={[styles.primaryText, { color: fillTextColor }]}>{label}</Text>
+                )}
+            </TouchableOpacity>
             {isDownloading && onCancelDownload ? (
                 <TouchableOpacity onPress={onCancelDownload} activeOpacity={0.7} style={styles.cancel}>
                     <Text style={[styles.cancelText, { color: theme.dark ? '#A0A0A0' : '#6B7280' }]}>
@@ -151,9 +142,8 @@ const styles = StyleSheet.create({
     },
     noticeText: {
         fontSize: 12,
-        lineHeight: 16,
-        marginBottom: 8,
-        textAlign: 'center',
+        lineHeight: 17,
+        marginBottom: 12,
     },
     cancel: {
         alignSelf: 'center',
@@ -197,3 +187,24 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
     },
 });
+
+/**
+ * Why the in-app download is unavailable, or what just went wrong. Rendered by the
+ * surfaces rather than by the button: in the modal the button shares a row with Dismiss
+ * and carries flex: 1, so anything inside it is confined to half the width.
+ */
+export function UpdateNotice({ error, unavailableReason }: {
+    error?: UpdateError | null;
+    unavailableReason?: string | null;
+}) {
+    const theme = useTheme();
+    const text = error?.message ?? unavailableReason ?? null;
+    if (!text) {
+        return null;
+    }
+    return (
+        <Text style={[styles.noticeText, { color: theme.dark ? '#FCA5A5' : '#B91C1C' }]}>
+            {text}
+        </Text>
+    );
+}

@@ -207,7 +207,13 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
     const toggleBackgroundPlay = useCallback(() => {
         const newValue = !settings.backgroundPlayEnabled;
 
-        showToast?.(newValue ? 'Background play enabled' : 'Background play disabled', 'background-play');
+        // Marked experimental until the Media3 foreground service exists (tracker §9).
+        // Playback is owned by the Activity, so Android can reclaim it while backgrounded,
+        // and from target SDK 35 it refuses audio focus to a background app outright.
+        showToast?.(
+            newValue ? 'Background play on · experimental' : 'Background play off',
+            'background-play'
+        );
         setSettings(prev => ({
             ...prev,
             backgroundPlayEnabled: newValue,

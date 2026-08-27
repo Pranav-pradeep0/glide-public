@@ -230,16 +230,11 @@ public class ReactVlcPlayerViewManager extends SimpleViewManager<ReactVlcPlayerV
         videoView.pausePlayer();
     }
 
-    public void snapshot(final ReactVlcPlayerView videoView, final String path) {
-        videoView.doSnapshot(path);
-    }
-
     @Override
     public Map<String, Integer> getCommandsMap() {
         return MapBuilder.of(
                 "startRecording", 1,
                 "stopRecording", 2,
-                "snapshot", 3,
                 "pausePlayer", 4,
                 "stopPlayer", 5,
                 "enterPictureInPicture", 6);
@@ -257,13 +252,6 @@ public class ReactVlcPlayerViewManager extends SimpleViewManager<ReactVlcPlayerV
 
             case 2:
                 root.stopRecording();
-                break;
-
-            case 3:
-                if (args != null && args.size() > 0 && !args.isNull(0)) {
-                    String path = args.getString(0);
-                    root.doSnapshot(path);
-                }
                 break;
 
             case 4:

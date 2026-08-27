@@ -7,7 +7,6 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.text.TextUtils;
 import android.content.res.Configuration;
-import android.graphics.Bitmap;
 import android.graphics.SurfaceTexture;
 import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
@@ -36,7 +35,6 @@ import org.videolan.libvlc.MediaPlayer;
 import org.videolan.libvlc.Dialog;
 
 import java.io.File;
-import java.io.FileOutputStream;
 import java.util.ArrayList;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
@@ -137,8 +135,6 @@ class ReactVlcPlayerView extends TextureView implements
     private int mVideoVisibleWidth = 0;
     private int mSarNum = 0;
     private int mSarDen = 0;
-    private int mLastViewWidth = 0;
-    private int mLastViewHeight = 0;
     private int mLastAppliedViewWidth = -1;
     private int mLastAppliedViewHeight = -1;
     private int mLastAppliedVideoWidth = -1;
@@ -437,8 +433,7 @@ class ReactVlcPlayerView extends TextureView implements
         super.onConfigurationChanged(newConfig);
         // PiP enter/exit is handled by VlcPipController; this only needs to refit the
         // video to whatever bounds the window now has.
-        isResizeModeApplied = false;
-        post(this::applyResizeMode);
+        invalidateAndRefitGeometry();
     }
 
     @Override
@@ -729,8 +724,6 @@ class ReactVlcPlayerView extends TextureView implements
                 boolean sizeChanged = (width != (oldRight - oldLeft)) || (height != (oldBottom - oldTop));
                 if (sizeChanged) {
                     Log.d(TAG, "[LAYOUT] size changed → " + width + "x" + height);
-                    mLastViewWidth = width;
-                    mLastViewHeight = height;
                     if (mMediaPlayer != null) {
                         requestResizeMode();
                     }
@@ -908,7 +901,14 @@ class ReactVlcPlayerView extends TextureView implements
                         if (videoTrack != null && videoTrack.width > 0 && videoTrack.height > 0) {
                             mVideoWidth = videoTrack.width;
                             mVideoHeight = videoTrack.height;
-                            Log.i(TAG, "[VLC_EVENT] Playing: fallback dimensions=" + mVideoWidth + "x" + mVideoHeight);
+                            // Take the sample aspect ratio too. Without it, anamorphic
+                            // sources on the many files where onNewVideoLayout never
+                            // fires were treated as square-pixel and rendered at the
+                            // wrong shape in every mode that corrects for SAR.
+                            mSarNum = videoTrack.sarNum;
+                            mSarDen = videoTrack.sarDen;
+                            Log.i(TAG, "[VLC_EVENT] Playing: fallback dimensions=" + mVideoWidth + "x" + mVideoHeight
+                                    + " SAR=" + mSarNum + ":" + mSarDen);
                             // onNewVideoLayout never fires on many files, so this is
                             // the only source of truth for the video size. Without it the
                             // PiP controller has no aspect ratio to give the window.
@@ -1930,56 +1930,6 @@ class ReactVlcPlayerView extends TextureView implements
         }
     }
 
-    public boolean doSnapshot(String path) {
-        // NOTE: getBitmap() reads the GPU framebuffer synchronously on the main thread.
-        // For production use, consider dispatching to a background thread and
-        // delivering
-        // the result via a callback to avoid frame drops on high-DPI devices.
-        if (mMediaPlayer == null) {
-            sendSnapshotEvent(false, null, "MediaPlayer is null");
-            return false;
-        }
-        Bitmap bitmap = null;
-        try {
-            bitmap = getBitmap();
-            if (bitmap == null) {
-                sendSnapshotEvent(false, null, "Failed to capture bitmap");
-                return false;
-            }
-            File file = new File(path);
-            File parent = file.getParentFile();
-            if (parent != null)
-                parent.mkdirs();
-            FileOutputStream out = new FileOutputStream(file);
-            String extension = path.substring(path.lastIndexOf('.') + 1).toLowerCase();
-            if (extension.equals("png")) {
-                bitmap.compress(Bitmap.CompressFormat.PNG, 100, out);
-            } else {
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 100, out);
-            }
-            out.flush();
-            out.close();
-            sendSnapshotEvent(true, path, null);
-            return true;
-        } catch (Exception e) {
-            sendSnapshotEvent(false, null, e.getMessage());
-            return false;
-        } finally {
-            if (bitmap != null)
-                bitmap.recycle();
-        }
-    }
-
-    private void sendSnapshotEvent(boolean success, String path, String error) {
-        WritableMap event = Arguments.createMap();
-        event.putBoolean("success", success);
-        if (path != null)
-            event.putString("path", path);
-        if (error != null)
-            event.putString("error", error);
-        eventEmitter.sendEvent(event, VideoEventEmitter.EVENT_ON_SNAPSHOT);
-    }
-
     public void doResume(boolean autoplay) {
         Log.i(TAG, "[RESUME] doResume autoplay=" + autoplay);
         createPlayer(autoplay, true);
@@ -2111,8 +2061,7 @@ class ReactVlcPlayerView extends TextureView implements
         }
 
         // The window changed size; recompute geometry once against the new bounds.
-        isResizeModeApplied = false;
-        post(this::applyResizeMode);
+        invalidateAndRefitGeometry();
     }
 
     android.app.Activity getReactActivity() {
@@ -2167,6 +2116,16 @@ class ReactVlcPlayerView extends TextureView implements
     // Resize implementation
     // =========================================================================
 
+    /**
+     * The one way to say "the window holding this video changed; refit it". Posted so it
+     * runs after the layout pass that triggered it, and guarded inside applyResizeMode
+     * against a player or view that is not measurable yet.
+     */
+    private void invalidateAndRefitGeometry() {
+        isResizeModeApplied = false;
+        post(this::applyResizeMode);
+    }
+
     private void applyResizeMode() {
         if (mMediaPlayer == null)
             return;
@@ -2192,8 +2151,6 @@ class ReactVlcPlayerView extends TextureView implements
             try {
                 mMediaPlayer.setAspectRatio(viewWidth + ":" + viewHeight);
                 mMediaPlayer.setScale(0);
-                mLastViewWidth = viewWidth;
-                mLastViewHeight = viewHeight;
                 recordAppliedResizeState(viewWidth, viewHeight);
                 isResizeModeApplied = true;
                 Log.d(TAG, "[RESIZE] autoAR applied " + viewWidth + ":" + viewHeight);
@@ -2206,13 +2163,8 @@ class ReactVlcPlayerView extends TextureView implements
         if (mVideoWidth <= 0 || mVideoHeight <= 0)
             return;
 
-        mLastViewWidth = viewWidth;
-        mLastViewHeight = viewHeight;
 
         try {
-            Log.d(TAG, "[RESIZE] applying mode=" + resizeMode
-                    + " view=" + viewWidth + "x" + viewHeight
-                    + " video=" + mVideoWidth + "x" + mVideoHeight);
             applyResizeModeInternal(viewWidth, viewHeight);
             recordAppliedResizeState(viewWidth, viewHeight);
             isResizeModeApplied = true;
@@ -2309,31 +2261,30 @@ class ReactVlcPlayerView extends TextureView implements
     }
 
 
+    /**
+     * The single route from a resize mode to the player. Measures once, decides once,
+     * applies once.
+     */
     private void applyResizeModeInternal(int viewWidth, int viewHeight) {
-        IVLCVout vlcOut = mMediaPlayer.getVLCVout();
-        resetTextureViewTransform();
-        vlcOut.setWindowSize(viewWidth, viewHeight);
-        switch (resizeMode) {
-            case "cover":
-                applyCoverMode();
-                break;
-            case "fill":
-            case "stretch":
-                applyFillMode(viewWidth, viewHeight);
-                break;
-            case "none":
-                applyNoneMode();
-                break;
-            case "scale-down":
-                applyScaleDownMode();
-                break;
-            case "best-fit":
-                applyBestFitMode();
-                break;
-            default:
-                applyContainMode();
-                break;
+        GeometrySpec spec = computeGeometry(
+                resizeMode, viewWidth, viewHeight,
+                getEffectiveVideoWidth(), getEffectiveVideoHeight(),
+                mSarNum, mSarDen, mBestFitUsingCover);
+
+        if (spec.bestFitUsingCover != null) {
+            mBestFitUsingCover = spec.bestFitUsingCover;
         }
+
+        resetTextureViewTransform();
+        mMediaPlayer.getVLCVout().setWindowSize(viewWidth, viewHeight);
+        mMediaPlayer.setAspectRatio(spec.aspectRatio);
+        mMediaPlayer.setScale(spec.scale);
+
+        Log.d(TAG, "[RESIZE] mode=" + resizeMode
+                + " view=" + viewWidth + "x" + viewHeight
+                + " video=" + getEffectiveVideoWidth() + "x" + getEffectiveVideoHeight()
+                + " sar=" + mSarNum + ":" + mSarDen
+                + " ar=" + spec.aspectRatio + " scale=" + spec.scale);
     }
 
     private void resetTextureViewTransform() {
@@ -2348,109 +2299,110 @@ class ReactVlcPlayerView extends TextureView implements
         return mVideoVisibleHeight > 0 ? mVideoVisibleHeight : mVideoHeight;
     }
 
-    private void applyCoverMode() {
-        mMediaPlayer.setAspectRatio(null);
-        int vw = getWidth(), vh = getHeight();
-        int evw = getEffectiveVideoWidth(), evh = getEffectiveVideoHeight();
-        float sar = (mSarNum > 0 && mSarDen > 0) ? (float) mSarNum / mSarDen : 1f;
-        float dispW = evw * sar;
-        float coverScale = Math.max((float) vw / dispW, (float) vh / evh);
-        mMediaPlayer.setScale(coverScale);
-        Log.d(TAG, "[RESIZE] cover scale=" + coverScale);
-    }
+    /**
+     * The geometry decision for one resize mode, as data.
+     *
+     * Every mode used to mutate the MediaPlayer directly from its own helper, and each
+     * helper re-read getWidth()/getHeight() and recomputed SAR for itself. Producing a
+     * value instead means the whole decision is one readable function, the view is
+     * measured exactly once per application, and the modes cannot drift apart.
+     */
+    private static final class GeometrySpec {
+        /** Display aspect ratio for LibVLC, or null to let it decide. */
+        final String aspectRatio;
+        /** Zoom factor, or 0 to let LibVLC fit the window. */
+        final float scale;
+        /** New best-fit hysteresis state; null for every other mode. */
+        final Boolean bestFitUsingCover;
 
-    private void applyBestFitMode() {
-        mMediaPlayer.setAspectRatio(null);
-        int vw = getWidth(), vh = getHeight();
-        int evw = getEffectiveVideoWidth(), evh = getEffectiveVideoHeight();
-        if (vw <= 0 || vh <= 0 || evw <= 0 || evh <= 0) {
-            applyContainMode();
-            return;
-        }
-        float sar = (mSarNum > 0 && mSarDen > 0) ? (float) mSarNum / mSarDen : 1f;
-        float dispW = evw * sar;
-        float scaleX = (float) vw / dispW;
-        float scaleY = (float) vh / evh;
-        float containScale = Math.min(scaleX, scaleY);
-        float coverScale = Math.max(scaleX, scaleY);
-        float containW = dispW * containScale;
-        float containH = evh * containScale;
-        float coverW = dispW * coverScale;
-        float coverH = evh * coverScale;
-        float viewArea = (float) vw * vh;
-        float cropRatio = (coverW > 0 && coverH > 0)
-                ? (1f - (viewArea / (coverW * coverH)))
-                : 1f;
-        float hBar = Math.max(0f, (vw - containW) / vw);
-        float vBar = Math.max(0f, (vh - containH) / vh);
-        float maxBar = Math.max(hBar, vBar);
-
-        boolean useCover;
-        if (Boolean.TRUE.equals(mBestFitUsingCover)) {
-            // Currently using cover — exit only if crop/bar exceed EXIT thresholds
-            useCover = cropRatio <= BEST_FIT_EXIT_CROP_RATIO
-                    && maxBar <= BEST_FIT_EXIT_BAR_RATIO;
-        } else {
-            // Currently using contain — enter cover only if well within ENTER thresholds
-            useCover = cropRatio >= 0f
-                    && cropRatio <= BEST_FIT_ENTER_CROP_RATIO
-                    && maxBar <= BEST_FIT_ENTER_BAR_RATIO
-                    && (containW * containH) / viewArea < 0.999f;
-        }
-        mBestFitUsingCover = useCover;
-
-        if (useCover) {
-            mMediaPlayer.setScale(coverScale);
-            Log.d(TAG, "[RESIZE] best-fit=cover scale=" + coverScale + " crop=" + cropRatio);
-        } else {
-            mMediaPlayer.setScale(0f);
-            Log.d(TAG, "[RESIZE] best-fit=contain crop=" + cropRatio);
+        GeometrySpec(String aspectRatio, float scale, Boolean bestFitUsingCover) {
+            this.aspectRatio = aspectRatio;
+            this.scale = scale;
+            this.bestFitUsingCover = bestFitUsingCover;
         }
     }
 
-    private void applyFillMode(int vw, int vh) {
-        mMediaPlayer.setAspectRatio(vw + ":" + vh);
-        mMediaPlayer.setScale(0);
-        Log.d(TAG, "[RESIZE] fill AR=" + vw + ":" + vh);
+    /**
+     * Pure geometry decision. No view access and no player mutation, so the arithmetic
+     * for every mode sits in one place and can be reasoned about without a device.
+     *
+     * @param bestFitUsingCover previous best-fit state, for hysteresis; null if unset.
+     */
+    private static GeometrySpec computeGeometry(
+            String mode, int viewW, int viewH, int videoW, int videoH,
+            int sarNum, int sarDen, Boolean bestFitUsingCover) {
+
+        // Source width corrected for non-square pixels. Everything below compares the
+        // view against this, never against the raw frame width.
+        final float sar = (sarNum > 0 && sarDen > 0) ? (float) sarNum / sarDen : 1f;
+        final float displayW = videoW * sar;
+
+        if ("fill".equals(mode) || "stretch".equals(mode)) {
+            return new GeometrySpec(viewW + ":" + viewH, 0f, null);
+        }
+
+        if ("none".equals(mode)) {
+            // Null aspect, not an explicit one: VLC already applies the stream's own display
+            // aspect ratio, SAR included. Forcing a ratio here deformed the picture.
+            return new GeometrySpec(null, 1f, null);
+        }
+
+        // Every mode below scales against the view, so it needs both to be measurable.
+        if (viewW <= 0 || viewH <= 0 || displayW <= 0 || videoH <= 0) {
+            // Not enough information to scale; contain is the safe default.
+            return new GeometrySpec(null, 0f, null);
+        }
+
+        final float scaleX = viewW / displayW;
+        final float scaleY = viewH / (float) videoH;
+
+        if ("cover".equals(mode)) {
+            return new GeometrySpec(null, Math.max(scaleX, scaleY), null);
+        }
+
+        if ("scale-down".equals(mode)) {
+            // Native size unless the source overflows the view, and never a forced aspect:
+            // shrinking must not change the shape. displayW already accounts for SAR.
+            boolean overflows = displayW > viewW || videoH > viewH;
+            return new GeometrySpec(null, overflows ? Math.min(scaleX, scaleY) : 1f, null);
+        }
+
+        if ("best-fit".equals(mode)) {
+            final float containScale = Math.min(scaleX, scaleY);
+            final float coverScale = Math.max(scaleX, scaleY);
+            final float containW = displayW * containScale;
+            final float containH = videoH * containScale;
+            final float coverW = displayW * coverScale;
+            final float coverH = videoH * coverScale;
+            final float viewArea = (float) viewW * viewH;
+
+            // How much of the frame cover would crop away, and how much letterboxing
+            // contain would leave. Cover is only worth it when it crops very little.
+            final float cropRatio = (coverW > 0 && coverH > 0)
+                    ? (1f - (viewArea / (coverW * coverH)))
+                    : 1f;
+            final float maxBar = Math.max(
+                    Math.max(0f, (viewW - containW) / viewW),
+                    Math.max(0f, (viewH - containH) / viewH));
+
+            // Asymmetric thresholds: once cover is chosen it takes a larger change to
+            // leave it, so a slowly resizing window cannot oscillate between the two.
+            final boolean useCover;
+            if (Boolean.TRUE.equals(bestFitUsingCover)) {
+                useCover = cropRatio <= BEST_FIT_EXIT_CROP_RATIO && maxBar <= BEST_FIT_EXIT_BAR_RATIO;
+            } else {
+                // cropRatio cannot be negative: cover always covers at least the view.
+                useCover = cropRatio <= BEST_FIT_ENTER_CROP_RATIO
+                        && maxBar <= BEST_FIT_ENTER_BAR_RATIO
+                        && (containW * containH) / viewArea < 0.999f;
+            }
+            return new GeometrySpec(null, useCover ? coverScale : 0f, useCover);
+        }
+
+        // "contain" and anything unrecognised: let LibVLC fit the window itself.
+        return new GeometrySpec(null, 0f, null);
     }
 
-    private void applyNoneMode() {
-        int evw = getEffectiveVideoWidth(), evh = getEffectiveVideoHeight();
-        if (mSarNum > 0 && mSarDen > 0) {
-            mMediaPlayer.setAspectRatio((evw * mSarNum) + ":" + (evh * mSarDen));
-        } else {
-            mMediaPlayer.setAspectRatio(null);
-        }
-        mMediaPlayer.setScale(1f);
-        Log.d(TAG, "[RESIZE] none 1:1");
-    }
-
-    private void applyContainMode() {
-        mMediaPlayer.setAspectRatio(null);
-        mMediaPlayer.setScale(0);
-        Log.d(TAG, "[RESIZE] contain (VLC auto)");
-    }
-
-    private void applyScaleDownMode() {
-        int evw = getEffectiveVideoWidth(), evh = getEffectiveVideoHeight();
-        float sar = 1f;
-        if (mSarNum > 0 && mSarDen > 0) {
-            mMediaPlayer.setAspectRatio((evw * mSarNum) + ":" + (evh * mSarDen));
-            sar = (float) mSarNum / mSarDen;
-        } else {
-            mMediaPlayer.setAspectRatio(null);
-        }
-        int vw = getWidth(), vh = getHeight();
-        float dispW = evw * sar;
-        if (dispW > vw || evh > vh) {
-            float scale = Math.min((float) vw / dispW, (float) vh / evh);
-            mMediaPlayer.setScale(scale);
-            Log.d(TAG, "[RESIZE] scale-down shrink scale=" + scale);
-        } else {
-            mMediaPlayer.setScale(1f);
-            Log.d(TAG, "[RESIZE] scale-down 1:1 (fits)");
-        }
-    }
 
     // =========================================================================
     // Video Enhancement Lifecycle
@@ -2840,25 +2792,14 @@ class ReactVlcPlayerView extends TextureView implements
     @Override
     public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {
         Log.d(TAG, "[SURFACE] buffer size changed " + width + "x" + height);
-        if (mMediaPlayer != null) {
-            try {
-                mMediaPlayer.getVLCVout().setWindowSize(width, height);
-            } catch (Exception e) {
-                Log.w(TAG, "[SURFACE] failed to update VLC window size: " + e.getMessage());
-            }
-            isResizeModeApplied = false;
-        }
-        if (mMediaPlayer != null && (autoAspectRatio || (mVideoWidth > 0 && mVideoHeight > 0))) {
-            applyResizeMode();
-        }
+        invalidateAndRefitGeometry();
     }
 
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
         if (w != oldw || h != oldh) {
-            isResizeModeApplied = false;
-            post(this::applyResizeMode);
+            invalidateAndRefitGeometry();
         }
     }
 

@@ -436,7 +436,14 @@ export const PlayerControls: FC<PlayerControlsProps> = React.memo(({
                     </Pressable>
 
                     {isLandscape && onToggleBackgroundPlay && (
-                        <Pressable onPress={onToggleBackgroundPlay} style={styles.controlBtnSmall} hitSlop={10}>
+                        <Pressable
+                            onPress={onToggleBackgroundPlay}
+                            style={styles.controlBtnSmall}
+                            hitSlop={10}
+                            accessibilityRole="switch"
+                            accessibilityState={{ checked: Boolean(backgroundPlayEnabled) }}
+                            accessibilityLabel="Background play, experimental"
+                        >
                             <BackgroundPlayIcon size={20} color={backgroundPlayEnabled ? '#FBBF24' : '#fff'} />
                         </Pressable>
                     )}

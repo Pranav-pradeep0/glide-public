@@ -50,7 +50,6 @@ interface RCTVLCPlayerNativeProps {
     onVideoBuffering?: (event: any) => void;
     onVideoLoad?: (event: any) => void;
     onRecordingState?: (event: any) => void;
-    onSnapshot?: (event: any) => void;
     onVideoSeek?: (event: any) => void;
     [key: string]: any;
 }
@@ -116,7 +115,6 @@ export interface VLCPlayerProps extends ViewProps {
     onVideoLoad?: (event: any) => void;
     onVideoSeek?: (event: any) => void;
     onRecordingState?: (event: any) => void;
-    onSnapshot?: (event: any) => void;
 
     /* Wrapper callbacks */
     onLoadStart?: (event: any) => void;
@@ -138,7 +136,6 @@ export interface VLCPlayerRef {
     seek: (pos: number) => void;
     previewSeek: (pos: number) => void;
     resume: (isResume: boolean) => void;
-    snapshot: (path: string) => void;
     startRecording: (path: string) => void;
     stopRecording: () => void;
     stopPlayer: () => void;
@@ -165,9 +162,6 @@ const VLCPlayer = forwardRef<VLCPlayerRef, VLCPlayerProps>((props, ref) => {
         },
         resume: (isResume: boolean) => {
             setNativeProps({ resume: isResume });
-        },
-        snapshot: (path: string) => {
-            dispatchCommand('snapshot', [path]);
         },
         startRecording: (path: string) => {
             dispatchCommand('startRecording', [path]);
@@ -265,12 +259,6 @@ const VLCPlayer = forwardRef<VLCPlayerRef, VLCPlayerProps>((props, ref) => {
         }
     };
 
-    const _onSnapshot = (event: NativeSyntheticEvent<any>) => {
-        if (event.nativeEvent.success) {
-            props.onSnapshot?.(event.nativeEvent);
-        }
-    };
-
     const _onSeek = (event: NativeSyntheticEvent<any>) => {
         props.onSeek?.(event.nativeEvent);
     };
@@ -329,7 +317,6 @@ const VLCPlayer = forwardRef<VLCPlayerRef, VLCPlayerProps>((props, ref) => {
             onVideoBuffering={_onBuffering}
             onVideoLoad={_onLoad}
             onRecordingState={_onRecordingState}
-            onSnapshot={_onSnapshot}
             onVideoSeek={_onSeek}
         />
     );

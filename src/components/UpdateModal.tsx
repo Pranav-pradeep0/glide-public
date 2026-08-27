@@ -16,7 +16,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { Feather } from '@react-native-vector-icons/feather';
 import { useTheme } from '@/hooks/useTheme';
-import { UpdateActionButton } from '@/components/UpdateActionButton';
+import { UpdateActionButton, UpdateNotice } from '@/components/UpdateActionButton';
 import { useUpdateInstaller } from '@/hooks/useUpdateInstaller';
 import { UpdateNotes } from '@/components/UpdateNotes';
 
@@ -47,6 +47,7 @@ export default function UpdateModal({
     const scaleAnim = useSharedValue(0.9);
     const {
         canDownload,
+        unavailableReason,
         downloadProgress,
         error,
         handleCancelDownload,
@@ -150,6 +151,8 @@ export default function UpdateModal({
                 </View>
 
                 <UpdateNotes notes={releaseNotes} />
+
+                <UpdateNotice error={error} unavailableReason={unavailableReason} />
 
                 <View style={styles.actions}>
                     {!isDownloading && (

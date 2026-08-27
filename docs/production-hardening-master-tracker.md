@@ -500,23 +500,75 @@ started, which is why the ABI defect in section 7.1 was invisible in production.
 
 ### 8.1 Replace hand-written resize geometry
 
-- `[todo]` Spike `VLCVideoLayout` with `useTextureView=true`; snapshots must continue working.
-- `[todo]` Route modes through LibVLC `ScaleType`:
-  - `contain` → `SURFACE_BEST_FIT`;
-  - `cover` → `SURFACE_FIT_SCREEN`;
-  - `fill` → `SURFACE_FILL`;
-  - `none` → `SURFACE_ORIGINAL`;
-  - `scale-down` → original unless source exceeds view, then best fit;
-  - `best-fit` → retain one hysteresis decision between best fit and fit screen.
-- `[todo]` Delete duplicate helpers, forced resize retries, resize-mode cache fields,
-  and ad-hoc `setWindowSize` calls replaced by the maintained LibVLC path.
-- `[todo]` Use one layout/video-size update route. Do not call resize from six callbacks.
-- `[todo]` Correct video size/SAR handling. Real files currently reach the Playing-event
-  fallback while `onNewVideoLayout` may not fire; visible width/height can remain zero,
-  and SAR has been observed as an area-like value.
-- `[todo]` Preserve user pinch zoom/pan only in `contain`, and disable transforms in PiP.
-- `[todo]` If `VLCVideoLayout` conflicts with Fabric management, use the documented
-  fallback: keep the TextureView but collapse geometry into one `setVideoScale` path.
+**Correction, verified against the LibVLC 3.6.5 bytecode on 2026-08-27.** The plan below
+originally routed resize modes through `MediaPlayer.setVideoScale(ScaleType)`. That method
+cannot work here:
+
+```java
+public void setVideoScale(ScaleType st) {
+    if (mVideoHelper != null) { mVideoHelper.setVideoScale(st); }
+    return;   // silent no-op otherwise
+}
+```
+
+`mVideoHelper` is constructed *only* inside `attachViews(VLCVideoLayout, DisplayManager,
+boolean, boolean)`. Glide attaches through the raw
+`IVLCVout.attachViews(OnNewVideoLayoutListener)` path, so `setVideoScale` and
+`updateVideoSurfaces` are both no-ops in this codebase. The former fallback — "keep the
+TextureView but collapse geometry into one `setVideoScale` path" — was self-contradictory.
+
+Adopting `VLCVideoLayout` to obtain `ScaleType` was rejected against two verified facts:
+`VlcPipController` overrides bounds on this view's subtree, and Fabric manages the view as
+the TextureView. A third blocker, `doSnapshot()` needing `TextureView.getBitmap()`, was
+removed when the screenshot feature was deleted as unused — so the case is weaker than it
+was, but the PiP bounds override remains the hard one. LibVLC 4 changes this API surface,
+and section 11.1 already forbids shipping its EAP, so revisit only when LibVLC 4 is stable.
+
+The goal is unchanged — one geometry route, correct SAR, no forced retries — but it is met
+with app-owned math against the TextureView rather than with LibVLC's scaler.
+
+- `[keep]` Stay on `TextureView` with `IVLCVout.attachViews(listener)`. Do not spike
+  `VLCVideoLayout` while snapshots, PiP bounds override, and Fabric depend on the
+  TextureView identity.
+- `[done]` Collapse the resize entry points onto one route. `invalidateAndRefitGeometry()`
+  is now the only way to request a refit, used by configuration change, PiP mode change,
+  surface-buffer resize and view resize. Eight sites became five, and the four that remain
+  are player-state resets rather than entry points: two clear geometry as part of a larger
+  create/release reset, one is the route itself, and one is the deliberate PiP path that
+  must re-apply on every window resize.
+- `[done]` Delete the six mutating mode helpers. Each re-read `getWidth()`/`getHeight()`
+  and recomputed SAR for itself; they are replaced by one pure `computeGeometry()` that
+  returns an aspect ratio and a scale, so the view is measured once per application and
+  the modes cannot drift apart. `onSurfaceTextureSizeChanged` also published an ad-hoc
+  `setWindowSize` with buffer dimensions that `applyResizeMode` immediately overwrote with
+  view dimensions; that call is gone.
+- `[keep]` The applied-state cache fields. They prevent redundant native calls on every
+  layout pass, and the cache is keyed on every input the geometry depends on.
+- `[done]` Correct video size/SAR handling. Verified defect: the Playing-event fallback
+  set `mVideoWidth`/`mVideoHeight` from the video track and passed the track SAR to the PiP
+  controller, but never assigned `mSarNum`/`mSarDen`. On the many files where
+  `onNewVideoLayout` never fires, anamorphic sources were therefore treated as square-pixel
+  and rendered at the wrong shape in cover, best-fit, none and scale-down. The fallback now
+  takes the SAR too. The area-like values were the unreduced `width*sarNum : height*sarDen`
+  strings; `displayAspectRatio()` reduces them by GCD, which is the same ratio and readable.
+- `[done]` Preserve user pinch zoom/pan only in `contain`, and disable transforms in PiP.
+  Already satisfied by `allowVideoTransform` in `usePlayerGestures`: it disables the pinch
+  gesture, resets zoom on mode change, and collapses the transform to identity.
+- `[done]` Stop forcing an explicit aspect ratio in `none` and `scale-down`. Found by
+  device test 2026-08-27: both rendered an extreme horizontal stretch while every other
+  mode was correct. They were the only two modes passing a non-null aspect string, and in
+  the failing case both also had scale fixed at 1, so the string was the only variable.
+  VLC already applies the stream's display aspect ratio including SAR, so forcing one was
+  redundant as well as wrong; `fill` is now the only mode that sets an aspect, which is
+  correct because it is defined as stretching to the view. The `displayAspectRatio` and
+  `greatestCommonDivisor` helpers went with it.
+- Note on cause: the aspect forcing is older than this refactor, but it sat behind an
+  `if (mSarNum > 0 && mSarDen > 0)` guard. On files where `onNewVideoLayout` never fires,
+  SAR stayed 0:0 and the guard fell through to `setAspectRatio(null)` — accidentally
+  correct. Populating SAR from the video track put those files on the broken branch for the
+  first time, so the SAR fix did not create this bug but did expose it.
+- `[todo]` Re-test all six modes after this fix, then the rest of the section 8.5 fixture
+  set. The math is verifiable by reading, the rendering is not.
 
 ### 8.2 Replace lifecycle timing guesses with Activity lifecycle
 
@@ -841,6 +893,17 @@ root-package dependency and therefore needs its own migration checklist.
   unreachable, accepted, or fixed, with expiry dates for accepted risk.
 
 ### 12.2 Delete proven dead source
+
+- `[done]` Screenshot capture, removed 2026-08-27 on the owner's confirmation that it is
+  unused. `doSnapshot`/`sendSnapshotEvent` in the view, the `snapshot` command and its
+  dispatch case in the ViewManager, `EVENT_ON_SNAPSHOT` in `VideoEventEmitter`, and the
+  `snapshot()` method and `onSnapshot` prop in `VLCPlayer.tsx` and `index.d.ts`. Nothing in
+  `src/` ever called it. Note this is unrelated to `PlaybackSnapshot`, which carries
+  enhancement-recreate state and stays.
+- `[decision]` Video **recording** is in exactly the same position: `startRecording`,
+  `stopRecording`, and `onRecordingState` are referenced only inside the player wrapper,
+  with no consumer anywhere in `src/`. Confirm whether it is wanted before deleting; unlike
+  the files above it is a feature, not a stray helper.
 
 Re-run references immediately before deletion, then remove:
 

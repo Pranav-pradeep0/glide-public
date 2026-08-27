@@ -24,7 +24,7 @@ import { Feather } from '@react-native-vector-icons/feather';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { useSharedValue, useAnimatedStyle, runOnJS } from 'react-native-reanimated';
-import { UpdateActionButton } from '@/components/UpdateActionButton';
+import { UpdateActionButton, UpdateNotice } from '@/components/UpdateActionButton';
 import { UpdateNotes } from '@/components/UpdateNotes';
 import { useUpdateInstaller } from '@/hooks/useUpdateInstaller';
 
@@ -324,6 +324,7 @@ export default function SettingsScreen() {
 
     const {
         canDownload,
+        unavailableReason,
         downloadProgress,
         error,
         handleCancelDownload,
@@ -362,11 +363,12 @@ export default function SettingsScreen() {
                             </View>
                         </View>
                         <UpdateNotes notes={updateStatus.releaseNotes} maxHeight={160} />
+                        <UpdateNotice error={error} unavailableReason={unavailableReason} />
                         <UpdateActionButton
                             canDownload={canDownload}
                             downloadProgress={downloadProgress}
-
                             error={error}
+
 
 
                             onCancelDownload={handleCancelDownload}
