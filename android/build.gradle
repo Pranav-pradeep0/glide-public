@@ -45,4 +45,28 @@ allprojects {
     }
 }
 
+// Third-party native modules pin their own compileSdk, and a stale one now fails the
+// build outright: react-native-ffmpeg-kit compiles against android-33, while
+// react-android 0.87.1 and androidx.appcompat 1.7 both require their consumers to compile
+// against 34 or later, so checkReleaseAarMetadata rejects it.
+//
+// Raising compileSdk only widens the API surface a library may reference; it does not
+// change minSdk or opt anything into new runtime behaviour, so it is safe to apply
+// uniformly. Doing it here rather than patching node_modules keeps the fix surviving
+// npm install, and covers the next module that lags rather than only this one.
+subprojects { subproject ->
+    afterEvaluate {
+        if (subproject.plugins.hasPlugin("com.android.library")
+                || subproject.plugins.hasPlugin("com.android.application")) {
+            subproject.android {
+                // Raise only. Setting it unconditionally would silently downgrade a module
+                // that legitimately pins something higher than the app does.
+                if (compileSdk == null || compileSdk < rootProject.ext.compileSdkVersion) {
+                    compileSdk rootProject.ext.compileSdkVersion
+                }
+            }
+        }
+    }
+}
+
 apply plugin: "com.facebook.react.rootproject"
