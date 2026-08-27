@@ -1158,14 +1158,20 @@ root-package dependency and therefore needs its own migration checklist.
 ### 12.1 Remove dependencies with proven replacements
 
 - `[done]` Replace the single Axios caller with existing `fetchWithTimeout`; remove Axios.
-- `[todo]` Replace seven `react-native-fast-image` poster/thumbnail call sites with RN `Image`;
-  verify caching/loading UX, then remove the unmaintained dependency.
+- `[done]` Replace the `react-native-fast-image` call sites with RN `Image` and remove the
+  dependency. Ten sites, not seven: eight local thumbnails and two remote OMDB posters.
+  No caching UX was lost, because the caching only ever applied to the remote images and
+  Android caches those natively anyway.
 - `[todo]` After RN 0.87, use built-in `edgeToEdgeEnabled=true`; replace only required
   navigation-bar styling and remove `react-native-edge-to-edge`.
 - `[done]` Remove direct `baseline-browser-mapping`; it had no source or config consumer.
-- `[todo]` Remove stale local VLC package dependencies: `react-native-slider`, old
-  `react-native-vector-icons`, `@expo/config-plugins`, and React 18 types.
-- `[todo]` Remove `@types/react-test-renderer` 18 or align it if a real test-renderer consumer exists.
+- `[done]` Remove the stale local VLC package dependencies: `react-native-slider`,
+  `react-native-vector-icons`, `@expo/config-plugins`, and the React 18 types. None were
+  imported anywhere in the module. The vector-icons one was load-bearing by accident:
+  three app files could only resolve the legacy icon package because this module happened
+  to depend on it, and they now use the scoped package like the rest of the app.
+- `[done]` Remove `@types/react-test-renderer`. There is no consumer: all four suites are
+  plain logic tests over `@jest/globals` and none renders a component.
 - `[todo]` Upgrade `react-native-config` only as part of RN compatibility; never use it for secrets.
 - `[todo]` Upgrade Stallion SDK `2.2.0` and CLI `2.3.1` to compatible current stable
   versions, then test production bundle download, restart, phased rollout, and rollback.
