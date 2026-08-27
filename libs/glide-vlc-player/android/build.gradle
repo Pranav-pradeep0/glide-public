@@ -1,16 +1,18 @@
 apply plugin: 'com.android.library'
+
 android {
     namespace 'com.yuanzhou.vlc'
-    compileSdkVersion 35
+    // Follow the app rather than pinning separately, so a toolchain bump moves one file.
+    compileSdk rootProject.ext.compileSdkVersion
 
     defaultConfig {
-        minSdkVersion 26
-        targetSdkVersion 35
-        versionCode 1
-        versionName "1.0"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
         consumerProguardFiles("proguard-rules.pro")
         ndk {
-            abiFilters 'armeabi-v7a','x86_64','arm64-v8a','x86'
+            // Match what the app actually ships. Building x86 and x86_64 here cost build
+            // time on every native compile and shipped in nothing.
+            abiFilters(*rootProject.ext.nativeArchitectures)
         }
         externalNativeBuild {
             cmake {
@@ -30,22 +32,8 @@ android {
         }
     }
 }
-buildscript {
-    repositories {
-        google()
-        mavenCentral()
-        // maven { url "https://maven.appspector.com/artifactory/android-sdk" }
-
-    }
-    dependencies {
-        classpath("com.android.tools.build:gradle:4.0.2")
-    }
-}
 
 repositories {
-    maven {
-        url "https://mvnrepository.com/artifact/org.videolan.android"
-    }
     google()
     mavenCentral()
 }
@@ -56,10 +44,10 @@ dependencies {
     // version, so this does not change what ships.
     implementation 'androidx.activity:activity:1.8.0'
     implementation fileTree(dir: 'libs', include: ['*.jar'])
-    implementation "com.facebook.react:react-native:+"
+    // No version: React Native's Gradle plugin contributes a strict constraint, so the
+    // module always matches the RN the app is built against.
+    implementation 'com.facebook.react:react-android'
     implementation 'org.videolan.android:libvlc-all:3.6.5'
-    // Legacy media session, still used until the Media3 service owns the session.
-    implementation 'androidx.media:media:1.6.0'
     // Media3 owns the media session, its notification, and media button handling.
     // Pinned to 1.7.1. Verified 2026-08-27: 1.11.0 needs compileSdk 36 AND Kotlin 2.x
     // (it pulls kotlin-stdlib 2.2.10, this project is on 1.9.24), which is exactly the

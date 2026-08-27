@@ -6,6 +6,11 @@ buildscript {
         targetSdkVersion = 34
         ndkVersion = "26.1.10909125"
         kotlinVersion = "1.9.24"
+        // Single source for the ABIs everything builds, read from gradle.properties so the
+        // app and the local native modules cannot drift apart. Named differently from the
+        // gradle.properties key so the two do not shadow one another.
+        nativeArchitectures = (findProperty("reactNativeArchitectures") ?: "armeabi-v7a,arm64-v8a")
+                .toString().split(",").collect { it.trim() }.findAll { it }
     }
     repositories {
         google()

@@ -896,11 +896,26 @@ Do not update these independently. Use the RN Upgrade Helper/template diff as th
 
 ### 10.3 Local VLC module Gradle cleanup
 
-- `[todo]` Remove nested AGP 4.0.2 `buildscript`.
-- `[todo]` Replace `com.facebook.react:react-native:+` with the app/template dependency path.
-- `[todo]` Remove the invalid/dead `mvnrepository.com` Maven repository.
-- `[todo]` Align compile/target/min SDK and ABI filters with the app.
-- `[todo]` Remove library `versionCode`/`versionName`; Android library modules do not ship app identity.
+- `[done]` Remove `androidx.media:media:1.6.0`. Section 9 deleted the last
+  `MediaSessionCompat` and `MediaButtonReceiver` use when Media3 took over the session,
+  leaving the dependency behind with no consumer.
+
+- `[done]` Remove nested AGP 4.0.2 `buildscript`. It pinned a toolchain five majors
+  behind the root and would have fought any AGP bump.
+- `[done]` Replace `com.facebook.react:react-native:+` with `com.facebook.react:react-android`
+  and no version. Verified the old coordinate was already being substituted to
+  `react-android:0.78.3` with a `strictly` constraint from React Native's Gradle plugin,
+  so the version comes from the plugin and the `+` selector is simply gone.
+- `[done]` Remove the `mvnrepository.com` repository. That host is a search website, not
+  a Maven repository; every lookup against it was wasted.
+- `[done]` Align compile/target/min SDK with the app by reading `rootProject.ext`, so a
+  toolchain bump moves one file instead of three.
+- `[done]` Align ABI filters with the app. The module built `x86` and `x86_64` on every
+  native compile and shipped them nowhere; a root `nativeArchitectures` list now derives
+  from the same `reactNativeArchitectures` property the app uses. Verified by clearing the
+  native intermediates and rebuilding: only `armeabi-v7a` and `arm64-v8a` are produced.
+- `[done]` Remove library `versionCode`/`versionName`. An Android library does not carry
+  app identity, and the stray `versionCode 1` invited confusion with section 4.2's work.
 - `[todo]` Update `androidx.activity` through dependency alignment rather than a stale hard pin.
 
 ### 10.4 Local simple-thumbnail module cleanup
@@ -909,15 +924,19 @@ This Android-only module is manually included in `android/settings.gradle`, link
 `android/app/build.gradle`, and registered in `MainApplication.kt`; it is not a normal
 root-package dependency and therefore needs its own migration checklist.
 
-- `[todo]` Add the AGP-required `namespace "com.reactnativesimplethumbnail"` and remove
-  the deprecated manifest `package` attribute after the coordinated template migration.
-- `[todo]` Remove its nested AGP 7.3.1/Kotlin 1.7.20 `buildscript`; inherit the root
-  Android and Kotlin plugins instead.
-- `[todo]` Align compile/min/target SDK with the app; delete fallbacks 33/21/33.
-- `[todo]` Remove `lintOptions { abortOnError false }`; library lint must fail normally.
-- `[todo]` Remove `mavenLocal()` and the obsolete React Native Android repository path.
-- `[todo]` Replace `com.facebook.react:react-native:+` with the template-supported
-  `react-android` dependency and remove the hard-pinned Kotlin stdlib.
+- `[done]` Add `namespace "com.reactnativesimplethumbnail"` and remove the manifest
+  `package` attribute. Done before the template migration rather than after: AGP 9 removes
+  the attribute outright, so this had to land first or the bump could not even configure.
+- `[done]` Remove the nested AGP 7.3.1 / Kotlin 1.7.20 `buildscript`; the module inherits
+  the root plugins.
+- `[done]` Align compile/min/target SDK with the app; the 33/21/33 fallbacks are gone.
+- `[done]` Remove `lintOptions { abortOnError false }`. The block is also renamed in AGP 8
+  and removed in 9, so it was a migration blocker as well as a silenced signal.
+- `[done]` Remove `mavenLocal()` and the obsolete `node_modules/react-native/android`
+  repository path, which has not been how React Native is consumed for several releases.
+- `[done]` Replace `com.facebook.react:react-native:+` with `react-android`, and remove
+  the hard-pinned `kotlin-stdlib:1.7.20`. That pin would have put a second, older stdlib
+  against the Kotlin 2.2 everything else compiles with.
 - `[todo]` Replace the `compileOnly` path to `ffmpeg-kit-minimal.aar` with the single
   app-owned FFmpeg module/dependency so compile and runtime APIs cannot drift.
 - `[todo]` Decide whether to keep the legacy `NativeModules`/`ReactPackage` bridge or
