@@ -106,17 +106,19 @@ listed automated and manual acceptance checks pass.
 ### 3.1 Stop further accidental publication
 
 - `[done]` Do not attempt to cancel or replace 1.8.1; it is already public.
-- `[todo]` Until section 4 is complete, do not push another commit to `main` or `develop`.
-  The current workflow publishes after ordinary pushes to either branch.
-- `[todo]` Implement the workflow correction on a branch the old publish trigger does
-  not watch, validate it in a pull request, and merge only after confirming the merged
-  workflow definition makes the `main` push verification-only.
-- `[todo]` Inventory GitHub Releases and tags created from both `main` and `develop`:
+- `[done]` The push freeze is lifted. It existed because the old workflow published after
+  any push to `main` or `develop`; publication is now gated on a strict `vX.Y.Z` tag whose
+  commit must be an ancestor of `origin/main`. See section 4.1.
+- `[done]` The workflow correction landed and is verified in the workflow file: an
+  ordinary branch push runs `verify` only, which holds `contents: read` and has no
+  publish step, so it cannot create a tag, release, or asset.
+- `[todo]` **Owner action, not code.** Inventory GitHub Releases and tags created from
+  both `main` and `develop`:
   - record tag, commit, branch, `versionName`, `versionCode`, signer, and assets;
   - identify any non-prerelease built from `develop`;
   - do not delete historical releases merely to hide the embedded key; deletion does
     not revoke a credential already downloaded.
-- `[todo]` Record 1.8.1 asset download counts when the incident inventory is taken, but
+- `[todo]` **Owner action, not code.** Record 1.8.1 asset download counts when the incident inventory is taken, but
   do not use a low count as evidence that the embedded credential was not extracted.
 
 Files: `.github/workflows/android-ci.yml`, `package.json`, GitHub Releases settings.
@@ -126,7 +128,7 @@ GitHub Release, or release asset.
 
 ### 3.2 Contain the exposed Groq key
 
-Verified exposure path:
+Exposure path as originally found (all five links are now broken; see below):
 
 1. `.github/workflows/android-ci.yml` writes `GROQ_API_KEY` to `.env`.
 2. `react-native-config` compiles it into the mobile application.
@@ -137,13 +139,35 @@ Verified exposure path:
 `react-native-config` does not encrypt packaged values. Rotating the key and embedding
 the replacement in another APK creates the same exposure again.
 
-- `[todo]` Revoke/rotate the currently exposed Groq key in the Groq console. If done
-  before a replacement architecture exists, recap and speech-to-text in already
-  installed APKs will fail; that is an explicit availability-versus-abuse decision.
-- `[todo]` Review Groq usage, rate, and billing logs from the earliest release that
-  contained the key. Record any unexpected usage and the revocation timestamp.
-- `[todo]` Remove `GROQ_API_KEY` from the production `.env` generation step.
-- `[todo]` Remove the production assumption that a build-time environment variable is secret.
+**Reconciled 2026-09-04.** The code half of this section shipped with the proxy and was
+never marked. Verified against the working tree, not memory: `grep -rn GROQ` matches
+nothing in `.github/workflows/`, `src/`, or `.env.example`. Both Groq console actions —
+key revocation and the usage review — are confirmed by the owner as of this date and are
+marked as attestations; no repository state can prove either.
+
+What remains open in this section is not console work: client-side logging is unaudited,
+there is no privacy copy, the proxy has no client authentication, and the exit check below
+has not been run against built bytes.
+
+- `[done]` The exposed Groq key is revoked. Confirmed by the owner on 2026-09-04; the
+  exact revocation timestamp was not captured at the time, and nothing in this repository
+  can establish it independently. If the Groq console still shows the key's deletion date,
+  record it here — the usage review below needs a boundary to measure against.
+  Already-installed 1.8.x APKs call Groq directly and now fail; that is the intended
+  availability-versus-abuse trade. 1.9.x clients are unaffected because they call the
+  proxy, which holds its own key as a Worker secret.
+- `[done]` Groq usage, rate, and billing logs were reviewed across the period the embedded
+  key was live, and no unexpected usage was found. Confirmed by the owner on 2026-09-04.
+  Recorded as an owner attestation, not a repository-verifiable fact: no artifact of the
+  review was captured, so a later reader cannot re-derive it. A clean review is weaker
+  evidence than it looks — it shows no abuse was billed, not that the key was never
+  extracted — which is why the key was revoked rather than left in place.
+- `[done]` `GROQ_API_KEY` is gone from the `.env` generation step. Both jobs write only
+  SubDL, OMDb, GitHub owner/repo, Stallion, and `AI_PROXY_URL` — the last of which is a
+  public endpoint, not a credential.
+- `[done]` No build-time environment variable is treated as secret any more. The only
+  packaged values are public identifiers or the proxy URL; the Groq key lives solely as
+  a Cloudflare Worker secret, which never enters an APK.
 - `[done]` `[decision]` Restoration model selected: **backend proxy**. `proxy/` is a
   Cloudflare Worker holding `GROQ_API_KEY` as a Worker secret and exposing only
   `/v1/recap` and `/v1/transcribe`. It caps body and audio size, pins the models and
@@ -156,17 +180,24 @@ the replacement in another APK creates the same exposure again.
   per-IP and global rate-limit bindings are per-colo burst gates, not a budget, so the
   binding cost ceiling must be a spending limit set in the Groq console. Record that
   limit here once set.
-- `[todo]` Until a restoration model is selected, make UI availability derive from a
-  production feature flag/capability, not from whether an embedded string is nonempty.
-- `[todo]` A Stallion OTA may disable the 1.8.1 recap/STT UI promptly, but record that
-  it cannot remove the key from already-downloaded APK bytes. Do not postpone key
-  revocation while waiting for OTA adoption.
-- `[todo]` Ensure disabled recap/STT paths show a clear, non-error explanation and do
-  not offer a button that can only fail.
+- `[done]` UI availability derives from one capability constant. `RECAP_STT_AVAILABLE`
+  in `constants.ts` is `AI_PROXY_URL.length > 0`, where `AI_PROXY_URL` is itself empty
+  unless the configured value starts with `https://` — so a missing, malformed or
+  cleartext proxy URL disables the feature rather than producing a broken request. Five
+  call sites gate on it: both services, the recap eligibility effect, the recap trigger,
+  and the sync panel's entry point.
+- `[keep]` A Stallion OTA may disable the 1.8.1 recap/STT UI promptly, but it cannot
+  remove the key from already-downloaded APK bytes. Key revocation is not contingent on
+  OTA adoption; recorded here so the two are never traded against each other.
+- `[done]` Disabled recap/STT never offers a button that can only fail. The sync panel
+  entry point is not rendered at all when unavailable, and `handleRecapTrigger` reports
+  "Recap is not available in this build" as a toast rather than an error.
 - `[todo]` Remove secrets and response bodies from logs. Never log audio, dialogue,
-  authorization headers, or raw provider errors that may contain request content.
+  authorization headers, or raw provider errors that may contain request content. The
+  Worker already logs route plus status only; the client side is unaudited.
 - `[todo]` Add privacy copy before uploading subtitle dialogue or audio. State what is
-  sent, to whom, why, and whether the provider retains it.
+  sent, to whom, why, and whether the provider retains it. Nothing in `src` currently
+  says anything to the user about what leaves the device.
 
 Files: `.github/workflows/android-ci.yml`, `.env.example`, `src/utils/constants.ts`,
 `src/services/RecapService.ts`, `src/services/SpeechToTextService.ts`, recap/STT UI,
@@ -207,14 +238,33 @@ Keep one workflow unless splitting materially improves maintenance.
 Reconciled 2026-08-27. Most of this section was implemented in the 1.9.x workflow rebuild
 but never marked; the entries below are verified against the workflow file, not memory.
 
-- `[done]` Run typecheck, lint, tests, and debug **and release** compilation on pull
-  requests and pushes to `main`/`develop`, with `contents: read` only. The release build
-  was added 2026-08-27 and is the reason this item was still open: before it, the release
-  variant was first compiled by the tag-gated job, where a failure burns a version
-  number. That is exactly how 1.9.1 was spent. It is debug-signed via the project's
+- `[done]` Run typecheck, lint, tests, and **release** compilation on pull requests and
+  pushes to `main`/`develop`, with `contents: read` only. The release build was added
+  2026-08-27 and is the reason this item was still open: before it, the release variant
+  was first compiled by the publishing job, where a failure burns a version number. That
+  is exactly how 1.9.1 was spent. It is debug-signed via the project's
   `-PallowDebugSigning=true` opt-in so it needs no keystore secret (fork pull requests
   cannot read one), builds `arm64-v8a` only because AAR-metadata and R8 failures are not
   ABI-specific, and has no upload step so it cannot publish.
+- `[done]` The separate `assembleDebug` step was removed 2026-09-04. It was kept from the
+  original workflow and, once the release build existed beside it, verified a strict
+  subset of the same compilation for roughly the same minutes: R8 and AAR metadata only
+  fail in the release variant, and the debug variant is not what ships. `verify` now
+  builds one variant, one ABI. Native unit tests still run on the `debug` variant because
+  `testDebugUnitTest` is a JVM task that compiles no native code.
+- `[done]` Both jobs build the same configuration. `AI_PROXY_URL` moved to a
+  workflow-level `env` and is written into both `.env` files; previously only the release
+  job had it, so `verify` compiled the recap/STT paths with the feature flag off and
+  never type-checked or built them as they ship.
+- `[done]` `verify` cancels superseded runs (`concurrency: verify-${{ github.ref }}`,
+  `cancel-in-progress: true`). A newer push to the same branch or PR makes the running
+  check obsolete. The release job deliberately keeps `cancel-in-progress: false`.
+- `[done]` The release job runs lint. It already duplicated typecheck and tests; lint was
+  the one gate that existed only in `verify`, which is skipped on tags — so a tag created
+  before its commit's `verify` finished could publish unlinted code.
+- `[done]` The job named itself "Release (tag-gated)". The gate is stated by the `if:`
+  condition and by section 4.1; encoding it in the display name meant the name would go
+  stale the moment the trigger changed. Renamed to "Release".
 - `[done]` Trigger publication only from a strict final tag. The `release` job is gated on
   `startsWith(github.ref, 'refs/tags/v')` and the tag must match `^v[0-9]+\.[0-9]+\.[0-9]+$`.
   An ordinary branch push runs `verify` only.
@@ -249,8 +299,16 @@ but never marked; the entries below are verified against the workflow file, not 
   jobs, matching the `>=22.11.0` engine.
 - `[done]` Do not publish a release before both ABI assets and checksum files exist. The
   release step `test -f`s both APKs before calling `gh release create`.
-- `[todo]` Provenance metadata is still not produced. Build attestation or an SBOM is the
-  remaining half of the item above; section 15.2 tracks the dependency/license inventory.
+- `[done]` Provenance metadata is produced. `actions/attest-build-provenance@v2` signs
+  both published APKs after checksums are collected and before the release is created,
+  under `id-token: write` and `attestations: write` scoped to the release job. A
+  downloaded asset can be traced to this workflow, commit and runner with
+  `gh attestation verify <apk> --repo <owner>/<repo>`. An SBOM is still not produced;
+  section 15.2 tracks the dependency/license inventory separately.
+- `[todo]` Verify the attestation end to end on the next release: run
+  `gh attestation verify` against a downloaded public APK, not against the build output,
+  and record the result. An attestation step that runs without error is not proof that
+  the published asset verifies.
 
 ### 4.2 Make version identity monotonic and single-source
 
@@ -690,6 +748,20 @@ mean accepted. Do not close this section, or treat resume as fixed, until the ma
 An earlier version of this section marked these `[done]` outright, which was wrong by the
 tracker's own rule and is the sort of drift that makes a status column worthless.
 
+**As of 2026-09-04 every code item in this section is implemented and the last three
+anomalies are explained, and two of the three are confirmed fixed on device.** Capture with:
+
+    adb shell am force-stop com.glide.app
+    adb logcat -c
+    adb logcat -v time -s GlideVLC:V ReactNativeJS:V
+
+The force-stop is not incidental. Focus registrations leak into the *process*, so a capture
+taken against an app that has already played something carries state from before the
+capture began and will show the symptom whether or not a fix works. This section has been
+reopened three times by a trace read as evidence when it could not distinguish the two
+outcomes, so before reading a capture, name the line that would have appeared had the
+behaviour still been broken.
+
 Implemented 2026-08-27, corrected against a device trace 2026-08-28. Verified against the
 LibVLC 3.6.5 bytecode before writing any of it: `MediaPlayer.Event` exposes `ESAdded=276`,
 `ESSelected=278`, `SeekableChanged=269` and `LengthChanged=273` with `getEsChangedType()`,
@@ -944,11 +1016,17 @@ That last fact invalidated the verification this section previously shipped:
   one of them forgetting the flag would make the *next* offset abandon itself instead of
   correcting. The setter also traces each change of intent with its reason, which is what a
   device run needs in order to be conclusive.
-- `[todo]` Re-run resume on device. The signals are now unambiguous:
-  `[ENGINE] opened ... appliedMediaOptions=[..., :start-time=65.567]` proves the option
-  reached VLC; `[START_TIME] applied target=... actual=...` proves it took effect; and
-  `[START_TIME] :start-time was ignored by VLC` is a real failure that now means what it
-  says.
+- `[done]` Resume re-run on device 2026-09-04: six opens, deltas 0, 10, 0, 1, 9 and 0 ms,
+  the precision correction never firing. The signals are now unambiguous: `[EVT] ENGINE: opened ... startTime=65.567 appliedMediaOptions=[...]`
+  proves the option reached VLC; `[EVT] START_TIME: applied target=... actual=...` proves
+  it took effect; and `START_TIME: :start-time was dropped by VLC` is a real failure that
+  now means what it says.
+- `[done]` The `ENGINE: opened` line was promoted from trace to the journal. It is the only
+  line that proves what actually reached VLC, so resume could not be diagnosed from a
+  release capture without it — and the previous count, which reported only the
+  JavaScript-supplied options and so read `mediaOptions=0`, was itself mistaken for proof
+  that the offset was never sent. Its `describe()` carries no media identity, so it
+  satisfies the journal's rule.
 
 **Root cause of seek and resume imprecision, found 2026-09-02 from a device journal.**
 
@@ -982,10 +1060,12 @@ argument for every seek:
 - `[keep]` The resume precision correction stays as a safety net, but it should now rarely
   fire. If `START_TIME: landed Nms early` disappears from traces, the residual was entirely
   this option and the correction can be deleted.
-- `[todo]` Re-measure the seek buffer timeout in section 8.3 against this change. Precise
-  seeks decode from the keyframe to the exact frame, so they take longer; the 200 ms
-  fallback fired twice in the trace above and may need to be longer, or may now be
-  unnecessary because the seek no longer overshoots.
+- `[done]` The seek buffer timeout was re-measured and raised from 200 ms to 3 s. Precise
+  seeks decode from the keyframe to the exact frame, and a device trace measured ordinary
+  jumps taking 909 ms and 1019 ms — so the old value fired before almost every seek
+  completed, forcing `play()` while the seek was still in flight. It is sized as an escape
+  from a stuck seek, not as a latency target. The 2026-09-02 capture recorded zero
+  `buffer timeout` lines against one on nearly every seek before.
 - `[todo]` A `SEEK: requested position=0.0000` appeared once, roughly a second after a
   resume, and the player did move to zero. It is not yet established whether that was a
   genuine tap at the left edge of the seek bar during rapid seeking or a spurious commit;
@@ -1016,16 +1096,55 @@ section.
   on one device, and a coarser demuxer or a different codec could still land short. It
   costs nothing when it does not fire. Delete it once traces from more than one source
   agree.
-- `[todo]` `AUDIO_FOCUS: change=-1 (lost)` fires within ~15 ms of every play request, eight
-  times in this capture, and playback continues regardless. Reproducible and unexplained;
-  worth a look now that the noisier problems are gone.
-- `[todo]` `INTENT: stop` is logged twice on every stop — a duplicate call from JavaScript,
-  harmless but unexplained.
-- `[todo]` Two reported symptoms remain unreproduced in the native journal and are above
-  this layer: the HUD showing 0 when a seek happens immediately after playback starts, and
-  the seek bar disappearing. `applySeekToVLC` returns early while duration is still zero,
-  so an early seek is dropped after the HUD has already been moved optimistically. Diagnose
-  from the JavaScript seek/HUD commit path, not from native traces.
+**The three remaining anomalies, 2026-09-04.** All three were found by reading the code the
+journal pointed at. Two are confirmed fixed by a device capture; the third is improved,
+measured, and still open.
+
+- `[doing]` `AUDIO_FOCUS: change=-1 (lost)` after every play request is **partially** fixed.
+  Measured on a force-stopped process: seven of seven grants produced a loss before, two of
+  four after, and the first grant in a fresh process is now clean.
+
+  The confirmed cause is a leaked registration. `AUDIOFOCUS_LOSS` clears `mHasAudioFocus`
+  without abandoning anything, and `abandonAudioFocusInternal()` was gated on that same
+  flag — so a view that had ever lost focus reached teardown with the flag already false,
+  returned early, and left its listener registered with `AudioManager` for the life of the
+  process. Every cycle leaked another. The loss then lands on an older leaked view, whose
+  flag is false, which is exactly what `held=false` reports. Fixed by abandoning
+  unconditionally; abandoning without focus is a framework no-op, so the guard bought only
+  the leak. `mHasAudioFocus` is now `volatile` — it is written from VLC's event thread and
+  the seek handler, and read by the callback on main, and it is the field the diagnosis
+  rests on.
+
+  Two of four grants still lose focus and **there is no explanation for those**. The first
+  hypothesis — a second `AudioFocusRequest` built around the same listener — was recorded
+  here as fact and then disproved by the `held=` field it predicted would read `true`.
+  Reusing one request is still correct API usage but fixed nothing observable. Every focus
+  line now carries `view=<identity hash>`; a loss whose `view=` differs from the preceding
+  grant means another path drops a view without abandoning, and a matching `view=` means
+  the framework is revoking from the client it just granted. Record which before writing
+  more code. This is the same class of defect as the stacked volume and audio-route
+  callbacks fixed in `00153fe`; two instances is enough to look for a third.
+- `[done]` `INTENT: stop` logged twice because leaving a player screen runs three
+  JavaScript stop paths — the back handler, navigation's `beforeRemove`, and unmount
+  cleanup. `stopPlayer()` is now idempotent. Guarding there rather than deleting a caller
+  is deliberate: the callers are not redundant with each other, because an external-open
+  Activity finishes without a navigation transition and would otherwise lose its save, and
+  the guard also covers callers that are not JavaScript, such as the media session. Focus
+  abandonment stays unconditional so a stop after EOF still releases it.
+- `[done]` The HUD showing `00:00` on an early skip is fully explained, and it was not the
+  same defect as the `--:--` work above. `handleJumpForward` clamps with
+  `Math.min(state.duration, base + seekTime)`, and `duration` is 0 for roughly 430 ms after
+  the source opens — so an early skip asks for **0**, `applySeekToVLC` drops it for having
+  no duration, and the HUD announces a jump to the start that never happened.
+  `handleJumpBackward` and the double-tap path produce the same 0 by the same arithmetic.
+
+  `commitSeek` now refuses when there is no duration and returns whether it accepted; the
+  three skip callers show nothing on a refusal. One guard in the shared function, honoured
+  by the callers that display a time — not a guard per caller. The slider path is left
+  alone: its gesture already refuses to begin without a duration, and a second guard there
+  would imply the first was insufficient.
+- `[keep]` The seek bar "disappearing" was the same 430 ms window and is already fixed by
+  the dimmed-scrubber work above. No separate defect was found.
 
 **Controls claimed readiness they did not have, fixed 2026-09-02.** Reported as the HUD
 showing zeros and the seek bar being absent when touched immediately after opening a video.
@@ -1952,9 +2071,20 @@ If iOS remains supported:
   `testDebugUnitTest` also runs tests inside `node_modules`, and `react-native-zip-archive`
   ships failing ones — found by running it rather than reasoning about it, which would
   otherwise have failed the build on a third party's code.
-- `[todo]` The seek verifier's decision has the same shape and the same history of being
-  wrong three times (verifying on the wrong event, clearing the state it compared against,
-  ignoring supersession). Extract and table-test it next; the infrastructure now exists.
+- `[done]` The seek verifier's decision is extracted as `SeekVerifier.evaluate` and covered
+  by eleven table-driven cases built from device traces. Same shape as `StartTimeResolver`:
+  longs in, verdict out, no Android and no logging, so it needs no Robolectric.
+
+  Verified the tests earn their keep rather than assuming it: deleting the supersession
+  check — the third of the three ways this diagnostic was wrong — fails exactly three of
+  them, the rows carrying the transposed target/actual pairs that were once reported as
+  19-35 s of drift. Two further rows pin the ordering: supersession is checked *before* the
+  position is read, because a superseded seek that returned `WAIT` would linger and later
+  be judged against a newer position, which is the mis-attribution the check exists to
+  prevent.
+
+  `logSeekVerification` now reads, decides, and acts in that order, and its drift line was
+  promoted from `warn` to the journal so a drifted seek appears in a release capture.
 - `[todo]` Strict version parser/comparator and release-tag validation.
 - `[todo]` `selectApkForDevice`, trusted URL validation, checksum parsing, file-name sanitation.
 - `[todo]` Settings migration and corrupt MMKV payload behavior.
