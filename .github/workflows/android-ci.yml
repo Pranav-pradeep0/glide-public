@@ -12,11 +12,22 @@ on:
 permissions:
   contents: read
 
+env:
+  # Both jobs build the same configuration. Verify would otherwise compile the
+  # recap/STT paths against an empty proxy URL and never exercise them.
+  AI_PROXY_URL: ${{ vars.AI_PROXY_URL }}
+
 jobs:
   verify:
-    name: Verify (typecheck, lint, tests, debug build)
+    name: Verify (typecheck, lint, tests, release build)
     if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
+
+    # A newer push to the same branch or PR makes the running check obsolete.
+    # The release job below deliberately does not cancel.
+    concurrency:
+      group: verify-${{ github.ref }}
+      cancel-in-progress: true
 
     steps:
       - name: Checkout repository
@@ -39,6 +50,7 @@ jobs:
           SUBDL_DOWNLOAD_URL=${{ secrets.SUBDL_DOWNLOAD_URL }}
           OMDB_API_KEY=${{ secrets.OMDB_API_KEY }}
           OMDB_API_URL=${{ secrets.OMDB_API_URL }}
+          AI_PROXY_URL=$AI_PROXY_URL
           GITHUB_OWNER=Pranav-pradeep0
           GITHUB_REPO=glide-public
           STALLION_PROJECT_ID=${{ secrets.STALLION_PROJECT_ID }}
@@ -65,24 +77,23 @@ jobs:
         working-directory: android
         run: |
           chmod +x gradlew
-          # Pure-JVM tests over the player's decision logic. assembleDebug does not run
-          # them, so without this step they exist but never execute.
+          # Pure-JVM tests over the player's decision logic. assembleRelease does not
+          # run them, so without this step they exist but never execute.
           #
           # Scoped to modules this repository owns. The root task also runs tests inside
           # node_modules, and react-native-zip-archive ships failing ones, so an unscoped
           # invocation fails the build on a third party's code.
-          ./gradlew :glide_vlc-player:testDebugUnitTest :app:testDebugUnitTest             :react-native-simple-thumbnail:testDebugUnitTest
-
-      - name: Compile debug build
-        working-directory: android
-        run: ./gradlew assembleDebug
+          ./gradlew :glide_vlc-player:testDebugUnitTest :app:testDebugUnitTest :react-native-simple-thumbnail:testDebugUnitTest
 
       - name: Compile release build
         working-directory: android
         run: |
-          # Without this, the release variant is built for the first time by the
-          # tag-gated job, where a failure burns a version number: v1.9.1 was spent on
-          # an AAR metadata error that could only surface in a release build.
+          # Release only, and one ABI. The release variant is the one that ships and the
+          # only one that exercises R8 and AAR metadata, so a debug build catches a
+          # strict subset of its failures for roughly the same minutes. Without this
+          # step the release variant is first built by the publishing job, where a
+          # failure burns a version number: v1.9.1 was spent on an AAR metadata error
+          # that no debug build could have surfaced.
           #
           # Debug-signed on purpose and never uploaded -- this job has contents: read
           # and no publish step -- so it verifies compilation, R8 and AAR metadata
@@ -95,12 +106,16 @@ jobs:
             -PreactNativeArchitectures=arm64-v8a
 
   release:
-    name: Release (tag-gated)
+    name: Release
     if: ${{ startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
 
     permissions:
       contents: write
+      # Build provenance for the published APKs, so a downloaded asset can be traced
+      # back to this workflow, commit and runner.
+      id-token: write
+      attestations: write
 
     concurrency:
       group: production-release
@@ -108,7 +123,6 @@ jobs:
 
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      AI_PROXY_URL: ${{ vars.AI_PROXY_URL }}
 
     steps:
       - name: Checkout repository
@@ -196,6 +210,9 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
 
+      - name: Lint
+        run: npx eslint .
+
       - name: Test
         run: npx jest --ci
 
@@ -212,7 +229,7 @@ jobs:
           chmod +x gradlew
           # Scoped: the root task also runs third-party tests from node_modules, some of
           # which fail. See the note in the verify job.
-          ./gradlew :glide_vlc-player:testDebugUnitTest :app:testDebugUnitTest             :react-native-simple-thumbnail:testDebugUnitTest
+          ./gradlew :glide_vlc-player:testDebugUnitTest :app:testDebugUnitTest :react-native-simple-thumbnail:testDebugUnitTest
 
       - name: Decode Keystore
         run: |
@@ -250,6 +267,13 @@ jobs:
 
           echo "ARM_PATH=$ARM_DEST" >> "$GITHUB_ENV"
           echo "ARM64_PATH=$ARM64_DEST" >> "$GITHUB_ENV"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            ${{ env.ARM_PATH }}
+            ${{ env.ARM64_PATH }}
 
       - name: Generate changelog from previous published release
         run: |
