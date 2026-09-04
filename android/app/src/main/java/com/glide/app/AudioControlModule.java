@@ -91,6 +91,8 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
     // Timing constants
     private static final long APP_CHANGE_DEBOUNCE_MS = 200;
     private static final long VOLUME_FLAG_CLEAR_DELAY_MS = 50;
+    /** Settle time before evaluating a route change, so a switch is reported once. */
+    private static final long ROUTE_CHANGE_DEBOUNCE_MS = 100;
     private static final long DUPLICATE_VOLUME_EVENT_DEBOUNCE_MS = 400;
 
     // Brightness constants
@@ -114,6 +116,25 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
 
     // Volume change detection (prevents feedback loops)
     private volatile boolean isAppChangingVolume = false;
+
+    /**
+     * The pending clear of {@link #isAppChangingVolume}, held so it can be replaced.
+     *
+     * <p>Every volume change used to post its own clear. During a volume gesture that
+     * stacks them, and the *earliest* one fires while later changes are still in flight —
+     * clearing the flag early and letting the observer mistake an app-initiated change for
+     * a user one. Replacing the pending clear means only the last change's timer survives.
+     */
+    private Runnable pendingVolumeFlagClear = null;
+
+    /**
+     * The pending route-change evaluation, held so it can be replaced.
+     *
+     * <p>{@code handleRouteChange} described itself as debounced but never cancelled the
+     * previous callback, so it was a delay rather than a debounce: rapid route switches
+     * queued one evaluation each and a flapping route could emit spurious events.
+     */
+    private Runnable pendingRouteChange = null;
     private volatile long lastAppVolumeChangeTime = 0;
     private volatile int lastEmittedVolumePercentage = -1;
     private volatile long lastEmittedVolumeEventTime = 0;
@@ -259,11 +280,7 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
             );
 
             // Clear app-initiated flag after short delay
-            mainHandler.postDelayed(() -> {
-                synchronized (AudioControlModule.this) {
-                    isAppChangingVolume = false;
-                }
-            }, VOLUME_FLAG_CLEAR_DELAY_MS);
+            scheduleVolumeFlagClear();
 
             // Return result
             WritableMap result = Arguments.createMap();
@@ -321,11 +338,7 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
                     0);
 
             // Clear flag
-            mainHandler.postDelayed(() -> {
-                synchronized (AudioControlModule.this) {
-                    isAppChangingVolume = false;
-                }
-            }, VOLUME_FLAG_CLEAR_DELAY_MS);
+            scheduleVolumeFlagClear();
 
         } catch (Exception e) {
             Log.e(TAG, "Error in setVolumeSync", e);
@@ -595,6 +608,7 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
         isListening = false;
 
         // Unregister observers
+        cancelPendingAudioCallbacks();
         unregisterVolumeObserver();
         unregisterAudioDeviceCallback();
         unregisterNoisyAudioReceiver();
@@ -756,14 +770,49 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
     }
 
     /**
+     * Schedules the single pending clear of the app-initiated volume flag, replacing any
+     * earlier one so rapid changes cannot clear it out from under each other.
+     */
+    private void scheduleVolumeFlagClear() {
+        if (pendingVolumeFlagClear != null) {
+            mainHandler.removeCallbacks(pendingVolumeFlagClear);
+        }
+        pendingVolumeFlagClear = () -> {
+            pendingVolumeFlagClear = null;
+            synchronized (AudioControlModule.this) {
+                isAppChangingVolume = false;
+            }
+        };
+        mainHandler.postDelayed(pendingVolumeFlagClear, VOLUME_FLAG_CLEAR_DELAY_MS);
+    }
+
+    /**
      * Handles audio route changes.
      * 
      * <p>
      * Debounced to prevent multiple events from rapid route switches.
      * </p>
      */
+    /** Drops both owned callbacks so neither runs against a torn-down module. */
+    private void cancelPendingAudioCallbacks() {
+        if (pendingVolumeFlagClear != null) {
+            mainHandler.removeCallbacks(pendingVolumeFlagClear);
+            pendingVolumeFlagClear = null;
+        }
+        if (pendingRouteChange != null) {
+            mainHandler.removeCallbacks(pendingRouteChange);
+            pendingRouteChange = null;
+        }
+    }
+
     private void handleRouteChange() {
-        mainHandler.postDelayed(() -> {
+        // Replace rather than stack: this is meant to be a debounce, and without the
+        // removal it queued one evaluation per route event.
+        if (pendingRouteChange != null) {
+            mainHandler.removeCallbacks(pendingRouteChange);
+        }
+        pendingRouteChange = () -> {
+            pendingRouteChange = null;
             String previousRoute = currentRoute;
             String newRoute = detectCurrentRoute();
             int newMaxVolume = getMaxVolumeForRoute(newRoute);
@@ -781,7 +830,8 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
 
                 sendEvent(EVENT_ROUTE_CHANGE, params);
             }
-        }, 100); // Debounce delay
+        };
+        mainHandler.postDelayed(pendingRouteChange, ROUTE_CHANGE_DEBOUNCE_MS);
     }
 
     /**
@@ -922,6 +972,7 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
     @Override
     public void onHostDestroy() {
         Log.i(TAG, "onHostDestroy - cleaning up");
+        cancelPendingAudioCallbacks();
 
         // SAFETY NET: Reset brightness before cleanup
         // This handles cases where stopListening() wasn't called (e.g., app crash/kill)
