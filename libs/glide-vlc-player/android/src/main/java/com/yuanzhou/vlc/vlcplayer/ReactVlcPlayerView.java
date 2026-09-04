@@ -294,7 +294,11 @@ class ReactVlcPlayerView extends TextureView implements
     // ─── AUDIO FOCUS ─────────────────────────────────────────────────────────
 
     private AudioFocusRequest mAudioFocusRequest;
-    private boolean mHasAudioFocus = false;
+    // volatile: written from whichever thread asks for focus -- VLC's event thread and the
+    // seek handler both do -- and read by onAudioFocusChange on the main thread. Without
+    // it the journal's held= field can report a stale value, and that field is the one
+    // piece of evidence distinguishing a self-inflicted loss from a real interruption.
+    private volatile boolean mHasAudioFocus = false;
     private boolean mResumeOnFocusGain = false;
     private int mVolumeBeforeDuck = -1;
     private BroadcastReceiver mNoisyReceiver;
@@ -533,11 +537,17 @@ class ReactVlcPlayerView extends TextureView implements
 
     @Override
     public void onAudioFocusChange(int focusChange) {
-        VlcLog.event("AUDIO_FOCUS", "change=" + focusChange
+        // held= and playing= are what make a change=-1 line diagnosable. A loss arriving
+        // while we believed we held focus and playback had not started is the signature of
+        // the self-inflicted loss described on audioFocusRequest(); a loss while playing is
+        // a real interruption by another app.
+        VlcLog.event("AUDIO_FOCUS", "view=" + System.identityHashCode(this) + " change=" + focusChange
                 + (focusChange == AudioManager.AUDIOFOCUS_LOSS ? " (lost)"
                     : focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT ? " (lost transient)"
-                    : focusChange == AudioManager.AUDIOFOCUS_GAIN ? " (gained)" : ""));
-        VlcLog.trace("AUDIO_FOCUS", "change=" + focusChange);
+                    : focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK ? " (duck)"
+                    : focusChange == AudioManager.AUDIOFOCUS_GAIN ? " (gained)" : "")
+                + " held=" + mHasAudioFocus
+                + " playing=" + (mMediaPlayer != null && mMediaPlayer.isPlaying()));
         switch (focusChange) {
             case AudioManager.AUDIOFOCUS_GAIN:
                 mHasAudioFocus = true;
@@ -646,20 +656,42 @@ class ReactVlcPlayerView extends TextureView implements
         }
     }
 
+    /**
+     * The one {@link AudioFocusRequest} this view ever registers, built on first use.
+     *
+     * <p>It is an immutable descriptor and reusing it is what the API intends, so this is
+     * correct on its own terms: building a fresh one per request left every previous
+     * request registered and never abandoned, because {@code AUDIOFOCUS_LOSS} clears
+     * {@code mHasAudioFocus} without abandoning anything.
+     *
+     * <p><b>This is not what caused the {@code change=-1} after every play request.</b>
+     * That was the first hypothesis and a device capture on 2026-09-04 disproved it: the
+     * losses still arrived, and the {@code held=false} they reported is the wrong value
+     * for a view that had just been granted focus. The actual leak was in
+     * {@link #abandonAudioFocusInternal()}, which returned without abandoning whenever the
+     * flag had already been cleared by a loss. Reusing one request is still correct — it
+     * is what the API intends — but it fixed nothing observable on its own.
+     */
+    private AudioFocusRequest audioFocusRequest() {
+        if (mAudioFocusRequest == null) {
+            AudioAttributes audioAttributes = new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+                    .build();
+            mAudioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                    .setAudioAttributes(audioAttributes)
+                    .setOnAudioFocusChangeListener(this)
+                    .setAcceptsDelayedFocusGain(true)
+                    .build();
+        }
+        return mAudioFocusRequest;
+    }
+
     private boolean requestAudioFocusInternal() {
         if (!mHasAudioFocus) {
             int result;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                AudioAttributes audioAttributes = new AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
-                        .build();
-                mAudioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                        .setAudioAttributes(audioAttributes)
-                        .setOnAudioFocusChangeListener(this)
-                        .setAcceptsDelayedFocusGain(true)
-                        .build();
-                result = audioManager.requestAudioFocus(mAudioFocusRequest);
+                result = audioManager.requestAudioFocus(audioFocusRequest());
             } else {
                 result = audioManager.requestAudioFocus(
                         this, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN);
@@ -669,17 +701,20 @@ class ReactVlcPlayerView extends TextureView implements
                 mHasAudioFocus = true;
                 mResumeOnFocusGain = false;
                 registerNoisyReceiver();
-                VlcLog.trace("AUDIO_FOCUS", "request GRANTED");
+                VlcLog.event("AUDIO_FOCUS", "view=" + System.identityHashCode(this) + " requested → GRANTED");
+                return true;
             } else if (result == AudioManager.AUDIOFOCUS_REQUEST_DELAYED) {
                 mHasAudioFocus = false;
                 mResumeOnFocusGain = true;
-                VlcLog.trace("AUDIO_FOCUS", "request DELAYED — will resume on gain");
+                VlcLog.event("AUDIO_FOCUS", "requested → DELAYED, will resume on gain");
                 return false;
             } else {
                 mHasAudioFocus = false;
                 mResumeOnFocusGain = false;
-                VlcLog.warn("AUDIO_FOCUS", "request FAILED result=" + result);
+                VlcLog.event("AUDIO_FOCUS", "requested → FAILED result=" + result);
             }
+        } else {
+            VlcLog.trace("AUDIO_FOCUS", "request skipped — already held");
         }
 
         if (mHasAudioFocus && mMediaPlayer != null && !mMuted) {
@@ -688,17 +723,40 @@ class ReactVlcPlayerView extends TextureView implements
         return mHasAudioFocus;
     }
 
+    /**
+     * Release audio focus. Safe to call when none is held.
+     *
+     * <p>Deliberately not gated on {@code mHasAudioFocus}. It used to be, and that is how
+     * this view leaked a focus registration on every cycle: {@code AUDIOFOCUS_LOSS} clears
+     * the flag without abandoning anything, so a view that had ever lost focus reached its
+     * teardown with the flag already false, returned here immediately, and left its
+     * listener registered with {@code AudioManager} for the life of the process.
+     *
+     * <p>That is the mechanism behind the {@code change=-1} arriving milliseconds after
+     * every {@code requested → GRANTED}: the loss is not being delivered to the view that
+     * just asked, but to an *older, leaked* one, whose flag is false — which is exactly
+     * what {@code held=false} in the journal reports. Each new grant fires a loss into the
+     * previous leak, and each cycle adds another.
+     *
+     * <p>Abandoning without holding focus is a no-op at the framework level, so the only
+     * thing the guard bought was the leak. The journal line stays conditional, because a
+     * release that had nothing to release is not an event.
+     */
     private void abandonAudioFocusInternal() {
         unregisterNoisyReceiver();
-        if (!mHasAudioFocus)
-            return;
+        final boolean wasHeld = mHasAudioFocus;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && mAudioFocusRequest != null) {
             audioManager.abandonAudioFocusRequest(mAudioFocusRequest);
         } else {
             audioManager.abandonAudioFocus(this);
         }
+        // The request object is kept, not nulled. It describes what to ask for, not a live
+        // registration, and reusing it is what stops a second one being built around the
+        // same listener. See audioFocusRequest().
         mHasAudioFocus = false;
-        VlcLog.trace("AUDIO_FOCUS", "abandoned");
+        if (wasHeld) {
+            VlcLog.event("AUDIO_FOCUS", "view=" + System.identityHashCode(this) + " abandoned");
+        }
     }
 
     // =========================================================================
