@@ -1310,6 +1310,18 @@ snapshot. The recurring React state update currently reaches these paths:
 
 ## 9. P1 — make background playback honest before target SDK 35+
 
+**Status as of 2026-09-04: built, running on device, and open only on verification.** The
+architecture landed 2026-08-27 — `VlcPlaybackEngine` owns the native handles,
+`GlidePlaybackService` is a Media3 `MediaSessionService` running foreground as
+`mediaPlayback`, `VlcMedia3Player` adapts LibVLC in ~170 lines, and the hand-written
+`MediaSessionCompat` notification is deleted. Three device-found defects were fixed on top
+of it. Confirmed on device: `isForeground=true foregroundId=1001 types=0x00000002`.
+
+What remains is a device pass over notification states, one real bug (session position
+going stale after a seek while paused), one permission check, and a decision on how
+background playback is labelled until those close. The target-SDK bump this section was
+written to unblock is itself blocked on section 10.2; see the end of this section.
+
 Verified defect, present in public 1.8.1, reported from device use: the notification's
 playback clock kept advancing after pausing, stopping, or closing PiP, while actual
 playback position stayed correct. `updatePlayPauseState` passed `mMediaPlayer.getRate()`
@@ -1439,25 +1451,36 @@ Corrections to earlier assumptions in this section:
   play from it must resume and show playing. `[SERVICE] onUpdateNotification startInForeground=true` in the
   trace is the confirmation; `[SERVICE] session created and registered` alone is not.
 
-- `[todo]` Move player and media-session ownership into a foreground playback service.
-- `[todo]` Prefer Media3 1.11.0 `MediaSessionService`; implement the smallest LibVLC-backed
-  `Player` adapter needed by Glide rather than recreating ExoPlayer features.
-- `[todo]` Add `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_MEDIA_PLAYBACK` permissions
-  and declare `foregroundServiceType="mediaPlayback"`.
-- `[todo]` Let Media3 own the media notification and session controls; remove the
-  view-owned legacy `MediaSessionCompat`/notification implementation afterward.
-- `[todo]` Use a `MediaController` from the React/native UI; the Activity must not own
-  the only live player instance.
-- `[todo]` Transfer media URI, metadata, playback position, tracks, rate, repeat, delays,
-  and user pause intent across UI/service connection without duplicate players.
-- `[todo]` Handle audio focus, noisy devices, media buttons, headset/Bluetooth controls,
-  task removal, process death, service stop, and explicit user stop.
-- `[todo]` Define PiP/service interaction: PiP displays the service-owned playback
-  surface/controller state without creating another player.
-- `[todo]` Decide whether dismissing the task stops playback or leaves ongoing playback
-  alive; make UI copy and `onTaskRemoved` match.
-- `[todo]` After this service exists, raise target SDK. Android target 35+ rejects audio
-  focus requests from a background app without a foreground service.
+**The original plan for this section was struck on 2026-09-04.** Eleven `[todo]` lines stood
+here describing work to move ownership into a foreground service, add the
+`FOREGROUND_SERVICE` permissions, adopt a `MediaSessionService`, write a LibVLC `Player`
+adapter and let Media3 own the notification. All of it was implemented on 2026-08-27 and
+recorded as `[done]` sixty lines above, in this same section, while the plan it replaced was
+left in place underneath. Nothing was gained by keeping it and something real was lost: a
+reader counting open items — including one returning to this tracker on 2026-09-04 —
+concludes the section has not been started.
+
+That is the failure section 1's completion rule exists to prevent, applied in the other
+direction. A plan is not a record. When work lands, strike the plan; do not leave both and
+expect the dates to tell them apart.
+
+Three items from that block were **not** superseded and survive it:
+
+- `[keep]` **No `MediaController` from the UI.** The original plan required one so the
+  Activity would not own the only live player. That requirement is met differently: the
+  engine owns the player, the view borrows it, and `addSession` registers the session
+  without a controller ever connecting. `VlcMedia3Player` mirrors LibVLC rather than
+  replacing it, so making React drive Media3 would rewrite every one of the 198
+  `mMediaPlayer` call sites to gain nothing the session needs. Reopen only with a
+  requirement a controller uniquely satisfies.
+- `[keep]` **Process death and cross-connection state transfer are out of scope**, and were
+  answered by the task-removal decision rather than implemented. `onTaskRemoved` stops
+  playback and the service, so there is no surviving session to restore state into.
+- `[blocked]` **Raise target SDK to 35+.** This is the reason the section exists — Android
+  35+ rejects audio focus requests from a background app without a foreground service, and
+  that service now exists. It is blocked on section 10.2, not on anything here: Media3 is
+  pinned to 1.7.1 because 1.11.0 requires `compileSdk 36` *and* Kotlin 2.x, which is exactly
+  the AGP 9 / Kotlin 2.2 migration. Do not attempt the SDK bump from this section.
 
 Exit check: lock screen, Home, task dismissal, process pressure, Bluetooth disconnect,
 incoming call, notification controls, and reopening the UI all preserve explicit user intent.
@@ -2213,8 +2236,11 @@ HTTP/HTTPS/RTSP, audio focus, calls, screen lock, and process pressure.
 1. **R0:** stop accidental publication; contain Groq and inventory releases.
 2. **R1:** release/version contract; notification/media permissions; updater/security fixes.
 3. **P1:** geometry/lifecycle/audio event rebuild.
-4. **P1:** foreground playback service or remove the production background-play claim.
-5. **P2:** coordinated RN 0.87/AGP 9/Kotlin 2.2/SDK migration.
+4. **P1:** foreground playback service — *built; verify on device and settle how background
+   playback is labelled until it is verified.* The target-SDK bump it was written to unblock
+   is not available here; it moved into step 5.
+5. **P2:** coordinated RN 0.87/AGP 9/Kotlin 2.2/SDK migration — now also carries the
+   target SDK 35+ raise and the Media3 1.7.1 → 1.11.0 unpin, both blocked on Kotlin 2.x.
 6. **P2:** LibVLC 3.7.5 and focused FFmpeg wrapper repair; full FFmpegKitNext separately.
 7. **P2/P3:** dependency/dead-code/config cleanup.
 8. **P2:** iOS completion or explicit Android-only reduction.
