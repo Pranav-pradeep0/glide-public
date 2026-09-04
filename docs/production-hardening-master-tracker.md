@@ -1062,13 +1062,30 @@ for roughly 430 ms. During it `durationShared` is still its initial `0`, and:
 
 ### 8.4 Collapse native scheduling ownership
 
-- `[todo]` Replace per-feature main-loop Handlers with one main-thread Handler where
-  cancellation semantics permit it.
+- `[keep]` Do **not** merge the player view's seven main-loop Handlers into one. Verified
+  safe to do — every removal in that file is `removeCallbacks(runnable)` and nothing calls
+  `removeCallbacksAndMessages(null)`, so a shared handler would behave identically — and
+  verified pointless: they already post to the same looper queue, so the only change is one
+  object instead of seven. The separate handlers name their owner, which is what made the
+  section 8.3 work tractable. Churning a file that was just rewritten, for no functional
+  gain, is the opposite of what this item was for.
 - `[done]` Delete the unused seek executor; no work was ever submitted to it.
 - `[done]` Stop constructing anonymous `new Handler(...)` instances for delayed work.
 - `[done]` Give every retained delayed callback an owner, cancellation point, and release cleanup.
-- `[todo]` In `AudioControlModule`, cancel/replace route-debounce and volume-flag
-  callbacks rather than stacking them during rapid changes.
+- `[done]` `AudioControlModule` now cancels and replaces its two delayed callbacks instead
+  of stacking them.
+  - The volume-flag clear was posted fresh on every volume change. During a volume gesture
+    those stack, and the **earliest** one fires while later changes are still in flight,
+    clearing `isAppChangingVolume` early and letting the settings observer read an
+    app-initiated change as a user one. One `scheduleVolumeFlagClear()` now replaces the
+    pending clear, so only the last change's timer survives, and the flag is cleared in
+    exactly one place instead of two.
+  - `handleRouteChange` documented itself as "debounced to prevent multiple events from
+    rapid route switches" but never removed the previous callback — it was a 100 ms delay,
+    not a debounce, and a flapping route could queue an evaluation per event. It now
+    replaces the pending evaluation, and the magic number is `ROUTE_CHANGE_DEBOUNCE_MS`.
+  - Both are dropped by `cancelPendingAudioCallbacks()` from `stopListening()` and
+    `onHostDestroy()`, so neither can run against a torn-down module.
 
 ### 8.5 Player fixture/device acceptance
 
