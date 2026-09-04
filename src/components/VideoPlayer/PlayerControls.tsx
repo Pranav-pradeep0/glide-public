@@ -28,12 +28,11 @@ interface ReanimatedTextProps {
     value: SharedValue<number>;
     formatter?: (val: number) => string;
     style?: any;
-    prefix?: string;
     fallbackText?: string;
 }
 
-const ReanimatedText: React.FC<ReanimatedTextProps> = ({ value, formatter, style, prefix = '', fallbackText }) => {
-    const [text, setText] = useState(fallbackText ?? (prefix ? `${prefix}0` : '0'));
+const ReanimatedText: React.FC<ReanimatedTextProps> = ({ value, formatter, style, fallbackText }) => {
+    const [text, setText] = useState(fallbackText ?? '0');
     const updateText = useCallback((nextText: string) => {
         setText(prev => prev === nextText ? prev : nextText);
     }, []);
@@ -46,15 +45,14 @@ const ReanimatedText: React.FC<ReanimatedTextProps> = ({ value, formatter, style
 
     useAnimatedReaction(
         () => {
-            const valStr = formatter ? formatter(value.value) : String(Math.round(value.value));
-            return prefix + valStr;
+            return formatter ? formatter(value.value) : String(Math.round(value.value));
         },
         (nextText, previousText) => {
             if (nextText !== previousText) {
                 runOnJS(updateText)(nextText);
             }
         },
-        [formatter, prefix]
+        [formatter]
     );
 
     return (
@@ -170,10 +168,18 @@ const Scrubber: React.FC<ScrubberProps> = ({
             runOnJS(onSeekComplete)(finalTime);
         });
 
+    // Until a duration is known the bar cannot represent anything, and the pan gesture
+    // above already refuses to start. Showing it at full strength made an inert control
+    // look usable: a tap in the ~430 ms before onLoad arrives did nothing while the labels
+    // read 00:00 / 00:00. Dimmed rather than hidden so the row does not move on load.
+    const readinessStyle = useAnimatedStyle(() => ({
+        opacity: withTiming(duration.value > 0 ? 1 : 0.35, { duration: 150 }),
+    }));
+
     return (
         <GestureDetector gesture={panGesture}>
             <Animated.View
-                style={styles.scrubberContainer}
+                style={[styles.scrubberContainer, readinessStyle]}
                 onLayout={(e) => { trackWidth.value = e.nativeEvent.layout.width; }}
                 hitSlop={{ top: 20, bottom: 20 }}
             >
@@ -263,6 +269,8 @@ export const PlayerControls: FC<PlayerControlsProps> = React.memo(({
     // Worklet-safe time formatter
     const timeFormatter = (val: number) => {
         'worklet';
+        // Sentinel for "no duration yet" — see the derived values below.
+        if (val < 0) {return '--:--';}
         const seconds = Math.floor(val);
         const m = Math.floor(seconds / 60);
         const s = seconds % 60;
@@ -279,20 +287,35 @@ export const PlayerControls: FC<PlayerControlsProps> = React.memo(({
         return `${mm}:${ss}`;
     };
 
-    // Calculate remaining time
+    // Every displayed time reports -1 until a duration exists, so the labels read --:--
+    // instead of a confident 00:00 / 00:00 for a player that has not loaded yet.
     const remainingTimeValue = useDerivedValue(() => {
+        if (duration.value <= 0) {return -1;}
         return Math.max(0, duration.value - currentTime.value);
     });
 
     // Derived display time: shows scrub position while dragging, current time otherwise
     // This allows immediate visual feedback on the text without waiting for VLC
     const displayTime = useDerivedValue(() => {
+        if (duration.value <= 0) {return -1;}
         return isScrubbingShared.value ? seekPreviewTime.value : currentTime.value;
     });
 
-    const fallbackDisplayText = timeFormatter(currentTimeSeconds);
-    const fallbackRemainingText = `-${timeFormatter(Math.max(0, durationSeconds - currentTimeSeconds))}`;
-    const fallbackDurationText = timeFormatter(durationSeconds);
+    const durationDisplay = useDerivedValue(() => (duration.value > 0 ? duration.value : -1));
+
+    // The minus sign belongs inside the formatter so the placeholder is --:-- rather than
+    // the ---:-- that a bare prefix would produce.
+    const remainingFormatter = (val: number) => {
+        'worklet';
+        return val < 0 ? '--:--' : `-${timeFormatter(val)}`;
+    };
+
+    const hasDuration = durationSeconds > 0;
+    const fallbackDisplayText = hasDuration ? timeFormatter(currentTimeSeconds) : '--:--';
+    const fallbackRemainingText = hasDuration
+        ? `-${timeFormatter(Math.max(0, durationSeconds - currentTimeSeconds))}`
+        : '--:--';
+    const fallbackDurationText = hasDuration ? timeFormatter(durationSeconds) : '--:--';
 
     // Sync scrubPosition with currentTime when not scrubbing (optional, but good for safety)
     // Actually not needed as we switch source based on flag
@@ -412,14 +435,13 @@ export const PlayerControls: FC<PlayerControlsProps> = React.memo(({
                     <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                         <ReanimatedText
                             value={remainingTimeValue}
-                            formatter={timeFormatter}
-                            prefix="-"
+                            formatter={remainingFormatter}
                             fallbackText={fallbackRemainingText}
                             style={[styles.timeText, { color: '#ccc' }]}
                         />
                         <Text style={[styles.timeText, { color: '#ccc' }]}> / </Text>
                         <ReanimatedText
-                            value={duration}
+                            value={durationDisplay}
                             formatter={timeFormatter}
                             fallbackText={fallbackDurationText}
                             style={[styles.timeText, { color: '#fff' }]}
