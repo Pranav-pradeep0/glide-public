@@ -19,6 +19,7 @@ import { PlayerResizeMode } from '@glide/vlc-player';
 
 // Native Modules
 const { AudioControlModule } = NativeModules;
+
 import { finishCurrentActivity, usePipModeListener } from '@/native/PipModule';
 
 // Components
@@ -38,6 +39,7 @@ import { RecapModal } from '@/components/VideoPlayer/RecapModal';
 import { ResumeModal } from '@/components/VideoPlayer/ResumeModal';
 import { RecapService } from '@/services/RecapService';
 import { RECAP_STT_AVAILABLE } from '@/utils/constants';
+import { getResumablePosition } from '@/utils/playbackResume';
 
 // Hooks
 import {
@@ -263,7 +265,10 @@ export default function VideoPlayerScreen({ route }: Props) {
         const history = getVideoHistory(videoPath);
         if (history) {
             return {
-                resumePosition: (history.lastPausedPosition > 1 && history.duration > 0) ? history.lastPausedPosition : null,
+                resumePosition: getResumablePosition(
+                    history.lastPausedPosition,
+                    history.duration
+                ),
                 audioTrackId: history.selectedAudioTrackId,
                 subtitleTrackIndex: history.selectedSubtitleTrackId,
                 audioDelay: history.audioDelay,
@@ -1228,6 +1233,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                         animatedStyle={gestures.videoAnimatedStyle}
                         audioEqualizer={settingsHook.audioEqualizer}
                         audioDelay={settingsHook.settings.audioDelay}
+                        initialResumeSeconds={resumePosition ?? undefined}
                         onLoad={player.handleLoad}
                         onProgress={player.handleProgress}
                         onEnd={handleVideoEnd}

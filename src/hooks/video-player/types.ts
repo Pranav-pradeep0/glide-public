@@ -517,10 +517,11 @@ export const getOptimizedInitOptions = (
         '--no-sub-autodetect-file',
     ];
 
-    // Only use fast-seek for local files
-    if (!isNetworkStream) {
-        baseOptions.push('--input-fast-seek');
-    }
+    // --input-fast-seek is deliberately absent. VLC applies it input-wide as the
+    // precision flag for every DEMUX_SET_TIME/DEMUX_SET_POSITION, so it made user seeks
+    // land 19-35s from the requested time and resume land 2-9s early on device. A
+    // per-call precise seek cannot override it. VLC's own Android app also defaults to
+    // precise seeking and exposes fast seek as an opt-in setting.
 
     // Decoder Options
     if (decoder === 'software') {

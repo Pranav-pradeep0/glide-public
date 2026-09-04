@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { VLCPlayer } from '@glide/vlc-player';
 import { useSharedValue, useFrameCallback } from 'react-native-reanimated';
+import { getResumablePosition } from '@/utils/playbackResume';
 import {
     PlayerState,
     VLCLoadData,
@@ -364,22 +365,25 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
         }
 
         const resumeTime = resumePosRef.current;
-        if (resumeTime && resumeTime > 0 && resumeTime < durationSec - 1) {
-            if (__DEV__) {console.log('[LOAD] applying resume position=' + resumeTime.toFixed(2) + 's');}
-
-            currentTimeRef.current = resumeTime;
-            currentTimeShared.value = resumeTime;
-            lastSyncPosition.value = resumeTime;
-            lastSyncTimestamp.value = Date.now();
+        if (resumeTime !== null) {
             resumePosRef.current = null;
+        }
+        const validResumeTime = getResumablePosition(resumeTime, durationSec);
+        if (validResumeTime !== null) {
+            // No seek. VLC was told to open the demuxer at this offset via the source's
+            // startTime, so by the time onLoad fires playback is already there. All that
+            // is left is to align the UI's position refs with it.
+            //
+            // This used to seek 100 ms after onLoad, which put the request inside VLC's
+            // startup ramp where LibVLC silently drops setTime — isSeekable() and
+            // getLength() both report ready well before a seek is actually honoured, so
+            // resume regularly restarted the video from zero.
+            if (__DEV__) {console.log('[LOAD] resume position=' + validResumeTime.toFixed(2) + 's (opened at offset)');}
 
-            // Direct seek — applySeekToVLC can't be used here because
-            // state.isVideoLoaded is stale in its closure.
-            setTimeout(() => {
-                const fraction = resumeTime / durationSec;
-                if (__DEV__) {console.log('[SEEK] resume seek fraction=' + fraction.toFixed(4));}
-                videoRef.current?.seek(fraction);
-            }, 100);
+            currentTimeRef.current = validResumeTime;
+            currentTimeShared.value = validResumeTime;
+            lastSyncPosition.value = validResumeTime;
+            lastSyncTimestamp.value = Date.now();
         }
     }, [onAudioTracksLoaded, durationShared, currentTimeShared, lastSyncPosition,
         lastSyncTimestamp]);

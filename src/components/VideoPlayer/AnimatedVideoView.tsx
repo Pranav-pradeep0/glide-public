@@ -54,6 +54,12 @@ interface AnimatedVideoViewProps {
     audioEqualizer?: number[];
     audioDelay?: number;
 
+    /**
+     * Where to begin playback on the first mount, in seconds, from watch history.
+     * Only the initial resume: a remount's position is captured natively.
+     */
+    initialResumeSeconds?: number;
+
     // Animation style from gestures
     animatedStyle: AnimatedStyle<any>;
 
@@ -102,6 +108,7 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
             artist,
             audioEqualizer,
             audioDelay,
+            initialResumeSeconds,
             animatedStyle,
             onLoad,
             onProgress,
@@ -114,44 +121,44 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
             onSeek,
         } = props;
 
-        // Calculate resume time when playerKey changes (component is remounting for decoder/enhancement change)
-        // We'll use VLC's --start-time option for seamless resume without visible seek
-        const resumeTimeSeconds = useMemo(() => {
-            // Apply resume for remounts (decoder/enhancement toggles) even near start.
-            // Old threshold (>1s) caused unintended restart-to-zero in initial playback area.
-            const MIN_RESUME_SECONDS = 0.001;
+        /**
+         * Where the native player should open, in seconds.
+         *
+         * A remount resumes from the live position; the first mount resumes from watch
+         * history. Both cases build a *new* native view, so JavaScript has to carry the
+         * offset across — a position saved inside the outgoing view would be lost with it.
+         * Same-view recreates (an enhancement toggle, reviving a stopped player) are
+         * handled natively and do not come through here.
+         *
+         * This is the whole resume mechanism now. It travels inside the source so it
+         * cannot race the source prop, and native turns it into VLC's :start-time when the
+         * demuxer is opened. Nothing seeks: LibVLC drops a setTime issued during its
+         * startup ramp, which is why the previous 100 ms-after-onLoad seek landed at 0.
+         */
+        const startTimeSeconds = useMemo(() => {
             const END_GUARD_SECONDS = 0.2;
 
             if (playerKey > 0 && duration > 1) {
-                const maxSeek = Math.max(0, duration - END_GUARD_SECONDS);
                 // Read the live position here rather than taking it as a prop: the screen
                 // no longer re-renders on progress, so a prop value would be stale.
-                const clampedResume = Math.max(0, Math.min(maxSeek, currentTimeRef.current));
-
-                if (clampedResume >= MIN_RESUME_SECONDS && clampedResume < maxSeek) {
-                    if (__DEV__) {console.log('[AnimatedVideoView] Setting start-time for seamless resume:', clampedResume, 'seconds');}
-                    return clampedResume;
-                }
+                const maxSeek = Math.max(0, duration - END_GUARD_SECONDS);
+                const clamped = Math.max(0, Math.min(maxSeek, currentTimeRef.current));
+                // Deliberately no minimum: a remount near the start must still resume
+                // where it was, not jump to zero.
+                return clamped > 0 && clamped < maxSeek ? clamped : 0;
             }
-            return 0; // No resume needed
+
+            return initialResumeSeconds && initialResumeSeconds > 0 ? initialResumeSeconds : 0;
             // eslint-disable-next-line react-hooks/exhaustive-deps
-        }, [playerKey]); // Re-calc only when playerKey changes
+        }, [playerKey]); // Re-calc only when the player is rebuilt
 
         // Simple onPlaying handler - no more manual seeking needed!
         const handlePlaying = useCallback(() => {
             onPlaying();
         }, [onPlaying]);
 
-        // Build source with init options and media options
-        // --start-time tells VLC to begin playback at the specified position (in seconds)
         const vlcSource = useMemo(() => {
             const mediaOpts = repeat ? [':input-repeat=65535'] : [];
-
-            // Add start-time for seamless resume on player restart
-            if (resumeTimeSeconds > 0) {
-                mediaOpts.push(`:start-time=${resumeTimeSeconds}`);
-                if (__DEV__) {console.log('[AnimatedVideoView] Adding --start-time:', resumeTimeSeconds);}
-            }
 
             return {
                 ...source,
@@ -159,8 +166,10 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
                 initOptions: getOptimizedInitOptions(source.uri, decoder),
                 decoderMode: decoder,
                 mediaOptions: mediaOpts,
+                // Seconds. Native opens the demuxer here, so resume needs no seek.
+                startTime: startTimeSeconds > 0 ? startTimeSeconds : undefined,
             };
-        }, [source, decoder, repeat, resumeTimeSeconds]);
+        }, [source, decoder, repeat, startTimeSeconds]);
 
         if (playerKey > 0) {
             if (__DEV__) {console.log('[AnimatedVideoView] Init Options:', vlcSource.initOptions);}

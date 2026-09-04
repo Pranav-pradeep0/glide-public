@@ -48,6 +48,18 @@ export interface VLCPlayerSource {
    * e.g. [":input-repeat=65535"]
    */
   mediaOptions?: string[];
+
+  /**
+   * Where playback should begin, in seconds.
+   *
+   * Applied as VLC's `:start-time` when the media is opened, so resuming never depends
+   * on a seek landing after playback starts — LibVLC drops a `setTime` issued during its
+   * startup ramp. Part of the source rather than a sibling prop so it cannot race `src`.
+   * Native prefers its own live position for a same-view recreate, so this is used once
+   * per source.
+   * @default 0
+   */
+  startTime?: number;
   /**
    * Set to `true` if the source is a network stream
    */

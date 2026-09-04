@@ -217,8 +217,12 @@ final class VlcPipController {
     // =========================================================================
 
     private void applyParams() {
-        // Video geometry and play state arrive on LibVLC's own thread; Activity PiP
-        // params must be set from the main thread.
+        // setPictureInPictureParams must be called from the main thread. In practice this
+        // hop never runs: geometry and play state reach us from the player view's event
+        // handler, and LibVLC delivers those on the main looper (VLCObject posts events
+        // through a main-looper Handler, and AWindow does the same for layout callbacks).
+        // Kept as insurance on a call that genuinely requires the main thread, not because
+        // a background caller is known to exist.
         if (Looper.myLooper() != Looper.getMainLooper()) {
             videoView.post(this::applyParams);
             return;

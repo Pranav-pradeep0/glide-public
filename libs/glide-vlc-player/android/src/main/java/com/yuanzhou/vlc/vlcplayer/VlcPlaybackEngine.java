@@ -40,10 +40,19 @@ final class VlcPlaybackEngine {
         final boolean hwDecoderForced;
         /** Audio desync in milliseconds, applied as a media option. 0 to omit. */
         final long audioDesyncMs;
+        /**
+         * Where playback should begin, in seconds. 0 to start at the beginning.
+         *
+         * <p>This is how resume works. VLC opens the demuxer at this offset, so there is
+         * no seek to race: the alternative was seeking shortly after playback started,
+         * and LibVLC drops a {@code setTime} issued during its startup ramp even though
+         * {@code isSeekable()} and {@code getLength()} already report ready.
+         */
+        final double startTimeSec;
 
         Source(String uri, boolean isNetwork, int initType, List<String> initOptions,
                 List<String> mediaOptions, boolean hwDecoderEnabled, boolean hwDecoderForced,
-                long audioDesyncMs) {
+                long audioDesyncMs, double startTimeSec) {
             this.uri = uri;
             this.isNetwork = isNetwork;
             this.initType = initType;
@@ -52,6 +61,7 @@ final class VlcPlaybackEngine {
             this.hwDecoderEnabled = hwDecoderEnabled;
             this.hwDecoderForced = hwDecoderForced;
             this.audioDesyncMs = audioDesyncMs;
+            this.startTimeSec = startTimeSec;
         }
     }
 
@@ -97,21 +107,45 @@ final class VlcPlaybackEngine {
             VlcLog.trace("ENGINE", "HW decoder enabled=" + source.hwDecoderEnabled
                     + " forced=" + source.hwDecoderForced);
 
+            final List<String> applied = new ArrayList<>();
             if (source.mediaOptions != null) {
                 for (String option : source.mediaOptions) {
                     media.addOption(option);
+                    applied.add(option);
                 }
             }
             if (source.audioDesyncMs != 0) {
-                media.addOption(":audio-desync=" + source.audioDesyncMs);
+                final String option = ":audio-desync=" + source.audioDesyncMs;
+                media.addOption(option);
+                applied.add(option);
             }
-            if (!source.isNetwork) {
-                media.addOption(":input-fast-seek");
+            if (source.startTimeSec > 0d) {
+                // VLC declares start-time with add_float, so a fractional value is valid;
+                // this is deliberately not rounded to whole seconds. VLC's own Android app
+                // uses the same media option for resume, so this is the supported route
+                // rather than a seek issued after playback starts.
+                //
+                // Note that input.c applies it by pushing INPUT_CONTROL_SET_TIME, which is
+                // asynchronous: the position is not in effect when the Playing event
+                // fires. The view's confirmation logic depends on that fact.
+                final String option = ":start-time=" + source.startTimeSec;
+                media.addOption(option);
+                applied.add(option);
             }
+            // input-fast-seek is deliberately NOT set. VLC reads it once per input
+            // (priv->b_fast_seek = var_GetBool(p_input, "input-fast-seek")) and then passes
+            // !b_fast_seek as the precision argument to every DEMUX_SET_TIME and
+            // DEMUX_SET_POSITION, so it degrades every seek for the life of the input.
+            // A per-call precise request cannot override it: MediaPlayer.setTime(long)
+            // already asks for a precise seek, and device traces still showed user seeks
+            // landing 19-35 s from the requested time and resume landing 2-9 s early.
+            // Precision matters more here than seek latency, which is also VLC's own
+            // default -- its Android app treats fast seek as an opt-in setting.
 
             mediaPlayer.setMedia(media);
             media.release();
-            VlcLog.trace("ENGINE", "opened " + describe(source));
+            VlcLog.trace("ENGINE", "opened " + describe(source)
+                    + " appliedMediaOptions=" + applied);
             return mediaPlayer;
         } catch (Exception e) {
             VlcLog.error("ENGINE", "open failed: " + e.getMessage(), e);
@@ -128,9 +162,10 @@ final class VlcPlaybackEngine {
         return kind
                 + " initType=" + source.initType
                 + " initOptions=" + source.initOptions.size()
-                + " mediaOptions=" + (source.mediaOptions == null ? 0 : source.mediaOptions.size())
+                + " jsMediaOptions=" + (source.mediaOptions == null ? 0 : source.mediaOptions.size())
                 + " hw=" + source.hwDecoderEnabled + "/" + source.hwDecoderForced
-                + " desync=" + source.audioDesyncMs;
+                + " desync=" + source.audioDesyncMs
+                + " startTime=" + source.startTimeSec;
     }
 
     /**
@@ -173,6 +208,16 @@ final class VlcPlaybackEngine {
                 // Drop dialog callbacks before release; they close over the caller.
                 Dialog.setCallbacks(libvlc, null);
             }
+            // Detach before releasing, for a concrete reason: setEventListener calls
+            // removeCallbacksAndMessages on the handler it was dispatching through, so
+            // this discards events already queued for the main thread. Without it, an
+            // event posted just before release runs afterwards against a freed player,
+            // which surfaces as "IllegalStateException: can't get VLCObject instance" --
+            // the same failure the Media3 adapter was hardened against in section 9.
+            //
+            // Not a data race. Events are delivered on the main thread (see the note on
+            // the view's listener), so they cannot overlap this call, only queue behind it.
+            mediaPlayer.setEventListener(null);
             mediaPlayer.release();
             mediaPlayer = null;
             VlcLog.trace("ENGINE", "player released");

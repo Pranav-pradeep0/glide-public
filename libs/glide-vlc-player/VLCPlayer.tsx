@@ -18,6 +18,8 @@ interface ResolvedVlcSource {
     mainVer?: number;
     patchVer?: number;
     initOptions?: string[];
+    /** Seconds. Native applies it as VLC's :start-time when opening the media. */
+    startTime?: number;
 }
 
 interface RCTVLCPlayerNativeProps {

@@ -41,6 +41,29 @@ final class VlcLog {
         return TRACING;
     }
 
+    /**
+     * A discrete record of what the player was asked to do, or what it decided.
+     *
+     * <p>Deliberately logged at warning level so a session can be reconstructed from
+     * {@code adb logcat -s GlideVLC:W} with no property to set and no rebuild. That is a
+     * departure from the split between {@link #trace} and {@link #warn}, so it comes with
+     * two rules that keep it honest:
+     *
+     * <ul>
+     *   <li><b>One line per discrete event.</b> Never per frame, per progress tick, per
+     *       buffering sample or per layout pass — those stay in {@link #trace}. A whole
+     *       viewing session should produce a couple of dozen lines.</li>
+     *   <li><b>No media identity.</b> No path, filename, title or URI. The journal records
+     *       that a local file was opened, not which one.</li>
+     * </ul>
+     *
+     * <p>Prefixed {@code EVT} so it can be separated from real warnings:
+     * {@code adb logcat -s GlideVLC:W | grep EVT}.
+     */
+    static void event(String section, String message) {
+        Log.w(TAG, "[EVT] " + section + ": " + message);
+    }
+
     /** Play-by-play. Silent unless tracing is enabled. */
     static void trace(String section, String message) {
         if (TRACING) {

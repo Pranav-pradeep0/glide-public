@@ -27,6 +27,7 @@ import com.facebook.react.bridge.WritableArray;
 
 import com.facebook.react.uimanager.ThemedReactContext;
 
+import org.videolan.libvlc.interfaces.IMedia;
 import org.videolan.libvlc.interfaces.IVLCVout;
 import org.videolan.libvlc.Media;
 import org.videolan.libvlc.MediaPlayer;
@@ -36,8 +37,6 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 import android.app.Activity;
 import androidx.lifecycle.Lifecycle;
@@ -66,9 +65,39 @@ class ReactVlcPlayerView extends TextureView implements
     // arrive within this window (they are VLC internal codec-flush artefacts).
     private static final long POST_SEEK_PAUSED_SUPPRESSION_MS = 250L;
 
-    // If Buffering=100% never fires after a codec-flush seek, force play() after
-    // this many milliseconds to prevent a permanent stall.
-    private static final long SEEK_BUFFER_TIMEOUT_MS = 200L;
+    // If Buffering=100% never fires after a codec-flush seek, force play() after this
+    // many milliseconds to prevent a permanent stall.
+    //
+    // Sized as an escape from a stuck seek, deliberately not as a latency target. Precise
+    // seeking -- see the note on input-fast-seek in VlcPlaybackEngine -- decodes from the
+    // keyframe to the requested frame, and a device trace measured ordinary jumps taking
+    // 909 ms and 1019 ms. The former 200 ms therefore fired before almost every seek
+    // completed, forcing play() while the seek was still in flight.
+    private static final long SEEK_BUFFER_TIMEOUT_MS = 3_000L;
+    /**
+     * How far playback may advance from the beginning before an unconfirmed start offset
+     * is treated as dropped rather than merely pending.
+     *
+     * <p>VLC applies {@code :start-time} by pushing INPUT_CONTROL_SET_TIME from
+     * {@code StartTitle()}, which is asynchronous, so the offset is legitimately absent
+     * for the first events after Playing.
+     */
+    private static final long START_TIME_IGNORED_EVIDENCE_MS = 4_000L;
+
+    /**
+     * How far from the requested offset playback may land before it is corrected.
+     *
+     * <p>VLC seeks to a keyframe at or before the requested time, and
+     * {@code --input-fast-seek} makes that granularity coarse: device traces showed
+     * arrivals 2.9 s, 5.2 s and 8.8 s early. That is a real amount of re-watched video, so
+     * the residual is corrected once, precisely, after playback is confirmed running.
+     */
+    private static final long START_TIME_PRECISION_MS = 1_500L;
+    /** Match the JavaScript history boundary: the opening/final second is not resumable. */
+    private static final long RESUME_EDGE_GUARD_MS = 1_000L;
+
+    /** Backstop for enhancement-recreate completion. See applyEnhancementWithRecreate. */
+    private static final long ENHANCEMENT_RESTORE_TIMEOUT_MS = 500L;
 
     // Buffering debounce for UI indicator
     private static final int BUFFERING_DEBOUNCE_MS = 200;
@@ -86,7 +115,7 @@ class ReactVlcPlayerView extends TextureView implements
     private static final float BEST_FIT_EXIT_BAR_RATIO = 0.08f;
 
     // =========================================================================
-    // Fields — all VLC-thread-accessible fields must be volatile
+    // Fields — player events and React prop setters both run on the main looper
     // =========================================================================
 
     private final VideoEventEmitter eventEmitter;
@@ -96,7 +125,8 @@ class ReactVlcPlayerView extends TextureView implements
     private Lifecycle mObservedLifecycle = null;
     private final AudioManager audioManager;
 
-    // Player instances
+    // Player instances. onEvent captures this into a local for legibility, and the
+    // engine detaches the main-looper listener before releasing queued events.
     private MediaPlayer mMediaPlayer = null;
 
     // Surface
@@ -107,6 +137,7 @@ class ReactVlcPlayerView extends TextureView implements
     private String src;
     private String _subtitleUri;
     private int _textTrack = -1;
+    // Desired audio track; read by event handlers and prop setters on the main looper.
     private int _audioTrack = -1;
     private int currentlyAppliedAudioTrack = -1;
     private ReadableMap srcMap;
@@ -119,6 +150,12 @@ class ReactVlcPlayerView extends TextureView implements
     private final VlcPipController mPipController = new VlcPipController(this);
     private String resizeMode = "contain";
     private long mAudioDelay = 0;
+    // What VLC currently holds, in microseconds, or MIN_VALUE for "unknown". VLC drops
+    // the delay across a track change, so a successful track change resets this to
+    // unknown rather than assuming the value survived.
+    private long currentlyAppliedAudioDelayUs = Long.MIN_VALUE;
+    // Last buffering state written to the log, so only transitions are recorded.
+    private boolean mLastLoggedBuffering = false;
 
     // Video dimensions
     private int mVideoHeight = 0;
@@ -137,9 +174,11 @@ class ReactVlcPlayerView extends TextureView implements
     private String mLastAppliedResizeMode = null;
     private Boolean mBestFitUsingCover = null;
 
-    // Playback state — volatile because VLC events arrive on VLC's internal thread
+    // Playback state. Some volatile modifiers predate the verified main-looper model.
     private volatile boolean isPaused = true;
     private volatile boolean mNativeStopped = true;
+    /** Only EndReached means the next play is an intentional replay from zero. */
+    private boolean mEnded = false;
     private boolean isHostStopped = false;
     private boolean wasPlayingBeforeHostStop = false;
     private boolean mPausedForHostStop = false;
@@ -147,9 +186,61 @@ class ReactVlcPlayerView extends TextureView implements
     private boolean mPausedForNoisyEvent = false;
     private boolean isResizeModeApplied = false;
 
-    // Saved position for resume after releasePlayer
-    private float mSavedPosition = 0f;
-    private float mForceSeekOnCreate = -1f;
+    /**
+     * Unconfirmed start intent for the current source, in seconds. 0 means none.
+     *
+     * <p>Seconds, not a fraction, and applied as VLC's {@code :start-time} media option
+     * rather than as a seek after playback starts. Both parts of that matter:
+     *
+     * <ul>
+     *   <li>A fraction cannot be turned into a time without the length, and the length
+     *       belongs to the player being released. Saving seconds removes the round trip.</li>
+     *   <li>LibVLC drops a {@code setTime} issued during its startup ramp even though
+     *       {@code isSeekable()} and {@code getLength()} already report ready, which is
+     *       why every timing-based restore here failed. Opening the demuxer at the offset
+     *       has no window to miss.</li>
+     * </ul>
+     *
+     * <p>Set from the source, from a release that saved a position, from an enhancement
+     * recreate, and from reviving a stopped player. It survives construction and opening
+     * errors, and is cleared only after VLC reports playback near the requested time or an
+     * explicit user seek supersedes it.
+     */
+    private double mPendingStartTimeSec = 0d;
+
+    /**
+     * The seek version the pending verification belongs to.
+     *
+     * <p>A position can only be attributed to a seek if no later seek has been dispatched
+     * since. Without this the verifier compared one seek's target against the next seek's
+     * position during rapid seeking and reported transposed pairs — target and actual
+     * swapped between consecutive lines — as multi-minute drift.
+     */
+    private long mSeekVerifyVersion = -1L;
+
+    /** Set once a corrective seek has been issued for the current pending offset. */
+    private boolean mStartTimeCorrectionIssued = false;
+
+    /**
+     * The single way to change where the next created player should begin.
+     *
+     * <p>Exists because the offset has a companion flag: seven call sites used to assign
+     * the field directly, and any one of them forgetting the flag would make the *next*
+     * offset abandon itself on first evidence instead of correcting. Routing every change
+     * through here also puts every change of intent in the trace, which is what the device
+     * runs actually need.
+     */
+    private void setPendingStartTime(double seconds, String reason) {
+        final double next = seconds > 0d && !Double.isNaN(seconds) && !Double.isInfinite(seconds)
+                ? seconds
+                : 0d;
+        if (next != mPendingStartTimeSec || mStartTimeCorrectionIssued) {
+            VlcLog.trace("START_TIME", "pending=" + next + "s reason=" + reason
+                    + " (was " + mPendingStartTimeSec + "s)");
+        }
+        mPendingStartTimeSec = next;
+        mStartTimeCorrectionIssued = false;
+    }
 
     // ─── SEEK STATE ───────────────────────────────────────────────────────────
 
@@ -210,16 +301,20 @@ class ReactVlcPlayerView extends TextureView implements
 
     // ─── MISC ────────────────────────────────────────────────────────────────
 
-    private ExecutorService seekExecutor = Executors.newSingleThreadExecutor();
     private String mVideoInfoHash = null;
 
     // Cached equalizer instance — reused rather than re-allocated on every call
     private MediaPlayer.Equalizer mEqualizer = null;
     private float[] mEqualizerBands = null;
-    private float mLastAppliedRate = Float.NaN;
+    /**
+     * The rate the app has asked for, as opposed to the one currently applied.
+     *
+     * <p>Survives a player recreate. A newly playing player always receives this live
+     * value; no issued-command cache is treated as proof that VLC accepted it.
+     */
+    private float mRequestedRate = 1.0f;
     private final Handler mRateHandler = new Handler(Looper.getMainLooper());
     private Runnable mPendingRateRunnable = null;
-    private float mPendingRate = Float.NaN;
     private final Handler mAudioTrackHandler = new Handler(Looper.getMainLooper());
     private Runnable mPendingAudioTrackRunnable = null;
 
@@ -240,56 +335,22 @@ class ReactVlcPlayerView extends TextureView implements
 
     // ─── VIDEO ENHANCEMENT ──────────────────────────────────────────────────
 
-    /**
-     * Reason for a player recreate — isolates enhancement changes from other
-     * recreate triggers so they cannot interfere with each other's state.
-     */
-    private enum RecreateReason { SOURCE_CHANGE, DECODER_CHANGE, ENHANCEMENT_CHANGE }
-
     private boolean  mRequestedEnhancement = false;   // What React wants
     private boolean  mAppliedEnhancement = false;      // What's actually applied
     private boolean  mEnhancementCompatiblePipeline = false;
     private long     mEnhancementGeneration = 0;       // Gates all callbacks + restore
     private boolean  mEnhancementRecreateInFlight = false;
     private Runnable mPendingEnhancementRunnable = null;
-    private boolean  mEnhancementRestoreCompleted = false; // Idempotent restore guard
-    private PlaybackSnapshot mPendingEnhancementSnapshot = null;
     private boolean  mPendingEnhancementTarget = false;
 
     private static final long ENHANCEMENT_DEBOUNCE_MS = 75L;
     private final Handler mEnhancementHandler = new Handler(Looper.getMainLooper());
-
     /**
-     * Captured playback state before an enhancement recreate.
-     * Used to restore all player state after the recreate completes.
+     * The enhancement-completion backstop, held so it can be removed rather than merely
+     * ignored. Bumping the generation stops it acting, but the message stays queued and
+     * retains this view until it fires.
      */
-    private static class PlaybackSnapshot {
-        final long    timeMs;
-        final boolean userPausedIntent;     // isPaused (user intent, distinct from native isPlaying)
-        final boolean nativeWasPlaying;
-        final float   rate;
-        final int     audioTrack;
-        final int     textTrack;            // -1 = disabled
-        final long    audioDelayMs;
-        final String  subtitleUri;          // null if none
-        final boolean externalSubAttached;  // if external subtitle slave was added
-        final boolean muted;
-
-        PlaybackSnapshot(long timeMs, boolean userPausedIntent, boolean nativeWasPlaying,
-                         float rate, int audioTrack, int textTrack, long audioDelayMs,
-                         String subtitleUri, boolean externalSubAttached, boolean muted) {
-            this.timeMs = timeMs;
-            this.userPausedIntent = userPausedIntent;
-            this.nativeWasPlaying = nativeWasPlaying;
-            this.rate = rate;
-            this.audioTrack = audioTrack;
-            this.textTrack = textTrack;
-            this.audioDelayMs = audioDelayMs;
-            this.subtitleUri = subtitleUri;
-            this.externalSubAttached = externalSubAttached;
-            this.muted = muted;
-        }
-    }
+    private Runnable mPendingEnhancementRestoreRunnable = null;
 
     // =========================================================================
     // Constructor
@@ -372,6 +433,7 @@ class ReactVlcPlayerView extends TextureView implements
     }
 
     private void onHostStart() {
+        VlcLog.event("LIFECYCLE", "foreground (ON_START)");
         VlcLog.trace("LIFECYCLE", "ON_START | isSurfaceViewDestroyed=" + isSurfaceViewDestroyed
                 + " wasPlayingBeforeHostStop=" + wasPlayingBeforeHostStop
                 + " isHostStopped=" + isHostStopped
@@ -399,6 +461,7 @@ class ReactVlcPlayerView extends TextureView implements
         wasPlayingBeforeHostStop = (mMediaPlayer != null && mMediaPlayer.isPlaying()) || !isPaused;
         isHostStopped = true;
 
+        VlcLog.event("LIFECYCLE", "background (ON_STOP)");
         VlcLog.trace("LIFECYCLE", "ON_STOP | wasPlaying=" + wasPlayingBeforeHostStop
                 + " playInBackground=" + playInBackground);
 
@@ -460,6 +523,10 @@ class ReactVlcPlayerView extends TextureView implements
 
     @Override
     public void onAudioFocusChange(int focusChange) {
+        VlcLog.event("AUDIO_FOCUS", "change=" + focusChange
+                + (focusChange == AudioManager.AUDIOFOCUS_LOSS ? " (lost)"
+                    : focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT ? " (lost transient)"
+                    : focusChange == AudioManager.AUDIOFOCUS_GAIN ? " (gained)" : ""));
         VlcLog.trace("AUDIO_FOCUS", "change=" + focusChange);
         switch (focusChange) {
             case AudioManager.AUDIOFOCUS_GAIN:
@@ -540,6 +607,7 @@ class ReactVlcPlayerView extends TextureView implements
                             mResumeOnFocusGain = false;
                             mMediaPlayer.pause();
                             setKeepScreenOn(false);
+                            VlcLog.event("NOISY", "audio route became noisy — paused");
                             VlcLog.trace("NOISY", "headphones disconnected → paused");
                             WritableMap map = createEventMap();
                             if (map != null)
@@ -763,11 +831,11 @@ class ReactVlcPlayerView extends TextureView implements
         }
     }
 
-    private void maybeRestorePendingEnhancementSnapshot() {
-        if (!mEnhancementRecreateInFlight || mPendingEnhancementSnapshot == null || mEnhancementRestoreCompleted) {
+    private void maybeCompletePendingEnhancementRecreate() {
+        if (!mEnhancementRecreateInFlight) {
             return;
         }
-        restorePlaybackSnapshot(mPendingEnhancementSnapshot, mEnhancementGeneration, mPendingEnhancementTarget);
+        completeEnhancementRecreate(mEnhancementGeneration, mPendingEnhancementTarget);
     }
 
     private boolean shouldUseEnhancementCompatiblePipeline(boolean targetEnhancement) {
@@ -816,10 +884,23 @@ class ReactVlcPlayerView extends TextureView implements
     private MediaPlayer.EventListener mPlayerListener = new MediaPlayer.EventListener() {
         @Override
         public void onEvent(MediaPlayer.Event event) {
-            // NOTE: VLC dispatches events on its own internal thread, NOT Android's
-            // main thread. Fields that are read here AND written on the main thread
-            // must be declared volatile. All such fields are marked volatile above.
-            if (mMediaPlayer == null)
+            // NOTE: this runs on the MAIN thread, despite what this comment used to say.
+            // Verified against the LibVLC 3.6.5 bytecode: VLCObject.dispatchEventFromNative
+            // is called on a native thread but always hands the event to
+            // Handler.post(EventRunnable), and setEventListener(listener) constructs that
+            // Handler with Looper.getMainLooper() when no handler is supplied. So event
+            // handling cannot interleave with releasePlayer or a prop setter, which also
+            // run on the main thread, and fields shared with them need no volatile for
+            // that reason. Nothing in this class touches the player off the main thread:
+            // the seek path posts to a main-looper Handler.
+            //
+            // Several fields above are still volatile. They predate this correction and
+            // are harmless; do not read them as evidence of concurrency here.
+            // One read per event rather than seventeen, so the null check and every use
+            // below refer to the same object. This is for legibility, not for safety
+            // against a race: see the threading note above.
+            final MediaPlayer player = mMediaPlayer;
+            if (player == null)
                 return;
 
             // Auto-enter must only ever be armed while media is actually playing.
@@ -829,7 +910,7 @@ class ReactVlcPlayerView extends TextureView implements
                 case MediaPlayer.Event.Stopped:
                 case MediaPlayer.Event.EndReached:
                     mPipController.setPlaying(
-                            mMediaPlayer != null && mMediaPlayer.isPlaying());
+                            player != null && player.isPlaying());
                     break;
                 default:
                     break;
@@ -840,6 +921,7 @@ class ReactVlcPlayerView extends TextureView implements
                 // ─────────────────────────────────────────────────────────────
                 case MediaPlayer.Event.Playing: {
                     mNativeStopped = false;
+                    mEnded = false;
 
                     // FIX: clear seek suppression sentinel — VLC has confirmed
                     // actual playback at the new position.
@@ -851,15 +933,21 @@ class ReactVlcPlayerView extends TextureView implements
                     mPausedForAudioFocus = false;
                     mPausedForNoisyEvent = false;
 
-                    VlcLog.trace("VLC_EVENT", "Playing | isPaused=" + isPaused + " pos=" + mMediaPlayer.getPosition()
-                            + " time=" + mMediaPlayer.getTime() + " duration=" + mMediaPlayer.getLength());
+                    VlcLog.trace("VLC_EVENT", "Playing | isPaused=" + isPaused + " pos=" + player.getPosition()
+                            + " time=" + player.getTime() + " duration=" + player.getLength());
+                    VlcLog.event("STATE", "playing at " + player.getTime() + "ms of "
+                            + player.getLength() + "ms");
+                    // Not resolved here: VLC pushes the start offset as an asynchronous
+                    // input control, so the position at Playing is legitimately still 0.
+                    // TimeChanged is where the answer actually becomes visible.
+
 
                     // If user intent is paused, suppress this transient Playing and re-pause.
                     if (isPaused) {
                         VlcLog.warn("VLC_EVENT", "Playing suppressed (user intent=paused) → re-pausing");
                         try {
-                            if (mMediaPlayer.isPlaying())
-                                mMediaPlayer.pause();
+                            if (player.isPlaying())
+                                player.pause();
                         } catch (Exception ignored) {
                         }
                         setKeepScreenOn(false);
@@ -867,27 +955,27 @@ class ReactVlcPlayerView extends TextureView implements
                         break;
                     }
 
-                    // Verify seek landed near target and log if large drift detected
-                    logSeekVerification();
+
+
 
                     // Force subtitle state
-                    if (_textTrack == -1 && mMediaPlayer.getSpuTracksCount() > 0) {
-                        mMediaPlayer.setSpuTrack(-1);
+                    if (_textTrack == -1 && player.getSpuTracksCount() > 0) {
+                        player.setSpuTrack(-1);
                     } else if (_textTrack != -1) {
-                        mMediaPlayer.setSpuTrack(_textTrack);
+                        player.setSpuTrack(_textTrack);
                     }
 
                     // Apply pending audio-track change after the player is in a stable playing state.
-                    applyRequestedAudioTrack("playing", false);
+                    applyRequestedAudioTrack("playing");
 
-                    // Re-apply audio delay
-                    if (mAudioDelay != 0) {
-                        mMediaPlayer.setAudioDelay(mAudioDelay * 1000);
-                    }
+                    // Re-apply audio delay. VLC drops it across a track change, so this
+                    // and the ES handler are the two real reapplication points.
+                    reapplyAudioDelay("playing");
+                    applyRequestedRate("playing");
 
                     // Fallback: get video dimensions if onNewVideoLayout hasn't fired yet
                     if (mVideoWidth <= 0 || mVideoHeight <= 0) {
-                        Media.VideoTrack videoTrack = mMediaPlayer.getCurrentVideoTrack();
+                        Media.VideoTrack videoTrack = player.getCurrentVideoTrack();
                         if (videoTrack != null && videoTrack.width > 0 && videoTrack.height > 0) {
                             mVideoWidth = videoTrack.width;
                             mVideoHeight = videoTrack.height;
@@ -912,7 +1000,7 @@ class ReactVlcPlayerView extends TextureView implements
                     WritableMap map = createEventMap();
                     if (map == null)
                         return;
-                    maybeRestorePendingEnhancementSnapshot();
+                    maybeCompletePendingEnhancementRecreate();
                     maybeMarkEnhancementAppliedFromNormalCreate();
                     emitPlayingEvent(map);
                     updateVideoInfo();
@@ -941,8 +1029,8 @@ class ReactVlcPlayerView extends TextureView implements
                     }
                     mLastSeekPlayTimestampMs = -1L;
 
-                    VlcLog.trace("VLC_EVENT", "Paused | isPaused=" + isPaused + " pos=" + mMediaPlayer.getPosition()
-                            + " time=" + mMediaPlayer.getTime());
+                    VlcLog.trace("VLC_EVENT", "Paused | isPaused=" + isPaused + " pos=" + player.getPosition()
+                            + " time=" + player.getTime());
 
                     if (mPausedForHostStop && !isPaused) {
                         VlcLog.trace("VLC_EVENT", "Paused suppressed — host lifecycle pause");
@@ -964,7 +1052,16 @@ class ReactVlcPlayerView extends TextureView implements
                 // ─────────────────────────────────────────────────────────────
                 case MediaPlayer.Event.Buffering: {
                     final float bufferRate = event.getBuffering();
-                    VlcLog.trace("VLC_EVENT", "Buffering rate=" + bufferRate + "%");
+                    // Transitions only. VLC emits this continuously -- hundreds of samples
+                    // a second -- which floods logcat and truncated the first device
+                    // capture. Start and finish are what anyone reads it for.
+                    final boolean bufferingNow = bufferRate < 100f;
+                    if (VlcLog.tracing() && bufferingNow != mLastLoggedBuffering) {
+                        mLastLoggedBuffering = bufferingNow;
+                        VlcLog.trace("VLC_EVENT", bufferingNow
+                                ? "Buffering started rate=" + bufferRate + "%"
+                                : "Buffering complete");
+                    }
 
                     // FIX (primary seek freeze): trigger play() when the buffer
                     // fills after a codec-flush seek, instead of using a fixed timer.
@@ -975,11 +1072,18 @@ class ReactVlcPlayerView extends TextureView implements
 
                         // Post to main thread so VLC's state fully settles before play()
                         mSeekHandler.post(() -> {
-                            if (mMediaPlayer != null && !isPaused && mSeekVersion == capturedVersion) {
+                            // Re-reads the field instead of using the captured local. Not a
+                            // threading matter: this body is posted, so it runs after the
+                            // event has returned, and releasePlayer can have run in between.
+                            // The version guard below would usually catch that, but relying
+                            // on it alone would leave a released-player crash one refactor
+                            // away.
+                            final MediaPlayer current = mMediaPlayer;
+                            if (current != null && !isPaused && mSeekVersion == capturedVersion) {
                                 VlcLog.trace("SEEK", "buffer=100% -> resuming play");
                                 mLastSeekPlayTimestampMs = System.currentTimeMillis();
                                 requestAudioFocusInternal();
-                                mMediaPlayer.play();
+                                current.play();
                                 // pendingSeekPlay sentinel stays non-null until
                                 // the Playing event clears it (above).
                             }
@@ -1018,15 +1122,17 @@ class ReactVlcPlayerView extends TextureView implements
 
                 // ─────────────────────────────────────────────────────────────
                 case MediaPlayer.Event.EndReached: {
-                    VlcLog.trace("VLC_EVENT", "EndReached | pos=" + mMediaPlayer.getPosition());
+                    VlcLog.event("STATE", "reached end");
+                    VlcLog.trace("VLC_EVENT", "EndReached | pos=" + player.getPosition());
                     mNativeStopped = true;
+                    mEnded = true;
 
                     // Emit final 100% progress so UI snaps to end
                     WritableMap progressMap = Arguments.createMap();
                     progressMap.putBoolean("isPlaying", false);
                     progressMap.putDouble("position", 1.0);
-                    progressMap.putDouble("currentTime", mMediaPlayer.getLength());
-                    progressMap.putDouble("duration", mMediaPlayer.getLength());
+                    progressMap.putDouble("currentTime", player.getLength());
+                    progressMap.putDouble("duration", player.getLength());
                     eventEmitter.sendEvent(progressMap, VideoEventEmitter.EVENT_PROGRESS);
 
                     WritableMap map = createEventMap();
@@ -1055,8 +1161,10 @@ class ReactVlcPlayerView extends TextureView implements
 
                 // ─────────────────────────────────────────────────────────────
                 case MediaPlayer.Event.EncounteredError: {
+                    VlcLog.event("STATE", "error");
                     VlcLog.error("VLC_EVENT", "EncounteredError");
                     mNativeStopped = true;
+                    mEnded = false;
                     WritableMap map = createEventMap();
                     if (map == null)
                         return;
@@ -1067,8 +1175,64 @@ class ReactVlcPlayerView extends TextureView implements
                 }
 
                 // ─────────────────────────────────────────────────────────────
+                // Kept as trace only. These used to drive the position restore; resume
+                // is now applied as VLC's :start-time when the media is opened, so
+                // nothing waits on them. They remain useful when diagnosing a source
+                // that reports itself unseekable or never publishes a length.
+                case MediaPlayer.Event.SeekableChanged: {
+                    VlcLog.trace("VLC_EVENT", "SeekableChanged seekable=" + event.getSeekable());
+                    break;
+                }
+
+                case MediaPlayer.Event.LengthChanged: {
+                    VlcLog.trace("VLC_EVENT", "LengthChanged length=" + event.getLengthChanged());
+                    break;
+                }
+
+                // ─────────────────────────────────────────────────────────────
+                // An audio elementary stream appearing or being selected is the real
+                // signal that the audio pipeline can accept a track choice and a delay.
+                // This is what replaced the fixed 150 ms retries: changing a track
+                // mid-playback produces no new Playing event, so before this the retry
+                // was the only recovery path.
+                case MediaPlayer.Event.ESAdded:
+                case MediaPlayer.Event.ESSelected: {
+                    if (event.getEsChangedType() == IMedia.Track.Type.Audio) {
+                        VlcLog.trace("VLC_EVENT", (event.type == MediaPlayer.Event.ESAdded
+                                ? "ESAdded" : "ESSelected")
+                                + " audio id=" + event.getEsChangedID());
+
+                        if (event.type == MediaPlayer.Event.ESSelected) {
+                            // Observe the selection rather than trusting the cache. VLC
+                            // also changes tracks on its own, and a stale cache would make
+                            // the reconciliation below short-circuit against a track that
+                            // is no longer selected. Any real change also means the audio
+                            // delay was dropped, so that cache is invalidated with it.
+                            try {
+                                final int actualTrack = player.getAudioTrack();
+                                if (actualTrack != currentlyAppliedAudioTrack) {
+                                    VlcLog.trace("AUDIO_TRACK", "observed track=" + actualTrack
+                                            + " (cache said " + currentlyAppliedAudioTrack + ")");
+                                    currentlyAppliedAudioTrack = actualTrack;
+                                    currentlyAppliedAudioDelayUs = Long.MIN_VALUE;
+                                }
+                            } catch (IllegalStateException e) {
+                                VlcLog.warn("AUDIO_TRACK", "player released while observing selection");
+                            }
+                        }
+
+                        applyRequestedAudioTrack("es");
+                        reapplyAudioDelay("es");
+                    }
+                    break;
+                }
+
+                // ─────────────────────────────────────────────────────────────
                 case MediaPlayer.Event.TimeChanged:
-                    // High-frequency — progress handled by polling loop. No-op.
+                    // Progress is polled, but this is the cheapest reliable place to see
+                    // whether a pending :start-time or a committed seek actually landed.
+                    resolvePendingStartTime(player);
+                    logSeekVerification();
                     break;
 
                 default:
@@ -1121,23 +1285,143 @@ class ReactVlcPlayerView extends TextureView implements
     // Seek verification (diagnostic, no correction — auto-correction loops)
     // =========================================================================
 
+    /**
+     * Reports whether the last committed seek landed where it was asked to.
+     *
+     * <p>Called from TimeChanged rather than Playing, because Playing can arrive before the
+     * seek has been honoured and verifying there compared the live position against the
+     * previous seek's target.
+     *
+     * <p>Only verifies a seek that was not superseded. A position cannot be attributed to a
+     * seek once a later one has been dispatched, and pretending otherwise is how this check
+     * came to report transposed target/actual pairs as minutes of drift while every seek
+     * was in fact landing correctly. A superseded seek is dropped silently: the newer one
+     * is the only question worth answering.
+     */
     private void logSeekVerification() {
-        if (mLastSeekTargetMs < 0 || mMediaPlayer == null) {
+        final long targetMs = mLastSeekTargetMs;
+        if (targetMs < 0 || mMediaPlayer == null) {
             return;
         }
-        final long targetMs = mLastSeekTargetMs;
-        // Answer once per seek. Leaving the target set meant every later Playing event —
-        // resuming from a pause, returning from PiP — compared the live position against
-        // a seek from minutes ago and reported drift that was simply playback progressing.
-        mLastSeekTargetMs = -1L;
 
-        final long actualMs = mMediaPlayer.getTime();
+        if (mSeekVerifyVersion != mSeekVersion) {
+            // Superseded before it could be judged.
+            mLastSeekTargetMs = -1L;
+            mSeekVerifyVersion = -1L;
+            return;
+        }
+
+        final long actualMs;
+        try {
+            actualMs = mMediaPlayer.getTime();
+        } catch (IllegalStateException e) {
+            mLastSeekTargetMs = -1L;
+            mSeekVerifyVersion = -1L;
+            return;
+        }
+        if (actualMs < 0) {
+            return;
+        }
+
+        mLastSeekTargetMs = -1L;
+        mSeekVerifyVersion = -1L;
         final long delta = Math.abs(actualMs - targetMs);
         final String detail = "target=" + targetMs + "ms actual=" + actualMs + "ms delta=" + delta + "ms";
         if (delta > 500) {
             VlcLog.warn("SEEK_VERIFY", "drift: " + detail);
         } else {
             VlcLog.trace("SEEK_VERIFY", detail);
+        }
+    }
+
+    /**
+     * Resolves a pending {@code :start-time} against what VLC is actually playing.
+     *
+     * <p>Grounded in how VLC 3.x implements the option: {@code StartTitle()} reads it and
+     * pushes INPUT_CONTROL_SET_TIME, so the offset arrives *after* the input has started.
+     * A position of zero immediately after Playing therefore proves nothing, which is why
+     * this deliberately does not report a failure there — an earlier version warned on
+     * exactly that reading and the warning fired on every successful resume.
+     *
+     * <p>Three outcomes:
+     * <ul>
+     *   <li>within tolerance of the target — applied, stop tracking;</li>
+     *   <li>still near the start — the control has not landed yet, keep waiting;</li>
+     *   <li>played well past the start without ever approaching the target — the control
+     *       was dropped, so issue one corrective seek. Playback is demonstrably running
+     *       at this point, which is a real readiness signal rather than the elapsed-time
+     *       guesses this code used to rely on.</li>
+     * </ul>
+     */
+    private void resolvePendingStartTime(MediaPlayer player) {
+        if (mPendingStartTimeSec <= 0d) {
+            return;
+        }
+
+        final long actualMs;
+        try {
+            actualMs = player.getTime();
+        } catch (IllegalStateException e) {
+            VlcLog.warn("START_TIME", "player released before the offset resolved");
+            return;
+        }
+        if (actualMs < 0L) {
+            return;
+        }
+
+        final long targetMs = Math.round(mPendingStartTimeSec * 1000d);
+        final long deltaMs = Math.abs(actualMs - targetMs);
+
+        // The discriminator is comparative, not a fixed tolerance: the offset was honoured
+        // if playback is nearer the requested time than it is to the beginning. Nothing
+        // else could have put the playhead there. This is scale-free, so it does not care
+        // how coarse the keyframe granularity turns out to be — an earlier version used a
+        // 2 s window and reported every successful resume as ignored, because VLC had
+        // landed several seconds before the target.
+        final boolean landedNearTarget = deltaMs < actualMs;
+
+        if (landedNearTarget) {
+            if (deltaMs <= START_TIME_PRECISION_MS || mStartTimeCorrectionIssued) {
+                VlcLog.event("START_TIME", "applied target=" + targetMs + "ms actual="
+                        + actualMs + "ms delta=" + deltaMs + "ms corrected="
+                        + mStartTimeCorrectionIssued);
+                setPendingStartTime(0d, "applied");
+                return;
+            }
+
+            // Honoured but imprecise. Playback is demonstrably running, so a seek is safe
+            // here in a way it never was during startup.
+            VlcLog.event("START_TIME", "landed " + deltaMs + "ms early (target=" + targetMs
+                    + "ms actual=" + actualMs + "ms); correcting once");
+            mStartTimeCorrectionIssued = true;
+            try {
+                player.setTime(targetMs);
+            } catch (IllegalStateException e) {
+                VlcLog.warn("START_TIME", "player released during precision correction");
+            }
+            return;
+        }
+
+        // Nearer the beginning than the target. Either the queued control has not landed
+        // yet, or it never will.
+        if (actualMs < START_TIME_IGNORED_EVIDENCE_MS) {
+            return;
+        }
+
+        if (mStartTimeCorrectionIssued) {
+            VlcLog.warn("START_TIME", "abandoned after corrective seek; target=" + targetMs
+                    + "ms actual=" + actualMs + "ms");
+            setPendingStartTime(0d, "abandoned");
+            return;
+        }
+
+        VlcLog.warn("START_TIME", ":start-time was dropped by VLC (target=" + targetMs
+                + "ms actual=" + actualMs + "ms); correcting with one seek");
+        mStartTimeCorrectionIssued = true;
+        try {
+            player.setTime(targetMs);
+        } catch (IllegalStateException e) {
+            VlcLog.warn("START_TIME", "player released during corrective seek");
         }
     }
 
@@ -1203,6 +1487,14 @@ class ReactVlcPlayerView extends TextureView implements
         return out;
     }
 
+    private static double readStartTime(ReadableMap source) {
+        if (source == null || !source.hasKey("startTime") || source.isNull("startTime")) {
+            return 0d;
+        }
+        final double value = source.getDouble("startTime");
+        return value > 0d && !Double.isInfinite(value) && !Double.isNaN(value) ? value : 0d;
+    }
+
     private void createPlayer(boolean autoplayResume, boolean isResume) {
         if (mCreatingPlayer) {
             VlcLog.warn("CREATE_PLAYER", "already in progress, ignoring concurrent call");
@@ -1220,14 +1512,7 @@ class ReactVlcPlayerView extends TextureView implements
             // releasePlayer() will see mNativeStopped=true and skip saving the EOF
             // position. This is the correct behaviour for replay-from-start.
 
-            // If setPosition() Case 1 triggered this to restart a stopped VLC,
-            // mForceSeekOnCreate holds the desired target fraction.
-            if (mForceSeekOnCreate >= 0f) {
-                mSavedPosition = mForceSeekOnCreate;
-                mForceSeekOnCreate = -1f;
-                VlcLog.trace("CREATE_PLAYER", "override savedPos=" + mSavedPosition
-                        + " from stopped revive");
-            }
+
 
             if (this.getSurfaceTexture() == null) {
                 VlcLog.warn("CREATE_PLAYER", "no surface texture yet, aborting");
@@ -1258,7 +1543,7 @@ class ReactVlcPlayerView extends TextureView implements
             VlcLog.trace("CREATE_PLAYER", "uri=" + uriString
                     + " autoplay=" + autoplay + " isNetwork=" + isNetwork
                     + " initType=" + initType + " hw=" + hwDecoderEnabled + "/" + hwDecoderForced
-                    + " savedPos=" + mSavedPosition);
+                    + " startTime=" + mPendingStartTimeSec + "s");
 
             // Enhancement is always composed natively. Explicit overrides are only
             // used for a specific in-flight enhancement recreate target.
@@ -1270,12 +1555,20 @@ class ReactVlcPlayerView extends TextureView implements
             }
             mEnhancementCompatiblePipeline = shouldUseEnhancementCompatiblePipeline(mRequestedEnhancement);
 
+            // The source setter, a release, an enhancement recreate, or a stopped seek
+            // owns this single pending intent. Creating a Java player does not prove that
+            // VLC opened the media at the offset, so it remains pending until an event
+            // confirms the actual time.
+            final double startTimeSec = mPendingStartTimeSec;
+            if (startTimeSec > 0d) {
+                VlcLog.trace("CREATE_PLAYER", "opening at startTime=" + startTimeSec + "s");
+            }
             VlcPlaybackEngine.Source engineSource = new VlcPlaybackEngine.Source(
                     uriString, isNetwork, initType, cOptions,
                     mediaOptions != null ? toStringList(mediaOptions) : null,
-                    hwDecoderEnabled >= 1, hwDecoderForced >= 1, mAudioDelay);
+                    hwDecoderEnabled >= 1, hwDecoderForced >= 1, mAudioDelay, startTimeSec);
 
-            mMediaPlayer = mEngine.open(getContext(), engineSource, mPlayerListener, mMediaListener,
+            final MediaPlayer openedPlayer = mEngine.open(getContext(), engineSource, mPlayerListener, mMediaListener,
                     new Dialog.Callbacks() {
                 @Override
                 public void onDisplay(Dialog.QuestionDialog dialog) {
@@ -1303,10 +1596,17 @@ class ReactVlcPlayerView extends TextureView implements
                 }
             });
 
-            if (mMediaPlayer == null) {
-                VlcLog.error("CREATE_PLAYER", "engine could not open " + uriString);
+            if (openedPlayer == null) {
+                // The pending offset is deliberately left intact so a retry still resumes.
+                VlcLog.event("PLAYER", "open FAILED (offset retained)");
+                VlcLog.error("CREATE_PLAYER", "engine could not open " + uriString
+                        + " (startTime=" + startTimeSec + "s retained for retry)");
                 return;
             }
+            mMediaPlayer = openedPlayer;
+            VlcLog.event("PLAYER", "created autoplay=" + autoplay + " isResume=" + isResume
+                    + " startTime=" + startTimeSec + "s");
+
             setMutedModifier(mMuted);
 
             // The session describes a live player, so publish only once one exists.
@@ -1322,10 +1622,10 @@ class ReactVlcPlayerView extends TextureView implements
             }
 
             // Reset per-media state.
-            // NOTE: mNativeStopped is reset HERE (after releasePlayer) so that
-            // releasePlayer's guard (!mNativeStopped) correctly blocked saving the
-            // EOF position. Do NOT reset it earlier in setPausedModifier.
+            // Reset terminal state only after releasePlayer has had the opportunity to
+            // distinguish EOF (discard) from an ordinary stop/error (retain).
             mNativeStopped = false;
+            mEnded = false;
 
             mVideoInfoHash = null;
             isResizeModeApplied = false;
@@ -1343,9 +1643,7 @@ class ReactVlcPlayerView extends TextureView implements
 
             applyEqualizer();
 
-            if (mAudioDelay != 0) {
-                mMediaPlayer.setAudioDelay(mAudioDelay * 1000);
-            }
+            reapplyAudioDelay("create-player");
 
             if (!vlcOut.areViewsAttached()) {
                 vlcOut.addCallback(callback);
@@ -1355,36 +1653,10 @@ class ReactVlcPlayerView extends TextureView implements
 
             boolean shouldPlay = isResume ? autoplayResume : autoplay;
 
-            if (mSavedPosition > 0f) {
-                final float positionToRestore = mSavedPosition;
-                mSavedPosition = 0f;
-                VlcLog.trace("CREATE_PLAYER", "restoring saved position=" + positionToRestore);
-
-                if (shouldPlay) {
-                    isPaused = false;
-                    if (requestAudioFocusInternal())
-                        mMediaPlayer.play();
-                }
-
-                new Handler(Looper.getMainLooper()).postDelayed(() -> {
-                    if (mMediaPlayer != null) {
-                        long lengthMs = mMediaPlayer.getLength();
-                        long targetMs = lengthMs > 0 ? (long) (positionToRestore * lengthMs) : -1L;
-                        VlcLog.trace("SEEK", "restoring position=" + positionToRestore
-                                + " targetMs=" + targetMs + " lengthMs=" + lengthMs);
-                        if (targetMs >= 0) {
-                            mMediaPlayer.setTime(targetMs);
-                        } else {
-                            mMediaPlayer.setPosition(positionToRestore);
-                        }
-                    }
-                }, 200);
-            } else {
-                if (shouldPlay) {
-                    isPaused = false;
-                    if (requestAudioFocusInternal())
-                        mMediaPlayer.play();
-                }
+            if (shouldPlay) {
+                isPaused = false;
+                if (requestAudioFocusInternal())
+                    mMediaPlayer.play();
             }
 
             eventEmitter.loadStart();
@@ -1398,6 +1670,9 @@ class ReactVlcPlayerView extends TextureView implements
     }
 
     private void releasePlayer() {
+        if (mMediaPlayer != null) {
+            VlcLog.event("PLAYER", "releasing");
+        }
         clearPendingResizeRequest();
         cancelPendingSeek();
 
@@ -1412,24 +1687,33 @@ class ReactVlcPlayerView extends TextureView implements
 
         if (mMediaPlayer != null) {
             try {
-                float currentPos = mMediaPlayer.getPosition();
-                // Do NOT save position if:
-                // 1. At/near start (< 1%)
-                // 2. At/near end (>= 95%) — covers EOF positions like 0.94, 0.96, 0.99
-                // 3. Native player already stopped due to EndReached (mNativeStopped)
-                // 4. mSavedPosition was explicitly zeroed by caller (already 0f from
-                // setPausedModifier)
-                if (currentPos > 0.01f && currentPos < 0.95f && !mNativeStopped) {
-                    mSavedPosition = currentPos;
-                    VlcLog.trace("RELEASE", "saved position=" + mSavedPosition);
+                // Saved in seconds while the length is still available. The fraction this
+                // used to store had to be multiplied by a length the next player did not
+                // have yet.
+                final float currentPos = mMediaPlayer.getPosition();
+                final long currentTimeMs = mMediaPlayer.getTime();
+                final long durationMs = mMediaPlayer.getLength();
+                // An unconfirmed start is newer than VLC's reported time and must survive
+                // errors/recreates. Once confirmed, save a real mid-media position. Only
+                // EOF intentionally discards the outgoing position.
+                if (mPendingStartTimeSec > 0d) {
+                    VlcLog.trace("RELEASE", "retaining unconfirmed startTime="
+                            + mPendingStartTimeSec + "s");
+                } else if (!mEnded
+                        && currentTimeMs > RESUME_EDGE_GUARD_MS
+                        && (durationMs <= 0L
+                            || currentTimeMs < durationMs - RESUME_EDGE_GUARD_MS)) {
+                    setPendingStartTime(currentTimeMs / 1000d, "release-save");
                 } else {
-                    // Respect caller's explicit zero — don't overwrite with EOF position
                     VlcLog.trace("RELEASE", "NOT saving position=" + currentPos
-                            + " mNativeStopped=" + mNativeStopped
-                            + " (keeping mSavedPosition=" + mSavedPosition + ")");
+                            + " timeMs=" + currentTimeMs
+                            + " durationMs=" + durationMs
+                            + " ended=" + mEnded
+                            + " (keeping startTime=" + mPendingStartTimeSec + "s)");
                 }
             } catch (Exception e) {
-                mSavedPosition = 0f;
+                VlcLog.warn("RELEASE", "could not read position; retaining startTime="
+                        + mPendingStartTimeSec + "s");
             }
 
             // Detach this view's output before the engine releases the player; the
@@ -1460,10 +1744,10 @@ class ReactVlcPlayerView extends TextureView implements
         mLastAppliedAutoAspectRatio = false;
         mLastAppliedResizeMode = null;
         currentlyAppliedAudioTrack = -1;
+        currentlyAppliedAudioDelayUs = Long.MIN_VALUE;
         mBestFitUsingCover = null;
         mPlayAfterBufferComplete = false;
         mLastSeekPlayTimestampMs = -1L;
-        mLastAppliedRate = Float.NaN;
         if (mPendingAudioTrackRunnable != null) {
             mAudioTrackHandler.removeCallbacks(mPendingAudioTrackRunnable);
             mPendingAudioTrackRunnable = null;
@@ -1472,7 +1756,6 @@ class ReactVlcPlayerView extends TextureView implements
             mRateHandler.removeCallbacks(mPendingRateRunnable);
             mPendingRateRunnable = null;
         }
-        mPendingRate = Float.NaN;
         mLastPreviewSeekTargetMs = -1L;
         mLastBridgePreviewSeekValue = Float.NaN;
         // mEqualizer intentionally not nulled — it can be reused by the next player.
@@ -1528,7 +1811,7 @@ class ReactVlcPlayerView extends TextureView implements
      * Case 1 — Native player is stopped/ended (mNativeStopped=true):
      * VLC is in a terminal Stopped state; setTime() is a no-op. The only way
      * to seek is to fully restart the player via createPlayer(). We store the
-     * target in mForceSeekOnCreate so createPlayer() applies it post-release.
+     * target in mPendingStartTimeSec so createPlayer() opens the new media at that offset.
      *
      * Case 2 — Normal seek:
      * a) Pause VLC to interrupt any in-progress MediaCodec drain (codec flush).
@@ -1541,12 +1824,18 @@ class ReactVlcPlayerView extends TextureView implements
      * VLC Paused events during the entire flush/buffer cycle.
      */
     public void setPosition(final float position) {
-        if (mMediaPlayer == null) {
-            VlcLog.warn("SEEK", "setPosition(" + position + ") — player is null, ignoring");
-            return;
-        }
         if (position < 0 || position > 1) {
             VlcLog.warn("SEEK", "setPosition(" + position + ") — out of range, ignoring");
+            return;
+        }
+
+        VlcLog.event("SEEK", "requested position=" + String.format(java.util.Locale.US, "%.4f", position));
+        // Explicit user intent supersedes any watch-history or retry offset immediately.
+        setPendingStartTime(0d, "user-seek");
+        mEnded = false;
+        if (mMediaPlayer == null) {
+            VlcLog.warn("SEEK", "setPosition(" + position
+                    + ") — player is null; pending source resume cleared");
             return;
         }
 
@@ -1593,8 +1882,9 @@ class ReactVlcPlayerView extends TextureView implements
                 VlcLog.trace("SEEK", "native stopped — restarting via createPlayer."
                         + " position=" + position + " isPaused=" + isPaused);
                 isPaused = false;
-                mForceSeekOnCreate = position;
-                mSavedPosition = 0f;
+                // targetMs is already resolved here, so hand createPlayer seconds rather
+                // than a fraction it would have to re-multiply by a length it has not got.
+                setPendingStartTime(targetMs > 0 ? targetMs / 1000d : 0d, "stopped-revive");
                 createPlayer(true, true);
                 mLastBridgeSeekValue = position;
                 mLastSeekTargetMs = targetMs;
@@ -1628,6 +1918,7 @@ class ReactVlcPlayerView extends TextureView implements
                 mMediaPlayer.pause();
             }
 
+            mSeekVerifyVersion = thisSeekVersion;
             if (targetMs >= 0) {
                 VlcLog.trace("SEEK", "setTime(" + targetMs + "ms)");
                 mMediaPlayer.setTime(targetMs);
@@ -1687,7 +1978,9 @@ class ReactVlcPlayerView extends TextureView implements
 
         this.src = uri;
         releasePlayer();
-        mSavedPosition = 0f;
+        // A different string source starts at its own beginning.
+        setPendingStartTime(0d, "new-string-source");
+        mEnded = false;
         createPlayer(autoplay, false);
     }
 
@@ -1708,35 +2001,34 @@ class ReactVlcPlayerView extends TextureView implements
         mEnhancementCompatiblePipeline = false;
 
         VlcLog.trace("SET_SRC", "new URI: " + newUri);
+        final boolean srcIsNetwork = newUri != null
+                && (newUri.startsWith("http") || newUri.startsWith("rtsp"));
+        VlcLog.event("SOURCE", "opened kind="
+                + (srcIsNetwork ? "network" : newUri != null && newUri.startsWith("content://")
+                        ? "content" : "file")
+                + " resumeFrom=" + readStartTime(src) + "s");
         this.src = newUri;
         this.srcMap = src;
         releasePlayer();
-        mSavedPosition = 0f;
+        // Copy the source offset into native-owned pending intent once. Recreates never
+        // re-read srcMap, so confirmed history cannot reappear later in the session.
+        setPendingStartTime(readStartTime(src), "source");
+        mEnded = false;
         createPlayer(true, false);
     }
 
     public void setRateModifier(float rateModifier) {
+        if (Math.abs(rateModifier - mRequestedRate) > 0.001f) {
+            VlcLog.event("RATE", "requested " + rateModifier + "x (was " + mRequestedRate + "x)");
+        }
+        mRequestedRate = rateModifier;
         if (mMediaPlayer != null) {
-            if (!Float.isNaN(mLastAppliedRate) && Math.abs(mLastAppliedRate - rateModifier) < 0.01f) {
-                return;
-            }
-            mPendingRate = rateModifier;
             if (mPendingRateRunnable != null) {
                 mRateHandler.removeCallbacks(mPendingRateRunnable);
             }
             mPendingRateRunnable = () -> {
-                if (mMediaPlayer == null || Float.isNaN(mPendingRate)) {
-                    return;
-                }
-                float rateToApply = mPendingRate;
-                if (!Float.isNaN(mLastAppliedRate) && Math.abs(mLastAppliedRate - rateToApply) < 0.01f) {
-                    mPendingRateRunnable = null;
-                    return;
-                }
-                mMediaPlayer.setRate(rateToApply);
-                mLastAppliedRate = rateToApply;
-                notifyMediaSession();
                 mPendingRateRunnable = null;
+                applyRequestedRate("prop");
             };
             mRateHandler.post(mPendingRateRunnable);
         }
@@ -1800,24 +2092,23 @@ class ReactVlcPlayerView extends TextureView implements
     }
 
     public void setAudioDelay(long delayMs) {
+        if (delayMs != mAudioDelay) {
+            VlcLog.event("AUDIO_DELAY", "changed to " + delayMs + "ms (was " + mAudioDelay + "ms)");
+        }
         mAudioDelay = delayMs;
         VlcLog.trace("AUDIO_DELAY", "set=" + delayMs + "ms");
-        if (mMediaPlayer != null) {
-            final long delayUs = mAudioDelay * 1000;
-            boolean ok = mMediaPlayer.setAudioDelay(delayUs);
-            VlcLog.trace("AUDIO_DELAY", "applied " + delayMs + "ms (" + delayUs + "μs) ok=" + ok);
-
-            if (mMediaPlayer.isPlaying()) {
-                new Handler(Looper.getMainLooper()).postDelayed(() -> {
-                    if (mMediaPlayer != null) {
-                        boolean retryOk = mMediaPlayer.setAudioDelay(delayUs);
-                        VlcLog.trace("AUDIO_DELAY", "retry ok=" + retryOk);
-                    }
-                }, 150);
-            }
-        } else {
-            VlcLog.warn("AUDIO_DELAY", "player null — will apply on createPlayer");
+        if (mMediaPlayer == null) {
+            VlcLog.trace("AUDIO_DELAY", "no player yet — applied on createPlayer");
+            return;
         }
+        // One application. The former second call 150 ms later re-sent the same value
+        // unconditionally, ignored both its own result and the first one, and stacked an
+        // uncancellable Handler per change. Anything that can actually invalidate the
+        // delay -- a track change or a player recreate -- now reasserts it on the real
+        // event instead of being guessed at.
+        // A newly requested value must always reach VLC, so drop the applied marker.
+        currentlyAppliedAudioDelayUs = Long.MIN_VALUE;
+        reapplyAudioDelay("prop");
     }
 
     public void setVolumeModifier(int volumeModifier) {
@@ -1829,6 +2120,9 @@ class ReactVlcPlayerView extends TextureView implements
     }
 
     public void setMutedModifier(boolean muted) {
+        if (muted != mMuted) {
+            VlcLog.event("MUTE", muted ? "muted" : "unmuted");
+        }
         mMuted = muted;
         VlcLog.trace("MUTE", "muted=" + muted);
         if (mMediaPlayer != null) {
@@ -1840,11 +2134,17 @@ class ReactVlcPlayerView extends TextureView implements
      * Toggle play/pause state.
      *
      * paused=true → mMediaPlayer.pause()
-     * paused=false + mNativeStopped → createPlayer to restart from beginning
+     * paused=false + ended → createPlayer from the beginning
+     * paused=false + another stopped state → createPlayer from the pending/current offset
      * paused=false + player exists → mMediaPlayer.play()
      * paused=false + no player → createPlayer
      */
     public void setPausedModifier(boolean paused) {
+        if (paused != isPaused) {
+            VlcLog.event("INTENT", (paused ? "pause" : "play")
+                    + " (was " + (isPaused ? "paused" : "playing")
+                    + ", hasPlayer=" + (mMediaPlayer != null) + ")");
+        }
         VlcLog.trace("PAUSE_MOD", "paused=" + paused
                 + " | current isPaused=" + isPaused
                 + " nativePlaying=" + (mMediaPlayer != null && mMediaPlayer.isPlaying())
@@ -1867,17 +2167,15 @@ class ReactVlcPlayerView extends TextureView implements
             mMediaPlayer.pause();
             VlcLog.trace("PAUSE_MOD", "pause() called");
         } else {
-            if (mNativeStopped) {
-                VlcLog.trace("PAUSE_MOD", "mNativeStopped=true → createPlayer(restart from 0)");
+            if (mNativeStopped || mEnded) {
+                VlcLog.trace("PAUSE_MOD", "terminal player → createPlayer ended=" + mEnded
+                        + " pendingStart=" + mPendingStartTimeSec + "s");
                 isPaused = false;
-                // Clear stale force-seek target so createPlayer doesn't restore it.
-                mForceSeekOnCreate = -1f;
-                // ── KEY: do NOT clear mNativeStopped here ────────────────────────────
-                // releasePlayer() (called inside createPlayer) uses !mNativeStopped to
-                // decide whether to save position. If we clear it now, releasePlayer
-                // sees mNativeStopped=false and saves the EOF position (~0.93-0.99),
-                // then createPlayer restores it, immediately triggering EndReached again.
-                // createPlayer() resets mNativeStopped=false itself after releasePlayer.
+                // EOF alone means replay. Errors and explicit stops keep their retry
+                // position; releasePlayer also knows not to save an EOF position.
+                if (mEnded) {
+                    setPendingStartTime(0d, "replay-from-end");
+                }
                 float savedBridgeSeek = mLastBridgeSeekValue;
                 long savedSeekTargetMs = mLastSeekTargetMs;
                 createPlayer(true, false);
@@ -1896,6 +2194,7 @@ class ReactVlcPlayerView extends TextureView implements
     }
 
     public void doResume(boolean autoplay) {
+        VlcLog.event("LIFECYCLE", "doResume autoplay=" + autoplay);
         VlcLog.trace("RESUME", "doResume autoplay=" + autoplay);
         createPlayer(autoplay, true);
     }
@@ -1924,12 +2223,19 @@ class ReactVlcPlayerView extends TextureView implements
     }
 
     public void setAudioTrack(int track) {
+        if (track != _audioTrack) {
+            VlcLog.event("AUDIO_TRACK", "requested track=" + track + " (was " + _audioTrack + ")");
+        }
         VlcLog.trace("AUDIO_TRACK", "set=" + track);
         _audioTrack = track;
-        scheduleAudioTrackApply(true);
+        scheduleAudioTrackApply();
     }
 
     public void setTextTrack(int track) {
+        if (track != _textTrack) {
+            VlcLog.event("SUBTITLE", "track=" + (track == -1 ? "off" : String.valueOf(track))
+                    + " (was " + (_textTrack == -1 ? "off" : String.valueOf(_textTrack)) + ")");
+        }
         VlcLog.trace("TEXT_TRACK", "set=" + track);
         _textTrack = track;
         if (mMediaPlayer != null)
@@ -1939,9 +2245,11 @@ class ReactVlcPlayerView extends TextureView implements
     public void stopPlayer() {
         if (mMediaPlayer == null)
             return;
+        VlcLog.event("INTENT", "stop");
         VlcLog.trace("STOP", "stopPlayer()");
         abandonAudioFocusInternal();
         mNativeStopped = true;
+        mEnded = false;
         mMediaPlayer.stop();
     }
 
@@ -1992,6 +2300,9 @@ class ReactVlcPlayerView extends TextureView implements
      * the video dimensions and view bounds actually live.
      */
     public void setPipEnabled(boolean pipEnabled) {
+        if (pipEnabled != this.mPipEnabled) {
+            VlcLog.event("PIP", "eligibility " + (pipEnabled ? "enabled" : "disabled"));
+        }
         this.mPipEnabled = pipEnabled;
         mPipController.setEnabled(pipEnabled);
         VlcLog.trace("PIP", "enabled=" + pipEnabled);
@@ -2008,6 +2319,7 @@ class ReactVlcPlayerView extends TextureView implements
 
     /** Called by {@link VlcPipController} once the Activity has changed PiP state. */
     void onPipModeChangedInternal(boolean inPipMode) {
+        VlcLog.event("PIP", inPipMode ? "entered PiP window" : "left PiP window");
         if (!inPipMode && isHostStopped && !playInBackground) {
             VlcLog.trace("PIP", "PiP closed while host paused → pausing");
             pauseForHostBackground("pipExit");
@@ -2061,6 +2373,9 @@ class ReactVlcPlayerView extends TextureView implements
             mBestFitUsingCover = null;
         }
 
+        if (!Objects.equals(prev, this.resizeMode)) {
+            VlcLog.event("RESIZE", "mode=" + this.resizeMode + " (was " + prev + ")");
+        }
         VlcLog.trace("RESIZE", "mode=" + this.resizeMode);
         requestResizeMode();
     }
@@ -2425,53 +2740,39 @@ class ReactVlcPlayerView extends TextureView implements
         return options;
     }
 
-    /**
-     * Capture a snapshot of all current playback state.
-     * Returns null if no valid player/media is loaded.
-     */
-    private PlaybackSnapshot capturePlaybackSnapshot() {
+    /** Capture the only recreate state not already owned by a live field. */
+    private long capturePlaybackTimeMs() {
         if (mMediaPlayer == null) {
-            VlcLog.warn("ENHANCE", "capturePlaybackSnapshot: no player loaded");
-            return null;
+            VlcLog.warn("ENHANCE", "capturePlaybackTimeMs: no player loaded");
+            return -1L;
         }
 
-        long timeMs;
-        boolean nativePlaying;
-        float rate;
         try {
-            timeMs = mMediaPlayer.getTime();
-            nativePlaying = mMediaPlayer.isPlaying();
-            rate = mMediaPlayer.getRate();
+            return mMediaPlayer.getTime();
         } catch (Exception e) {
-            VlcLog.warn("ENHANCE", "capturePlaybackSnapshot: error reading state: " + e.getMessage());
-            return null;
+            VlcLog.warn("ENHANCE", "capturePlaybackTimeMs: " + e.getMessage());
+            return -1L;
         }
-
-        PlaybackSnapshot snapshot = new PlaybackSnapshot(
-                timeMs,
-                isPaused,          // user intent
-                nativePlaying,
-                rate,
-                _audioTrack,
-                _textTrack,
-                mAudioDelay,
-                _subtitleUri,
-                _subtitleUri != null && !_subtitleUri.isEmpty(),
-                mMuted
-        );
-
-        return snapshot;
     }
 
     /**
      * Entry point from React prop. Coalesces rapid toggles via debounce.
      */
     public void setVideoEnhancement(boolean enabled) {
+        if (enabled != mRequestedEnhancement) {
+            VlcLog.event("ENHANCE", "requested " + (enabled ? "on" : "off"));
+        }
         mRequestedEnhancement = enabled;
 
         // Prefer the live LibVLC adjust path to avoid player recreation and the
         // black-frame gap. Recreate remains as a fallback if the bridge is unavailable.
         if (!mEnhancementRecreateInFlight && applyVideoEnhancementLive(enabled)) {
+            // Only when it changed something: React re-sends this prop, and the live adjust
+            // is idempotent, so an unguarded line logged the same application twice.
+            if (enabled != mAppliedEnhancement) {
+                VlcLog.event("ENHANCE", "applied live (no recreate), enhancement="
+                        + (enabled ? "on" : "off"));
+            }
             clearPendingEnhancementRunnable();
             invalidatePendingEnhancementCallbacks();
             mAppliedEnhancement = enabled;
@@ -2523,45 +2824,35 @@ class ReactVlcPlayerView extends TextureView implements
             return;
         }
 
-        // Capture current state
-        PlaybackSnapshot snapshot = capturePlaybackSnapshot();
-
-        if (snapshot == null) {
+        final long timeMs = capturePlaybackTimeMs();
+        if (timeMs < 0L) {
             // No player loaded — enhancement will be applied on next createPlayer
             return;
         }
 
         // Mark in-flight
         mEnhancementRecreateInFlight = true;
-        mEnhancementRestoreCompleted = false;
-        mPendingEnhancementSnapshot = snapshot;
         mPendingEnhancementTarget = mRequestedEnhancement;
 
-        applyEnhancementWithRecreate(mRequestedEnhancement, generation, snapshot);
+        applyEnhancementWithRecreate(mRequestedEnhancement, generation, timeMs);
     }
 
     /**
      * Perform the enhancement recreate with a specific target state and generation.
      */
     private void applyEnhancementWithRecreate(boolean targetEnhancement, long generation,
-                                               PlaybackSnapshot snapshot) {
+                                               long timeMs) {
         // Build new init options with explicit target (not mRequestedEnhancement)
         ArrayList<String> effectiveOptions = buildEffectiveInitOptions(targetEnhancement);
 
-        // Save position for createPlayer's built-in restore
-        if (snapshot.timeMs > 0 && mMediaPlayer != null) {
-            try {
-                long lengthMs = mMediaPlayer.getLength();
-                if (lengthMs > 0) {
-                    mSavedPosition = (float) snapshot.timeMs / lengthMs;
-                }
-            } catch (Exception e) {
-                VlcLog.warn("ENHANCE", "error calculating position: " + e.getMessage());
-            }
+        // The captured value already holds the position in milliseconds, so the old
+        // divide-by-length-then-multiply-by-length round trip is gone, along with its
+        // dependence on the outgoing player still reporting a length.
+        if (timeMs > 0) {
+            setPendingStartTime(timeMs / 1000d, "enhance-recreate");
         }
 
-        // Set paused intent before recreate so createPlayer respects it
-        isPaused = snapshot.userPausedIntent;
+        final boolean autoplay = !isPaused;
 
         // Release and recreate with new options
         // We override the init options by temporarily adjusting how createPlayer reads them
@@ -2573,84 +2864,59 @@ class ReactVlcPlayerView extends TextureView implements
         // with our effective options. We achieve this by storing them and using them
         // in createPlayer when it checks initOptions.
         mEffectiveInitOptionsOverride = effectiveOptions;
-        createPlayer(!snapshot.userPausedIntent, true);
+        createPlayer(autoplay, true);
         mEffectiveInitOptionsOverride = null;
 
-        // Safety timer fallback
+        // Safety net behind the real path, which is the Playing event calling
+        // maybeCompletePendingEnhancementRecreate(). Logged as a warning because if it
+        // ever fires the event path did not, and this timer is load-bearing after all --
+        // which is the measurement tracker section 8.3 asks for before removing it.
         final long restoreGeneration = generation;
-        mEnhancementHandler.postDelayed(() -> {
-            if (mEnhancementGeneration == restoreGeneration && !mEnhancementRestoreCompleted) {
-                restorePlaybackSnapshot(snapshot, restoreGeneration, targetEnhancement);
+        clearPendingEnhancementRestoreRunnable();
+        mPendingEnhancementRestoreRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (mPendingEnhancementRestoreRunnable == this) {
+                    mPendingEnhancementRestoreRunnable = null;
+                }
+                if (mEnhancementGeneration == restoreGeneration && mEnhancementRecreateInFlight) {
+                    VlcLog.warn("ENHANCE", "restore fell through to the "
+                            + ENHANCEMENT_RESTORE_TIMEOUT_MS + "ms safety timer — the Playing"
+                            + " event did not arrive, so this timer is still required");
+                    completeEnhancementRecreate(restoreGeneration, targetEnhancement);
+                }
             }
-        }, 500);
+        };
+        mEnhancementHandler.postDelayed(mPendingEnhancementRestoreRunnable,
+                ENHANCEMENT_RESTORE_TIMEOUT_MS);
     }
 
-    /**
-     * Restore playback state after enhancement recreate.
-     * Idempotent via mEnhancementRestoreCompleted — will only run once per generation.
-     * Restore order: mute → subtitle → delay → rate → tracks → seek → play/pause intent
-     */
-    private void restorePlaybackSnapshot(PlaybackSnapshot snapshot, long generation,
-                                          boolean targetEnhancement) {
+    /** Finish bookkeeping after createPlayer and the normal event-owned restoration paths. */
+    private void completeEnhancementRecreate(long generation, boolean targetEnhancement) {
         // Stale generation check
         if (generation != mEnhancementGeneration) {
             return;
         }
 
-        // Idempotent guard
-        if (mEnhancementRestoreCompleted) {
+        if (!mEnhancementRecreateInFlight) {
             return;
         }
 
         if (mMediaPlayer == null) {
-            VlcLog.warn("ENHANCE", "restorePlaybackSnapshot: no player, skipping");
+            VlcLog.warn("ENHANCE", "completeEnhancementRecreate: no player, skipping");
             return;
         }
 
-        mEnhancementRestoreCompleted = true;
-
-        // 1. Mute state
-        setMutedModifier(snapshot.muted);
-
-        // 2. External subtitle slave attachment
-        if (snapshot.externalSubAttached && snapshot.subtitleUri != null) {
-            mMediaPlayer.addSlave(Media.Slave.Type.Subtitle, snapshot.subtitleUri, true);
-        }
-
-        // 3. Audio delay
-        if (snapshot.audioDelayMs != 0) {
-            mMediaPlayer.setAudioDelay(snapshot.audioDelayMs * 1000);
-        }
-
-        // 4. Rate
-        if (snapshot.rate != 1.0f) {
-            mMediaPlayer.setRate(snapshot.rate);
-            mLastAppliedRate = snapshot.rate;
-        }
-
-        // 5. Track selections
-        if (snapshot.audioTrack != -1) {
-            mMediaPlayer.setAudioTrack(snapshot.audioTrack);
-        }
-        if (snapshot.textTrack != -1) {
-            mMediaPlayer.setSpuTrack(snapshot.textTrack);
-        } else {
-            // Explicitly disable subtitles
-            if (mMediaPlayer.getSpuTracksCount() > 0) {
-                mMediaPlayer.setSpuTrack(-1);
-            }
-        }
-
-        // 6. Position seek (handled by createPlayer's mSavedPosition mechanism)
-        // Already applied via mSavedPosition before createPlayer was called
-
-        // 7. Last: paused/playing intent
-        // Already set via isPaused before createPlayer, and createPlayer respects it
+        // createPlayer owns mute, subtitle slave and equalizer. Playing/ES events own
+        // rate, tracks and audio delay. Reapplying any of them here used to duplicate
+        // work and, for external subtitles, create a second slave track.
+        clearPendingEnhancementRestoreRunnable();
 
         // Mark enhancement as applied
+        VlcLog.event("ENHANCE", "recreate complete, enhancement="
+                + (targetEnhancement ? "on" : "off"));
         mAppliedEnhancement = targetEnhancement;
         mEnhancementRecreateInFlight = false;
-        mPendingEnhancementSnapshot = null;
 
         // Reconcile: if mRequestedEnhancement changed again during recreate
         if (mRequestedEnhancement != mAppliedEnhancement) {
@@ -2666,7 +2932,15 @@ class ReactVlcPlayerView extends TextureView implements
      */
     private void cancelPendingEnhancement() {
         clearPendingEnhancementRunnable();
+        clearPendingEnhancementRestoreRunnable();
         invalidatePendingEnhancementCallbacks();
+    }
+
+    private void clearPendingEnhancementRestoreRunnable() {
+        if (mPendingEnhancementRestoreRunnable != null) {
+            mEnhancementHandler.removeCallbacks(mPendingEnhancementRestoreRunnable);
+            mPendingEnhancementRestoreRunnable = null;
+        }
     }
 
     private void clearPendingEnhancementRunnable() {
@@ -2679,8 +2953,6 @@ class ReactVlcPlayerView extends TextureView implements
     private void invalidatePendingEnhancementCallbacks() {
         mEnhancementGeneration++;
         mEnhancementRecreateInFlight = false;
-        mEnhancementRestoreCompleted = false;
-        mPendingEnhancementSnapshot = null;
         mPendingEnhancementTarget = mRequestedEnhancement;
     }
 
@@ -2707,10 +2979,6 @@ class ReactVlcPlayerView extends TextureView implements
         clearPendingResizeRequest();
         cancelPendingSeek();
 
-        if (seekExecutor != null && !seekExecutor.isShutdown()) {
-            seekExecutor.shutdownNow();
-            seekExecutor = null;
-        }
         this.removeOnLayoutChangeListener(onLayoutChangeListener);
         if (themedReactContext != null) {
             themedReactContext.removeLifecycleEventListener(this);
@@ -2833,7 +3101,7 @@ class ReactVlcPlayerView extends TextureView implements
             return;
         }
 
-        maybeRestorePendingEnhancementSnapshot();
+        maybeCompletePendingEnhancementRecreate();
         maybeMarkEnhancementAppliedFromNormalCreate();
 
         WritableMap info = Arguments.createMap();
@@ -2947,7 +3215,7 @@ class ReactVlcPlayerView extends TextureView implements
         }
     }
 
-    private void scheduleAudioTrackApply(boolean allowRetryWhenPlaying) {
+    private void scheduleAudioTrackApply() {
         if (mPendingAudioTrackRunnable != null) {
             mAudioTrackHandler.removeCallbacks(mPendingAudioTrackRunnable);
         }
@@ -2955,7 +3223,7 @@ class ReactVlcPlayerView extends TextureView implements
         final Runnable applyRunnable = new Runnable() {
             @Override
             public void run() {
-                applyRequestedAudioTrack("prop", allowRetryWhenPlaying);
+                applyRequestedAudioTrack("prop");
                 if (mPendingAudioTrackRunnable == this) {
                     mPendingAudioTrackRunnable = null;
                 }
@@ -2966,55 +3234,109 @@ class ReactVlcPlayerView extends TextureView implements
         mAudioTrackHandler.post(applyRunnable);
     }
 
-    private boolean applyRequestedAudioTrack(String reason, boolean allowRetryWhenPlaying) {
-        if (mMediaPlayer == null || _audioTrack == -1) {
+    /**
+     * Applies the requested audio track if it is not already applied.
+     *
+     * Idempotent and safe to call from any thread that VLC delivers events on. There is
+     * no retry: a failure leaves the request pending in _audioTrack, and the next real
+     * ESAdded/ESSelected or Playing event calls this again. That is the whole point of
+     * the change -- a fixed 150 ms retry guessed when the audio pipeline would be ready,
+     * ignored its own result, and had no answer if 150 ms was not enough.
+     */
+    private boolean applyRequestedAudioTrack(String reason) {
+        final MediaPlayer player = mMediaPlayer;
+        final int requestedTrack = _audioTrack;
+
+        if (player == null || requestedTrack == -1) {
             return false;
         }
 
-        if (_audioTrack == currentlyAppliedAudioTrack) {
+        if (requestedTrack == currentlyAppliedAudioTrack) {
             return true;
         }
 
-        final int requestedTrack = _audioTrack;
-        boolean applied = mMediaPlayer.setAudioTrack(requestedTrack);
+        // Claim the track before asking VLC for it. setAudioTrack makes VLC emit
+        // ESSelected, which routes straight back here on the main thread; without the
+        // claim that event would see an unapplied track and select it again, forever.
+        currentlyAppliedAudioTrack = requestedTrack;
+        boolean applied;
+        try {
+            applied = player.setAudioTrack(requestedTrack);
+        } catch (IllegalStateException e) {
+            // The player was released underneath us; the request stays pending.
+            currentlyAppliedAudioTrack = -1;
+            VlcLog.warn("AUDIO_TRACK", "player released during apply, reason=" + reason);
+            return false;
+        }
+
         if (applied) {
-            currentlyAppliedAudioTrack = requestedTrack;
+            VlcLog.event("AUDIO_TRACK", "applied track=" + requestedTrack + " via " + reason);
             VlcLog.trace("AUDIO_TRACK", "applied track=" + requestedTrack + " reason=" + reason);
+            // VLC resets the audio delay when the track changes, so it must be
+            // reasserted against the new track rather than assumed to survive.
+            currentlyAppliedAudioDelayUs = Long.MIN_VALUE;
+            reapplyAudioDelay("audio-track");
             return true;
         }
 
-        VlcLog.warn("AUDIO_TRACK", "apply failed for track=" + requestedTrack + " reason=" + reason);
-
-        if (allowRetryWhenPlaying && mMediaPlayer.isPlaying()) {
-            final Runnable retryRunnable = new Runnable() {
-                @Override
-                public void run() {
-                    if (mMediaPlayer == null || _audioTrack != requestedTrack || currentlyAppliedAudioTrack == requestedTrack) {
-                        if (mPendingAudioTrackRunnable == this) {
-                            mPendingAudioTrackRunnable = null;
-                        }
-                        return;
-                    }
-
-                    boolean retryApplied = mMediaPlayer.setAudioTrack(requestedTrack);
-                    if (retryApplied) {
-                        currentlyAppliedAudioTrack = requestedTrack;
-                        VlcLog.trace("AUDIO_TRACK", "retry applied track=" + requestedTrack);
-                    } else {
-                        VlcLog.warn("AUDIO_TRACK", "retry failed for track=" + requestedTrack);
-                    }
-
-                    if (mPendingAudioTrackRunnable == this) {
-                        mPendingAudioTrackRunnable = null;
-                    }
-                }
-            };
-
-            mPendingAudioTrackRunnable = retryRunnable;
-            mAudioTrackHandler.postDelayed(retryRunnable, 150);
-        }
-
+        // Release the claim so the next real event retries instead of short-circuiting.
+        currentlyAppliedAudioTrack = -1;
+        VlcLog.warn("AUDIO_TRACK", "apply failed for track=" + requestedTrack
+                + " reason=" + reason + " — will retry on the next ES/Playing event");
         return false;
+    }
+
+    /**
+     * Reasserts the requested playback rate on the current player.
+     *
+     * <p>Called from Playing, when VLC has an active input. Calling this while merely
+     * constructing a player and then caching the issued command made the Playing fallback
+     * skip even though LibVLC's void setter provided no evidence that the rate stuck.
+     */
+    private void applyRequestedRate(String reason) {
+        final MediaPlayer player = mMediaPlayer;
+        if (player == null || Float.isNaN(mRequestedRate) || mRequestedRate <= 0f) {
+            return;
+        }
+        try {
+            player.setRate(mRequestedRate);
+            VlcLog.trace("RATE", "requested=" + mRequestedRate + "x actual=" + player.getRate()
+                    + " reason=" + reason);
+            notifyMediaSession();
+        } catch (IllegalStateException e) {
+            VlcLog.warn("RATE", "player released during apply, reason=" + reason);
+        }
+    }
+
+    /**
+     * Reasserts the configured audio delay. VLC drops it across a track change and a
+     * player recreate, so it is reapplied on the events where that can have happened
+     * rather than a fixed time after the request.
+     */
+    private void reapplyAudioDelay(String reason) {
+        final MediaPlayer player = mMediaPlayer;
+        if (player == null) {
+            return;
+        }
+        final long delayUs = mAudioDelay * 1000;
+        // Idempotent. A single source start delivers one ESSelected and several ESAdded
+        // within a few milliseconds, and without this guard each one re-sent the same
+        // value -- the device trace showed eight setAudioDelay calls in 60 ms.
+        if (delayUs == currentlyAppliedAudioDelayUs) {
+            return;
+        }
+        try {
+            boolean ok = player.setAudioDelay(delayUs);
+            if (ok) {
+                // Recorded only when VLC accepted it. At createPlayer time there is no
+                // media yet and this returns false, which is exactly why the ES events
+                // are the real application point.
+                currentlyAppliedAudioDelayUs = delayUs;
+            }
+            VlcLog.trace("AUDIO_DELAY", "reapplied " + mAudioDelay + "ms reason=" + reason + " ok=" + ok);
+        } catch (IllegalStateException e) {
+            VlcLog.warn("AUDIO_DELAY", "player released during reapply, reason=" + reason);
+        }
     }
     // =========================================================================
     // Media session host — see VlcMedia3Player
