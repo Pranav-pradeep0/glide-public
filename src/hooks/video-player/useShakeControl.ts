@@ -75,7 +75,7 @@ export function useShakeControl(options: UseShakeControlOptions) {
                 runOnJS(onShake)();
             }
         }
-    }, [isActive, shakeThreshold, cooldownMs, onShake, onThresholdHit, mode, sensor]);
+    });
 }
 
 export default useShakeControl;

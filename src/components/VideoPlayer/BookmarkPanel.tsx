@@ -150,9 +150,7 @@ export const BookmarkPanel: React.FC<BookmarkPanelProps> = memo(({
             if (id !== previous) {
                 runOnJS(setActiveBookmarkId)(id);
             }
-        },
-        [timeline, visible]
-    );
+        });
 
     const handleSelectAndClose = useCallback((timestamp: number) => {
         onSelectBookmark(timestamp);

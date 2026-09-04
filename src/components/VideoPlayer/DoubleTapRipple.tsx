@@ -79,7 +79,7 @@ export const DoubleTapRipple: React.FC<DoubleTapRippleProps> = React.memo(({
             ],
             opacity,
         };
-    }, [x, y]);
+    });
 
     if (!show) {return null;}
 

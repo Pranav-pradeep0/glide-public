@@ -485,7 +485,7 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
                 { translateY: allowVideoTransform ? panY.value : 0 },
             ],
         };
-    }, [allowVideoTransform]);
+    });
 
     // ========================================================================
     // RETURN

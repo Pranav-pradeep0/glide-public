@@ -51,9 +51,7 @@ const ReanimatedText: React.FC<ReanimatedTextProps> = ({ value, formatter, style
             if (nextText !== previousText) {
                 runOnJS(updateText)(nextText);
             }
-        },
-        [formatter]
-    );
+        });
 
     return (
         <Text style={[styles.reanimatedText, style]}>{text}</Text>
