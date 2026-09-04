@@ -144,7 +144,13 @@ final class VlcPlaybackEngine {
 
             mediaPlayer.setMedia(media);
             media.release();
-            VlcLog.trace("ENGINE", "opened " + describe(source)
+            // Journalled, not traced. This is the line that proves what actually reached
+            // VLC, and resume cannot be diagnosed without it: the previous count reported
+            // only the JavaScript-supplied options, omitting the engine's own
+            // :start-time, and that misleading zero was read as proof the offset was
+            // never sent. describe() carries no media identity, so it satisfies the
+            // journal's rule and can be read from a release build with nothing enabled.
+            VlcLog.event("ENGINE", "opened " + describe(source)
                     + " appliedMediaOptions=" + applied);
             return mediaPlayer;
         } catch (Exception e) {
