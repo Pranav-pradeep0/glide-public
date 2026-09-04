@@ -681,26 +681,392 @@ but the first.
 
 ### 8.3 Replace fixed player retries with real events
 
-- `[todo]` Audio track: keep requested track in a field and apply on real VLC Playing/
-  elementary-stream-added events. Delete the fixed 150 ms retry.
-- `[todo]` Audio delay: delete the second fixed 150 ms application; apply on the same
-  real ready/track event if VLC requires reapplication.
-- `[todo]` Saved-position restore: replace the unconditional 200 ms delay with a
-  seekable/length/Playing event. Keep a bounded failure path only if fixtures prove an event is missing.
-- `[todo]` Enhancement recreation: restore the snapshot on real player readiness. The
-  500 ms callback may remain only as a measured, logged safety timeout after the event path exists.
-- `[todo]` Seek buffer timeout: keep as a safety mechanism for now, but measure 200 ms
-  against local/network/slow-decoder fixtures. It must be cancellable and versioned;
-  do not remove a deadlock escape without equivalent evidence.
-- `[keep]` UI auto-hide, debounce, sleep, and animation timers where the timer itself
-  represents the intended UX. Ensure each has cleanup; do not label every timer a bug.
+**Status: `[doing]`.** Section 1's completion rule is explicit — an item is `[done]` only
+once its acceptance checks pass — and the device matrix at the end of this section has not
+been run. The `[done]` markers below therefore mean "implemented and verified as far as a
+desk allows": each one compiles, and where a device trace exists it is cited. They do not
+mean accepted. Do not close this section, or treat resume as fixed, until the matrix passes.
+
+An earlier version of this section marked these `[done]` outright, which was wrong by the
+tracker's own rule and is the sort of drift that makes a status column worthless.
+
+Implemented 2026-08-27, corrected against a device trace 2026-08-28. Verified against the
+LibVLC 3.6.5 bytecode before writing any of it: `MediaPlayer.Event` exposes `ESAdded=276`,
+`ESSelected=278`, `SeekableChanged=269` and `LengthChanged=273` with `getEsChangedType()`,
+`getSeekable()` and `getLengthChanged()`; `MediaPlayer.isSeekable()` is a real native
+method; `IMedia.Track.Type.Audio` is `0`.
+
+A correction to this section's framing: it reads as though four event paths had to be
+built. The `Playing` event already applied the audio track and reasserted the audio delay.
+The work was deleting the timers and enhancement restore paths that duplicated those
+owners, then adding the one event genuinely missing.
+
+**Confirmed on device 2026-08-28**, which is what these items could not claim before:
+`ESSelected`/`ESAdded` fire and the track applies with `reason=es`; `SeekableChanged` and
+`LengthChanged` both fire; there is no runaway re-selection loop; no `apply failed`; no
+crash. The trace also showed `reapplied ... reason=create-player ok=false` followed by
+`reason=audio-track ok=true` — VLC rejects an audio delay set before there is media, so
+the ES events are the real application point, exactly as designed.
+
+- `[done]` Audio track applied on `ESAdded`/`ESSelected` for audio streams; the fixed
+  150 ms retry deleted. The retry was **not** redundant beforehand: changing a track
+  mid-playback produces no new `Playing` event, so it was the only recovery path. The
+  event had to be added, not the retry merely removed.
+- `[done]` `applyRequestedAudioTrack` claims the track before calling `setAudioTrack`.
+  Without that, the `ESSelected` which `setAudioTrack` provokes re-enters the method,
+  sees an unapplied track, and selects it again forever. Confirmed on device: no loop.
+- `[done]` Audio delay: the blind second application 150 ms later is gone. One
+  `reapplyAudioDelay()` is called from the three points where the value can actually have
+  been lost — `Playing`, an audio ES event, and a successful track change.
+- `[done]` **Found by the device trace:** that first version issued eight `setAudioDelay`
+  calls in 60 ms, because every audio ES event reapplied and `applyRequestedAudioTrack`
+  reapplied again on success. Now guarded by `currentlyAppliedAudioDelayUs`, invalidated
+  only by a track change, which is when VLC genuinely drops the delay.
+- `[done]` Enhancement recreation now completes bookkeeping on `Playing` via
+  `maybeCompletePendingEnhancementRecreate()`; player creation and the existing
+  `Playing`/ES handlers own state application. The 500 ms callback is only a completion
+  fallback and logs a warning when it fires, which is the measurement this entry asks
+  for: if that line never appears the timer can be deleted. Constant named
+  `ENHANCEMENT_RESTORE_TIMEOUT_MS`.
+- `[keep]` Seek buffer timeout, unchanged as directed. Confirmed properly versioned:
+  guarded by `mSeekVersion == thisSeekVersion`, and `cancelPendingSeek()` increments it.
+  The device trace showed it firing mid-flush during a failed resume; that specific
+  trigger disappears with the resume fix below, so re-measure before touching it.
+- `[keep]` UI auto-hide, debounce, sleep and animation timers where the timer is the
+  intended UX. The progress poll, resize debounce, buffering debounce and enhancement
+  debounce are all of that kind.
+- `[done]` No anonymous main-looper Handler remains in the view. Every delayed callback has
+  an owning handler, a cancellation point and release cleanup, which closes the second and
+  third bullets of section 8.4 as a side effect.
+- `[done]` Buffering is logged on transition rather than per sample. VLC emits it
+  continuously; the first device capture was several hundred lines a second and truncated
+  before reaching anything useful, which made the trace useless for the verification it
+  exists to serve.
+
+**Saved-position restore: replaced twice, and the second answer is the right one.**
+
+The first attempt did what this entry literally asked — replaced the flat 200 ms with a
+`SeekableChanged`/`LengthChanged`/`Playing` gate. The device trace disproved the premise.
+At the moment of the failing resume, `SeekableChanged=true` and `LengthChanged=9146049`
+had **already** arrived, and a `setTime` issued 146 ms later still landed at 0:
+
+    02.052  SeekableChanged seekable=true
+    02.052  LengthChanged length=9146049
+    02.240  [SEEK] setTime(6354400ms)
+    02.598  Playing | time=0
+    02.598  [SEEK_VERIFY] drift: target=6354400ms actual=0ms delta=6354400ms
+
+So seekability and length are **not** sufficient readiness. LibVLC drops a `setTime`
+issued during its startup ramp regardless. Any gate built from those two signals — the one
+this entry specified — would have failed the same way.
+
+- `[doing]` Resume no longer seeks at all. The offset is applied as VLC's `:start-time`
+  media option when the media is opened, so the demuxer starts there and there is no
+  window to miss. `start-time` was verified present in this LibVLC build's option table by
+  binary inspection, alongside the `input-fast-seek` and `audio-desync` options the project
+  already relies on.
+- `[done]` One representation: seconds, in `mPendingStartTimeSec`, replacing the `mSavedPosition`
+  fraction. A fraction could not be converted to a time without a length, and the length
+  belonged to the player being released. `releasePlayer` now saves seconds directly, the
+  enhancement recreate uses its captured `timeMs` directly instead of dividing by a length and
+  multiplying it back, and the stopped-player revive passes the `targetMs` it already had.
+- `[done]` One producer of the option. The JS side had **already** been pushing
+  `:start-time` into `mediaOptions`, but only when `playerKey > 0` — that is, only for a
+  decoder or enhancement remount, never for the initial mount. Watch-history resume fell
+  through to a 100 ms `setTimeout` in `usePlayerCore` followed by the native seek, which is
+  the path that failed. The JS producer is removed; native is the single owner.
+- `[done]` The offset travels **inside the source**, not as a sibling prop. React does not
+  guarantee prop application order, so a `startTime` prop could be applied after `src` and
+  miss the player it was meant to configure.
+- `[done]` The source offset is copied once in `setSrc`; `createPlayer` never re-reads it.
+  It remains a pending intent through construction/open failures and is cleared only when
+  VLC reports playback within tolerance, or when an explicit seek supersedes it. A later
+  recreate therefore uses the live release-saved position instead of jumping back to the
+  session's original history position.
+- `[done]` Internal state takes precedence over the source's value: a release-saved
+  position, an enhancement recreate time or a revive target is more current than watch history.
+- `[done]` JavaScript still supplies the offset for a `playerKey` remount, and this is not
+  redundant: a remount builds a **new** native view, so a position saved inside the
+  outgoing view dies with it. `AnimatedVideoView` computes it from `currentTimeRef` for a
+  remount and from watch history for the first mount. This preserves the mechanism section
+  8.7 deliberately built; an earlier draft of this change deleted it and would have
+  regressed remount resume.
+- `[done]` The 100 ms post-`onLoad` seek in `usePlayerCore` is deleted. `handleLoad` now
+  only aligns the UI position refs, because playback is already at the offset.
+- `[todo]` Retest resume: a local file, an HTTP/HTTPS stream and a live stream, plus a
+  decoder change and an enhancement toggle mid-playback. `[ENGINE] opened ... startTime=`
+  in the trace is the confirmation, and `[SEEK_VERIFY] drift` must not appear on resume.
+  The trace that motivated this fix showed `mediaOptions=0`, which is how the missing
+  initial-mount case was found; the equivalent evidence now is a non-zero `startTime=`.
+- `[keep]` The guard in `savePlaybackProgress` that refuses to overwrite deep history when
+  the player is still near zero. It was a workaround for this bug, but it also prevents
+  real data loss on an immediate exit, so it stays on its own merits.
+
+**A wrong diagnosis, corrected 2026-08-28 after external review.** An earlier version of
+this section claimed the player's event listener ran on VLC's own thread and could
+therefore overlap a main-thread release, and it added seventeen `volatile` fields on that
+basis. That was wrong, and the file's own long-standing comment — "VLC dispatches events on
+its own internal thread, NOT Android's main thread" — is wrong with it.
+
+Verified from the LibVLC 3.6.5 bytecode: `VLCObject.dispatchEventFromNative` is invoked on
+a native thread but always ends in `Handler.post(EventRunnable)`, and
+`setEventListener(listener)` builds that handler with `Looper.getMainLooper()` when none is
+supplied. Events are therefore delivered on the **main thread**. `releasePlayer`, the prop
+setters and the seek path all run on the main thread too, so none of them can interleave.
+Nothing in the class touches the player off the main thread: `seekExecutor` was allocated
+and shut down but never submitted to, and has been deleted.
+
+- `[done]` The seventeen `volatile` additions are reverted. The misleading comment in the
+  listener is replaced with the verified mechanism, so the next reader is not sent down the
+  same path.
+- `[keep]` `onEvent` still reads the player into one local per event. Kept for legibility —
+  one read instead of seventeen, with the null check and every use referring to the same
+  object — not as protection against a race.
+- `[keep]` `setEventListener(null)` before release, with the correct justification:
+  `setEventListener` calls `removeCallbacksAndMessages` on the handler it dispatches
+  through, so detaching **discards events already queued for the main thread**. Without it
+  an event posted just before release runs afterwards against a freed player, which is the
+  `IllegalStateException: can't get VLCObject instance` failure. Queued behind, not
+  overlapping — the fix is right, the original reason was not.
+- `[todo]` Twelve `volatile` fields predate this work, including `isPaused`. They rest on
+  the same wrong premise and are equally unnecessary, but removing them is not this
+  change's business. They are harmless; do not read them as evidence of concurrency.
+- Lesson worth keeping: the wrong diagnosis came from trusting a comment in the file
+  instead of reading the library, in a session that had already caught two other claims
+  the same way. Verify the mechanism, not the annotation.
+
+**Findings from the same review that were already resolved.** Three findings targeted the
+event-gated position restore — a paused recreate never producing a `Playing` event, the
+ignored `setTime` return value, and the five-second backstop abandoning ready media. All
+three were real against that design. The `:start-time` change above removes the design
+rather than patching it: VLC opens the demuxer at the offset whether or not anything plays,
+so there is no event to miss, no return value to check and no backstop to time out.
+
+**Two further findings from the review, both fixed at the ownership boundary.**
+
+- `[done]` The enhancement snapshot restore was deleted. It wrote mute, delay, rate,
+  tracks and an external subtitle captured *before* the recreate, which could revert a
+  newer user choice and attach the same subtitle slave twice. `createPlayer` now owns
+  construction-safe state; `Playing`/ES handlers own rate, tracks and delay; the recreate
+  callback only completes bookkeeping.
+- `[done]` `PlaybackSnapshot` was deleted rather than reduced to another partial state
+  model. The only recreate-only value is playback time, captured as a local `long`; pause,
+  rate, track, delay, mute and subtitle intent already have live owners.
+- `[done]` The enhancement restore backstop is now held in a field and removed with
+  `removeCallbacks`, so it is cancelled rather than merely ignored. Bumping the generation
+  stopped it acting but left the message queued for up to 500 ms retaining the view. This
+  also corrects an overclaim in an earlier version of this section, which
+  said every delayed callback had a cancellation point; that one had logical invalidation
+  only.
+
+**Second review round, 2026-08-28. Six findings, all legitimate, all fixed.** Four were
+introduced or left open by this section's own work, which is worth recording rather than
+smoothing over.
+
+- `[done]` **A completed video could reopen at its own end.** History stores the position
+  verbatim with no clamp and `resumePosition` had no upper bound, so a position at the
+  duration would have been forwarded as `:start-time=<duration>` and ended immediately.
+  This was a regression: the seek path that `:start-time` replaced refused anything within
+  a second of the duration, and moving to an offset dropped the guard. Restored at the one
+  shared `getResumablePosition()` boundary, used both when history is read and when native
+  duration is confirmed, so the prompt, UI refs and native offset all get the same usable
+  value. Focused tests cover opening, completed, invalid and normal positions.
+- `[done]` **The requested rate was lost on ordinary recreates.** The general
+  `createPlayer` path restored the equalizer and the audio delay but never the rate, so a
+  source change, a replay after stopping, or a resume returned playback to 1x. Pre-existing,
+  but only fixable once `mRequestedRate` existed — before that there was no persistent
+  desired rate to restore. `mRequestedRate` is now the sole desired value. The live setter
+  applies it immediately, and `Playing` reasserts it once media exists; create and
+  enhancement code do not maintain a competing applied-value cache.
+- `[done]` **The resume offset was consumed before the open succeeded.** The old fields
+  cleared the value before `mEngine.open()` returned, so a transient failure discarded it
+  and the retry started from zero. `mPendingStartTimeSec` is now cleared only after a
+  `Playing`/`TimeChanged` event confirms the actual VLC time is within tolerance. Open and
+  construction failures explicitly retain it.
+- `[done]` **A track VLC selected on its own left the applied-state caches stale.** The
+  `ESSelected` handler reconciled the *requested* track without observing the *actual* one,
+  so if VLC changed tracks internally the cache would short-circuit against a track that
+  was no longer selected, and the audio delay — which VLC drops on its own track changes
+  too — would not be reasserted. The handler now reads `getAudioTrack()`, and any real
+  difference updates the track cache and invalidates the delay cache before reconciling.
+  This converges: the reconciliation's own `setAudioTrack` produces an `ESSelected` whose
+  observed track matches the claim, so the next pass short-circuits.
+- `[done]` One stale threading comment survived the correction above and has been fixed.
+  The claim that VLC delivers events on its own thread is now absent from the module.
+- `[done]` EOF is separate from generic stopped/error state. Only `EndReached` causes a
+  replay from zero; explicit stop and recoverable errors retain the pending/live position.
+- `[done]` Section status demoted to `[doing]`, per the note at the top of this section.
+
+**Checked against LibVLC/VLC sources rather than inferred, 2026-09-02.** The resume work
+above was reasoned from Java bytecode signatures and device symptoms. That produced one
+correct decision and one wrong one, so the mechanism was read at the source.
+
+Findings, each with its consequence:
+
+- **`:start-time` is the supported route, not a workaround.** VLC's own Android application
+  resumes with the same media option: `media.addOption(":start-time=${start/1000L}")` in
+  `PlaylistManager.playIndex`. This implementation is therefore aligned with upstream, and
+  the earlier plan to fall back to a post-play seek would have moved *away* from it.
+- **The option is declared `add_float`** in `src/libvlc-module.c`
+  (`add_float( "start-time", 0, ... )`), so a fractional value is valid. Glide keeps
+  sub-second precision deliberately and does **not** copy upstream's integer-second
+  rounding; matching upstream's formatting for its own sake would discard precision for no
+  reason.
+- **VLC applies it asynchronously.** `StartTitle()` in `src/input/input.c` reads
+  `var_GetFloat(p_input, "start-time")`, converts to microseconds, and then
+  `input_ControlPush(p_input, INPUT_CONTROL_SET_TIME, &s)`. It is a queued input control,
+  not a synchronous seek, and there is no `b_can_seek` or demuxer-capability precondition
+  in that path.
+
+That last fact invalidated the verification this section previously shipped:
+
+- `[done]` The old check read `getTime()` in the `Playing` handler and warned when it was
+  not near the target. Since the SET_TIME control is still queued at that moment, a
+  position of 0 there is **expected on success**, and the warning fired on every correct
+  resume. A device run produced exactly that — three `not confirmed ... actual=0ms` lines
+  that proved nothing either way, and an earlier reading of them as evidence of failure was
+  unfounded. `Playing` no longer judges the offset at all.
+- `[done]` Resolution now happens on `TimeChanged`, with three outcomes: within tolerance
+  means applied; still near zero means the queued control has not landed yet; and having
+  played past `START_TIME_IGNORED_EVIDENCE_MS` from the start while still far from the
+  target is the only state that constitutes evidence the control was dropped.
+- `[done]` That last case issues exactly one corrective `setTime`, and abandons if it also
+  fails rather than seeking for the rest of the session. This is not a return to the old
+  timers: it fires on observed playback progress, which is a real readiness signal, unlike
+  the `isSeekable()`/`getLength()` pair that both reported ready long before a seek would
+  be honoured.
+- `[done]` The engine now logs the media options it actually applied. The previous line
+  reported `mediaOptions=0` because it counted only the JavaScript-supplied list, omitting
+  the engine's own `:start-time`, `:audio-desync` and `:input-fast-seek` — and that
+  misleading count was read as proof the offset never reached VLC.
+- `[done]` Every change to the pending offset goes through one `setPendingStartTime(value,
+  reason)`. It has a companion flag, and seven call sites assigned the field directly; any
+  one of them forgetting the flag would make the *next* offset abandon itself instead of
+  correcting. The setter also traces each change of intent with its reason, which is what a
+  device run needs in order to be conclusive.
+- `[todo]` Re-run resume on device. The signals are now unambiguous:
+  `[ENGINE] opened ... appliedMediaOptions=[..., :start-time=65.567]` proves the option
+  reached VLC; `[START_TIME] applied target=... actual=...` proves it took effect; and
+  `[START_TIME] :start-time was ignored by VLC` is a real failure that now means what it
+  says.
+
+**Root cause of seek and resume imprecision, found 2026-09-02 from a device journal.**
+
+Two symptoms that looked unrelated turned out to be one option. A trace of ordinary use
+showed user seeks landing far from the requested time:
+
+    [SEEK_VERIFY] drift: target=5535978ms actual=5516562ms delta=19416ms
+    [SEEK_VERIFY] drift: target=5606632ms actual=5571138ms delta=35494ms
+
+and resume landing consistently early (4.6 s, 7.9 s, 2.1 s, 2.0 s on successive opens).
+
+`src/input/input.c` reads the option once per input and then uses it as the precision
+argument for every seek:
+
+    priv->b_fast_seek = var_GetBool( p_input, "input-fast-seek" );
+    ...
+    demux_Control( ..., DEMUX_SET_TIME, i_time, !input_priv(p_input)->b_fast_seek );
+    demux_Control( ..., DEMUX_SET_POSITION, (double) f_pos, !input_priv(p_input)->b_fast_seek );
+
+- `[done]` `--input-fast-seek` and `:input-fast-seek` are both removed. Glide was setting
+  it in two places — the JS init options for local files and the engine's media options —
+  which degraded every seek for the life of the input.
+- Note on why a per-call fix was not enough: `MediaPlayer.setTime(long)` compiles to
+  `nativeSetTime(time, false)`, so Glide was *already* requesting precise seeks. That flag
+  only selects the `time` versus `time-fast` input variable; the demuxer's precision comes
+  from `b_fast_seek`, which the option had already fixed for the whole input. This is why
+  the earlier keyframe-tolerance work treated coarse landings as unavoidable — they were
+  not, they were self-inflicted.
+- `[keep]` Precision over seek latency, which is also VLC's own default: its Android app
+  exposes fast seek as an opt-in setting rather than enabling it for everyone.
+- `[keep]` The resume precision correction stays as a safety net, but it should now rarely
+  fire. If `START_TIME: landed Nms early` disappears from traces, the residual was entirely
+  this option and the correction can be deleted.
+- `[todo]` Re-measure the seek buffer timeout in section 8.3 against this change. Precise
+  seeks decode from the keyframe to the exact frame, so they take longer; the 200 ms
+  fallback fired twice in the trace above and may need to be longer, or may now be
+  unnecessary because the seek no longer overshoots.
+- `[todo]` A `SEEK: requested position=0.0000` appeared once, roughly a second after a
+  resume, and the player did move to zero. It is not yet established whether that was a
+  genuine tap at the left edge of the seek bar during rapid seeking or a spurious commit;
+  the reporter noticed the HUD showing zero several times. Re-check once seeks are precise,
+  because a HUD that disagreed with the player was an expected consequence of 19-35 s drift.
+
+**Device confirmation, 2026-09-02 23:40 build.** A clean capture over two and a half
+minutes of deliberate abuse — repeated resumes, rapid seek spam, enhancement toggling,
+twenty-two rate changes, an audio-track switch and a PiP round trip — settles most of this
+section.
+
+- `[done]` Resume lands on the requested position: `delta=0ms` on most opens and 9 ms at
+  worst, with the precision correction never firing. Removing `--input-fast-seek` was the
+  whole fix; the earlier 2-9 s undershoot was self-inflicted.
+- `[done]` Seek freezing on long swipes is resolved, and the cause is confirmed to have
+  been the mis-sized safety timer rather than seeking itself: **zero** `buffer timeout`
+  lines in the whole capture, against one on nearly every seek before. Seeks now land where
+  requested — `0.7384 → 6753522ms`, `0.7444 → 6807945ms`, `0.7511 → 6869694ms`.
+- `[done]` `SEEK_VERIFY` is gated on the seek version. It reported transposed target/actual
+  pairs as multi-minute drift during rapid seeking, because a position cannot be attributed
+  to a seek once a later one has been dispatched. A superseded seek is now dropped silently.
+  Recording this as a caution rather than a fix alone: this diagnostic was wrong three
+  separate ways — verifying on the wrong event, clearing the state it needed to compare
+  against, and ignoring supersession — and each wrong version produced confident warnings
+  about seeks that were working. A check that cannot be trusted is worse than no check.
+- `[keep]` The start-time precision correction, for now. It has stopped firing entirely,
+  which by the measurement rule above argues for deleting it — but the evidence is one file
+  on one device, and a coarser demuxer or a different codec could still land short. It
+  costs nothing when it does not fire. Delete it once traces from more than one source
+  agree.
+- `[todo]` `AUDIO_FOCUS: change=-1 (lost)` fires within ~15 ms of every play request, eight
+  times in this capture, and playback continues regardless. Reproducible and unexplained;
+  worth a look now that the noisier problems are gone.
+- `[todo]` `INTENT: stop` is logged twice on every stop — a duplicate call from JavaScript,
+  harmless but unexplained.
+- `[todo]` Two reported symptoms remain unreproduced in the native journal and are above
+  this layer: the HUD showing 0 when a seek happens immediately after playback starts, and
+  the seek bar disappearing. `applySeekToVLC` returns early while duration is still zero,
+  so an early seek is dropped after the HUD has already been moved optimistically. Diagnose
+  from the JavaScript seek/HUD commit path, not from native traces.
+
+**Controls claimed readiness they did not have, fixed 2026-09-02.** Reported as the HUD
+showing zeros and the seek bar being absent when touched immediately after opening a video.
+Neither was a native fault; the journal for those moments is clean.
+
+The window is measurable from a device trace: `SOURCE opened` at 23:53:16.985 and the first
+`STATE playing … of 9146049ms` at 23:53:17.417, so JavaScript does not learn the duration
+for roughly 430 ms. During it `durationShared` is still its initial `0`, and:
+
+- the scrubber's `progress` divides by `duration.value || 1`, so it drew an empty track with
+  no thumb — read as "the seek bar is missing";
+- the three time labels formatted `0`, so they read a confident `00:00 / 00:00`;
+- `panGesture.onBegin` already refused to start on `duration.value <= 0`, so a tap in that
+  window correctly did nothing — which is precisely why it looked broken. The control was
+  inert but presented as usable.
+
+`isVideoLoaded` already existed and was set in `handleLoad`, but only ever gated
+`applySeekToVLC` and the buffering-spinner decision. It was never applied to the controls.
+
+- `[done]` Every displayed time reports `-1` until a duration exists, and the formatter
+  renders that as `--:--`. The sentinel keeps the decision in one place rather than
+  threading a readiness flag through `ReanimatedText`'s props.
+- `[done]` The minus sign for remaining time moved into a dedicated formatter, so the
+  placeholder is `--:--` rather than the `---:--` a bare prefix would have produced. That
+  left `ReanimatedText`'s `prefix` prop with no callers, so it was deleted.
+- `[done]` The scrubber dims to 0.35 opacity until a duration exists. Dimmed rather than
+  hidden deliberately: hiding it moves the row when the media loads.
+- `[keep]` No interaction blocking was added. The gesture guard already refuses to start
+  without a duration; the defect was the presentation, and adding a second guard would
+  imply the first was insufficient.
+- `[keep]` A tap made before the duration is known is discarded rather than replayed once
+  it arrives. Honouring it would mean guessing at an intent formed against a bar that had
+  no scale.
 
 ### 8.4 Collapse native scheduling ownership
 
 - `[todo]` Replace per-feature main-loop Handlers with one main-thread Handler where
-  cancellation semantics permit it; retain the seek executor.
-- `[todo]` Stop constructing anonymous `new Handler(...)` instances for delayed work.
-- `[todo]` Give every retained delayed callback an owner, cancellation point, and release cleanup.
+  cancellation semantics permit it.
+- `[done]` Delete the unused seek executor; no work was ever submitted to it.
+- `[done]` Stop constructing anonymous `new Handler(...)` instances for delayed work.
+- `[done]` Give every retained delayed callback an owner, cancellation point, and release cleanup.
 - `[todo]` In `AudioControlModule`, cancel/replace route-debounce and volume-flag
   callbacks rather than stacking them during rapid changes.
 
