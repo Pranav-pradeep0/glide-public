@@ -1096,13 +1096,21 @@ section.
   on one device, and a coarser demuxer or a different codec could still land short. It
   costs nothing when it does not fire. Delete it once traces from more than one source
   agree.
-**The three remaining anomalies, 2026-09-04.** All three were found by reading the code the
-journal pointed at. Two are confirmed fixed by a device capture; the third is improved,
-measured, and still open.
+**The three remaining anomalies, 2026-09-04. All three are closed and confirmed on device.**
+Each was found by reading the code the journal pointed at; the audio-focus one took three
+captures and two wrong explanations before a field existed that could falsify them.
 
-- `[doing]` `AUDIO_FOCUS: change=-1 (lost)` after every play request is **partially** fixed.
-  Measured on a force-stopped process: seven of seven grants produced a loss before, two of
-  four after, and the first grant in a fresh process is now clean.
+One new observation from the same captures, recorded so it is not rediscovered as a bug:
+`INTENT: stop` is *absent* from most teardowns, appearing on roughly one exit in four. The
+JavaScript stop is `videoRef.current?.stopPlayer?.()`, and by the time the screen unmounts
+that ref is often already null, so teardown runs through `cleanUpResources()` →
+`stopPlayback()` instead. Both paths release the player and abandon focus, so nothing is
+leaked and nothing is left playing. It is `[keep]` rather than `[todo]` because the exit is
+correct by either route; what would be wrong is reading the missing line as a missing stop.
+
+- `[done]` `AUDIO_FOCUS: change=-1 (lost)` after every play request. Two independent causes,
+  both now closed. Measured on a force-stopped process: seven of seven grants drew a loss
+  before, two of four after the first fix, and after the second none reaches a live view.
 
   The confirmed cause is a leaked registration. `AUDIOFOCUS_LOSS` clears `mHasAudioFocus`
   without abandoning anything, and `abandonAudioFocusInternal()` was gated on that same
@@ -1115,15 +1123,32 @@ measured, and still open.
   the seek handler, and read by the callback on main, and it is the field the diagnosis
   rests on.
 
-  Two of four grants still lose focus and **there is no explanation for those**. The first
-  hypothesis — a second `AudioFocusRequest` built around the same listener — was recorded
-  here as fact and then disproved by the `held=` field it predicted would read `true`.
-  Reusing one request is still correct API usage but fixed nothing observable. Every focus
-  line now carries `view=<identity hash>`; a loss whose `view=` differs from the preceding
-  grant means another path drops a view without abandoning, and a matching `view=` means
-  the framework is revoking from the client it just granted. Record which before writing
-  more code. This is the same class of defect as the stacked volume and audio-route
-  callbacks fixed in `00153fe`; two instances is enough to look for a third.
+  The remaining losses are explained by the `view=` capture of 2026-09-04, and the answer
+  was neither of the two candidates. **Every loss carried the *previous* view's identity**,
+  arriving ~110 ms after its successor's grant and *seconds after that view had already
+  abandoned focus and released its player*:
+
+      22:16:52.105 view=74010389  requested → GRANTED
+      22:16:52.214 view=89370395  change=-1 (lost) held=false playing=false
+      22:16:46.127 view=89370395  abandoned          ← six seconds earlier
+
+  So the notification outlives the abandonment. `cleanUpResources()` routes through
+  `stopPlayback()` to `abandonAudioFocusInternal()` and the journal confirms it ran, so
+  this is not the view's bookkeeping. The delivery is inert — the pause branch tests
+  `isPlaying()`, false on a released player — which is why playback never suffered.
+
+  `onAudioFocusChange` now returns immediately when `mCleaned` is set. That flag already
+  existed to guard double cleanup, so a torn-down view stops reacting and stops
+  journalling. Not silenced: a live view's focus changes journal exactly as before.
+
+- `[keep]` **Three investigations began with `AUDIO_FOCUS: change=-1`, and two of them
+  produced confident wrong explanations before a capture existed that could tell them
+  apart.** The first blamed a second `AudioFocusRequest` around the same listener and was
+  disproved by the very `held=` field it predicted would read `true`; the second blamed the
+  abandonment guard, which was a real leak worth fixing but accounted for only part of the
+  symptom. What settled it was one identity field and a force-stopped process. Record the
+  discriminating observation before the mechanism, and prefer a field that can falsify a
+  hypothesis over a fix that merely makes the line go away.
 - `[done]` `INTENT: stop` logged twice because leaving a player screen runs three
   JavaScript stop paths — the back handler, navigation's `beforeRemove`, and unmount
   cleanup. `stopPlayer()` is now idempotent. Guarding there rather than deleting a caller
