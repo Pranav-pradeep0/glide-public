@@ -53,4 +53,10 @@ dependencies {
     // ForegroundServiceDidNotStartInTimeException. The new toolchain supports 1.11.0.
     implementation 'androidx.media3:media3-session:1.11.0'
     implementation 'androidx.media3:media3-common:1.11.0'
+
+    // The module's first JVM tests. StartTimeResolver and the seek verifier take longs
+    // and booleans only, so their decisions run on the JVM with no Android stubbing and
+    // no Robolectric. Logic that does touch android.* (URI validation, for one) still
+    // needs instrumentation and is tracked separately in section 15.2.
+    testImplementation 'junit:junit:4.13.2'
 }

@@ -1365,63 +1365,53 @@ class ReactVlcPlayerView extends TextureView implements
             VlcLog.warn("START_TIME", "player released before the offset resolved");
             return;
         }
-        if (actualMs < 0L) {
-            return;
-        }
 
         final long targetMs = Math.round(mPendingStartTimeSec * 1000d);
         final long deltaMs = Math.abs(actualMs - targetMs);
+        final String detail = "target=" + targetMs + "ms actual=" + actualMs
+                + "ms delta=" + deltaMs + "ms";
 
-        // The discriminator is comparative, not a fixed tolerance: the offset was honoured
-        // if playback is nearer the requested time than it is to the beginning. Nothing
-        // else could have put the playhead there. This is scale-free, so it does not care
-        // how coarse the keyframe granularity turns out to be — an earlier version used a
-        // 2 s window and reported every successful resume as ignored, because VLC had
-        // landed several seconds before the target.
-        final boolean landedNearTarget = deltaMs < actualMs;
+        // Read, decide, act. The decision lives in StartTimeResolver so it can be tested
+        // without a device; only the reading and the acting need a player.
+        switch (StartTimeResolver.evaluate(targetMs, actualMs, mStartTimeCorrectionIssued,
+                START_TIME_PRECISION_MS, START_TIME_IGNORED_EVIDENCE_MS)) {
+            case WAIT:
+                return;
 
-        if (landedNearTarget) {
-            if (deltaMs <= START_TIME_PRECISION_MS || mStartTimeCorrectionIssued) {
-                VlcLog.event("START_TIME", "applied target=" + targetMs + "ms actual="
-                        + actualMs + "ms delta=" + deltaMs + "ms corrected="
-                        + mStartTimeCorrectionIssued);
+            case APPLIED:
+                VlcLog.event("START_TIME", "applied " + detail
+                        + " corrected=" + mStartTimeCorrectionIssued);
                 setPendingStartTime(0d, "applied");
                 return;
-            }
 
-            // Honoured but imprecise. Playback is demonstrably running, so a seek is safe
-            // here in a way it never was during startup.
-            VlcLog.event("START_TIME", "landed " + deltaMs + "ms early (target=" + targetMs
-                    + "ms actual=" + actualMs + "ms); correcting once");
-            mStartTimeCorrectionIssued = true;
-            try {
-                player.setTime(targetMs);
-            } catch (IllegalStateException e) {
-                VlcLog.warn("START_TIME", "player released during precision correction");
-            }
-            return;
+            case CORRECT_PRECISION:
+                // Honoured but short of the target. Playback is demonstrably running, so a
+                // seek is safe here in a way it never was during startup.
+                VlcLog.event("START_TIME", "landed " + deltaMs + "ms early (" + detail
+                        + "); correcting once");
+                mStartTimeCorrectionIssued = true;
+                seekForStartTimeCorrection(player, targetMs, "precision");
+                return;
+
+            case CORRECT_DROPPED:
+                VlcLog.warn("START_TIME", ":start-time was dropped by VLC (" + detail
+                        + "); correcting with one seek");
+                mStartTimeCorrectionIssued = true;
+                seekForStartTimeCorrection(player, targetMs, "dropped");
+                return;
+
+            case ABANDON:
+                VlcLog.warn("START_TIME", "abandoned after corrective seek; " + detail);
+                setPendingStartTime(0d, "abandoned");
+                return;
         }
+    }
 
-        // Nearer the beginning than the target. Either the queued control has not landed
-        // yet, or it never will.
-        if (actualMs < START_TIME_IGNORED_EVIDENCE_MS) {
-            return;
-        }
-
-        if (mStartTimeCorrectionIssued) {
-            VlcLog.warn("START_TIME", "abandoned after corrective seek; target=" + targetMs
-                    + "ms actual=" + actualMs + "ms");
-            setPendingStartTime(0d, "abandoned");
-            return;
-        }
-
-        VlcLog.warn("START_TIME", ":start-time was dropped by VLC (target=" + targetMs
-                + "ms actual=" + actualMs + "ms); correcting with one seek");
-        mStartTimeCorrectionIssued = true;
+    private void seekForStartTimeCorrection(MediaPlayer player, long targetMs, String reason) {
         try {
             player.setTime(targetMs);
         } catch (IllegalStateException e) {
-            VlcLog.warn("START_TIME", "player released during corrective seek");
+            VlcLog.warn("START_TIME", "player released during " + reason + " correction");
         }
     }
 

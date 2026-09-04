@@ -61,11 +61,21 @@ jobs:
           java-version: 17
           cache: gradle
 
-      - name: Compile debug build
+      - name: Native unit tests
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug
+          # Pure-JVM tests over the player's decision logic. assembleDebug does not run
+          # them, so without this step they exist but never execute.
+          #
+          # Scoped to modules this repository owns. The root task also runs tests inside
+          # node_modules, and react-native-zip-archive ships failing ones, so an unscoped
+          # invocation fails the build on a third party's code.
+          ./gradlew :glide_vlc-player:testDebugUnitTest :app:testDebugUnitTest             :react-native-simple-thumbnail:testDebugUnitTest
+
+      - name: Compile debug build
+        working-directory: android
+        run: ./gradlew assembleDebug
 
       - name: Compile release build
         working-directory: android
@@ -195,6 +205,14 @@ jobs:
           distribution: temurin
           java-version: 17
           cache: gradle
+
+      - name: Native unit tests
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          # Scoped: the root task also runs third-party tests from node_modules, some of
+          # which fail. See the note in the verify job.
+          ./gradlew :glide_vlc-player:testDebugUnitTest :app:testDebugUnitTest             :react-native-simple-thumbnail:testDebugUnitTest
 
       - name: Decode Keystore
         run: |
