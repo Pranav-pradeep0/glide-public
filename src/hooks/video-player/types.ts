@@ -261,7 +261,8 @@ export interface UsePlayerCoreReturn {
     stop: () => void;
     togglePlayPause: () => void;
     previewSeek: (timeInSeconds: number) => void;
-    commitSeek: (timeInSeconds: number) => void;
+    /** Returns false when there is no duration yet and the seek was dropped. */
+    commitSeek: (timeInSeconds: number) => boolean;
     setIsSeeking: (seeking: boolean) => void;
     clearResumePosition: () => void;
 

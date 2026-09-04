@@ -682,8 +682,13 @@ export default function VideoPlayerScreen({ route }: Props) {
         // Set start time for difference display - false means don't reset if already seeking
         hud.setSeekStartTime(player.currentTimeRef.current, false);
 
+        // Nothing is shown until the seek is accepted. Before the duration is known the
+        // clamp above collapses to 0 and the seek is dropped, so announcing it would
+        // display a jump to the start that never happens.
+        if (!player.commitSeek(newTime)) {
+            return;
+        }
         gestures.sharedValues.seekTime.value = newTime;
-        player.commitSeek(newTime);
         hud.showSeekHUD(newTime, 'backward', null, false);
         ui.showControls();
         ui.scheduleAutoHide();
@@ -702,8 +707,11 @@ export default function VideoPlayerScreen({ route }: Props) {
         // Set start time for difference display - false means don't reset if already seeking
         hud.setSeekStartTime(player.currentTimeRef.current, false);
 
+        // See handleJumpBackward: no HUD until the seek is accepted.
+        if (!player.commitSeek(newTime)) {
+            return;
+        }
         gestures.sharedValues.seekTime.value = newTime;
-        player.commitSeek(newTime);
         hud.showSeekHUD(newTime, 'forward', null, false);
         ui.showControls();
         ui.scheduleAutoHide();

@@ -341,9 +341,15 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
         // Use forceNewStart=false so rapid taps accumulate (+10 -> +20 -> +30, etc.)
         hud.setSeekStartTime(currentTimeRef.current, false);
 
+        // Nothing is announced until the seek is accepted. A double tap in the ~430 ms
+        // before the duration is known is dropped by the player, and showing the HUD
+        // anyway is what made an early skip read as a jump to 00:00.
+        if (!commitSeek(newTime)) {
+            return;
+        }
+
         // Update the shared value used by VideoHUD for instant feedback
         seekTimeShared.value = newTime;
-        commitSeek(newTime);
 
         // Show seek HUD with direction and side for opposite-side positioning
         const direction = side === 'left' ? 'backward' : 'forward';

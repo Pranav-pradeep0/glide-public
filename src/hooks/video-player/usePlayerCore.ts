@@ -152,6 +152,7 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
      */
     const applySeekToVLC = useCallback((timeInSeconds: number, isPreview: boolean = false) => {
         if (!state.isVideoLoaded || !state.duration || state.duration === 0) {
+            if (__DEV__) {console.warn('[SEEK] applySeekToVLC dropped — no duration yet');}
             return;
         }
 
@@ -204,13 +205,36 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
     }, [state.duration, currentTimeShared, lastSyncPosition, lastSyncTimestamp, applySeekToVLC]);
 
 
-    const commitSeek = useCallback((timeInSeconds: number) => {
+    /**
+     * commitSeek — the single entry point for a finished seek.
+     *
+     * Returns whether the seek was accepted. Callers that display the requested time must
+     * honour a `false`: until the duration is known, `applySeekToVLC` drops the seek, so
+     * anything already shown is a position the player will never move to. That is the
+     * whole of the "HUD shows 00:00 when you skip right after opening a video" report —
+     * the jump handlers clamp against `duration`, which is 0 for roughly 430 ms after the
+     * source opens, so a skip in that window asks for 0, is dropped, and leaves the HUD
+     * announcing a seek to the start that never happened.
+     */
+    const commitSeek = useCallback((timeInSeconds: number): boolean => {
         if (livePreviewTimerRef.current) {
             clearTimeout(livePreviewTimerRef.current);
             livePreviewTimerRef.current = null;
         }
 
         const duration = state.duration || 0;
+        if (!state.isVideoLoaded || duration <= 0) {
+            // Refusing the seek must still end the gesture. The touch is over either way,
+            // and leaving these set latches the scrubber in its active state at the
+            // touched position: `isScrubbing` also suppresses playing/paused handling and
+            // position updates, so the HUD then reports 0:00 while playback runs on.
+            // Only the playhead and the HUD value are withheld, never the gesture's end.
+            isScrubbingShared.value = false;
+            setState(prev => (prev.isSeeking ? { ...prev, isSeeking: false } : prev));
+            if (__DEV__) {console.warn('[SEEK] commitSeek refused — no duration yet');}
+            return false;
+        }
+
         const clamped = Math.max(0, Math.min(duration, timeInSeconds));
 
         currentTimeRef.current = clamped;
@@ -241,8 +265,10 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
         }
 
         isScrubbingShared.value = false;
-    }, [state.duration, state.playerStopped, applySeekToVLC, currentTimeShared,
-        lastSyncPosition, lastSyncTimestamp, isScrubbingShared, isPlayingShared]);
+        return true;
+    }, [state.duration, state.isVideoLoaded, state.playerStopped, applySeekToVLC,
+        currentTimeShared, lastSyncPosition, lastSyncTimestamp, isScrubbingShared,
+        isPlayingShared]);
 
     /** setIsSeeking — marks scrub start/end for UI feedback. */
     const setIsSeeking = useCallback((seeking: boolean) => {
