@@ -75,6 +75,16 @@ class ReactVlcPlayerView extends TextureView implements
     // completed, forcing play() while the seek was still in flight.
     private static final long SEEK_BUFFER_TIMEOUT_MS = 3_000L;
     /**
+     * How far a committed seek may land from its target before it is worth reporting.
+     *
+     * <p>Not a correctness threshold and not enforced: nothing corrects a drifted seek,
+     * because auto-correction loops. It is only the line above which a landing is worth a
+     * journal line. Sized against post-fix device traces, where seeks land within a
+     * handful of milliseconds; before {@code --input-fast-seek} was removed the same
+     * traces showed 19-35 s.
+     */
+    private static final long SEEK_VERIFY_TOLERANCE_MS = 500L;
+    /**
      * How far playback may advance from the beginning before an unconfirmed start offset
      * is treated as dropped rather than merely pending.
      *
@@ -1297,41 +1307,57 @@ class ReactVlcPlayerView extends TextureView implements
      * came to report transposed target/actual pairs as minutes of drift while every seek
      * was in fact landing correctly. A superseded seek is dropped silently: the newer one
      * is the only question worth answering.
+     *
+     * <p>Read, decide, act. The decision lives in {@link SeekVerifier} so it can be
+     * exercised without a device; only the reading and the reporting need a player.
      */
     private void logSeekVerification() {
         final long targetMs = mLastSeekTargetMs;
-        if (targetMs < 0 || mMediaPlayer == null) {
+        if (mMediaPlayer == null) {
             return;
         }
 
-        if (mSeekVerifyVersion != mSeekVersion) {
-            // Superseded before it could be judged.
-            mLastSeekTargetMs = -1L;
-            mSeekVerifyVersion = -1L;
-            return;
-        }
-
-        final long actualMs;
+        long actualMs = -1L;
         try {
             actualMs = mMediaPlayer.getTime();
         } catch (IllegalStateException e) {
-            mLastSeekTargetMs = -1L;
-            mSeekVerifyVersion = -1L;
-            return;
-        }
-        if (actualMs < 0) {
-            return;
+            // Leave actualMs negative; the verdict below decides what that means.
+            VlcLog.trace("SEEK_VERIFY", "player unreadable while verifying");
         }
 
+        switch (SeekVerifier.evaluate(targetMs, actualMs, mSeekVersion, mSeekVerifyVersion,
+                SEEK_VERIFY_TOLERANCE_MS)) {
+            case NOTHING_TO_VERIFY:
+                return;
+
+            case WAIT:
+                // Keep the seek outstanding and judge it on a later position.
+                return;
+
+            case SUPERSEDED:
+                clearSeekVerification();
+                return;
+
+            case ON_TARGET:
+                clearSeekVerification();
+                VlcLog.trace("SEEK_VERIFY", seekVerifyDetail(targetMs, actualMs));
+                return;
+
+            case DRIFTED:
+                clearSeekVerification();
+                VlcLog.event("SEEK_VERIFY", "drift: " + seekVerifyDetail(targetMs, actualMs));
+                return;
+        }
+    }
+
+    private void clearSeekVerification() {
         mLastSeekTargetMs = -1L;
         mSeekVerifyVersion = -1L;
-        final long delta = Math.abs(actualMs - targetMs);
-        final String detail = "target=" + targetMs + "ms actual=" + actualMs + "ms delta=" + delta + "ms";
-        if (delta > 500) {
-            VlcLog.warn("SEEK_VERIFY", "drift: " + detail);
-        } else {
-            VlcLog.trace("SEEK_VERIFY", detail);
-        }
+    }
+
+    private static String seekVerifyDetail(long targetMs, long actualMs) {
+        return "target=" + targetMs + "ms actual=" + actualMs
+                + "ms delta=" + Math.abs(actualMs - targetMs) + "ms";
     }
 
     /**
