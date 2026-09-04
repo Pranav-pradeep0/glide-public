@@ -537,6 +537,21 @@ class ReactVlcPlayerView extends TextureView implements
 
     @Override
     public void onAudioFocusChange(int focusChange) {
+        // A torn-down view still receives one final loss when the next view takes focus.
+        // Measured with view identities on 2026-09-04: every `change=-1` in the capture
+        // carried the *previous* view's id, arriving ~110 ms after the successor's grant
+        // and seconds after that view had abandoned focus and released its player. So the
+        // notification outlives the abandonment, and this view has nothing left to act on.
+        //
+        // Guarding here rather than trying harder to deregister: `cleanUpResources()`
+        // already routes through `stopPlayback()` to `abandonAudioFocusInternal()`, and
+        // the journal confirms it ran. Whatever keeps the client on the framework's focus
+        // stack afterwards is not this view's bookkeeping to fix, and the delivery is inert
+        // either way -- the pause branch checks `isPlaying()`, which is false on a released
+        // player. What it was not was harmless: three investigations began with this line.
+        if (mCleaned) {
+            return;
+        }
         // held= and playing= are what make a change=-1 line diagnosable. A loss arriving
         // while we believed we held focus and playback had not started is the signature of
         // the self-inflicted loss described on audioFocusRequest(); a loss while playing is
