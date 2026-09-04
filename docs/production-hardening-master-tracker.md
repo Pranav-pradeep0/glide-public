@@ -1921,6 +1921,40 @@ If iOS remains supported:
   comparator, including its build-suffix stripping. Replace the problematic expectations
   when strict final-tag semantics land; do not mistake tests of current behavior for proof
   that the current release contract is correct.
+- `[done]` **First JVM unit tests in the native player module**, and the first automated
+  coverage of any native logic in this repository. `StartTimeResolver.evaluate` is the
+  resume-offset decision extracted as a pure function — longs and a boolean in, a verdict
+  out — with nine table-driven cases built from real device traces rather than invented
+  numbers.
+
+  The extraction is the point. That judgement previously lived inside the VLC event
+  handler, welded between `player.getTime()` and `player.setTime()`, so the only way to
+  exercise it was to install a build and read logcat. It was wrong three times on the way
+  to being right, and each wrong version cost a device session:
+  - it read the position at `Playing`, where VLC has not yet applied the offset;
+  - it then used a fixed 2 s tolerance plus "advanced past 4 s" as proof of a drop, which
+    classified every successful resume as a failure and issued a pointless corrective seek.
+
+  Verified the tests earn their keep rather than assuming it: restoring the second wrong
+  rule makes exactly two of them fail — `landingEarlyIsCorrectedNotTreatedAsDropped` and
+  `landingEarlyIsAcceptedOnceCorrectionWasAlreadyTried`, the rows carrying the observed
+  8.8 s, 5.2 s and 2.9 s keyframe undershoots. That regression would have been caught
+  before an APK was built.
+
+  Cost was a single `testImplementation 'junit:junit:4.13.2'` line. No Robolectric is
+  needed because the decision touches no Android API — which is exactly why extracting it
+  was worth doing. Logic that does touch `android.*`, such as the intent-scheme validation
+  in section 6.2, still needs instrumentation and remains open below.
+- `[done]` Both CI jobs run the native tests. `assembleDebug` does not invoke
+  `testDebugUnitTest`, so without an explicit step the tests would exist and never run.
+  Added to `release` as well as `verify`, because `verify` is skipped on tags.
+- `[done]` The test invocation names this repository's modules explicitly. The root
+  `testDebugUnitTest` also runs tests inside `node_modules`, and `react-native-zip-archive`
+  ships failing ones — found by running it rather than reasoning about it, which would
+  otherwise have failed the build on a third party's code.
+- `[todo]` The seek verifier's decision has the same shape and the same history of being
+  wrong three times (verifying on the wrong event, clearing the state it compared against,
+  ignoring supersession). Extract and table-test it next; the infrastructure now exists.
 - `[todo]` Strict version parser/comparator and release-tag validation.
 - `[todo]` `selectApkForDevice`, trusted URL validation, checksum parsing, file-name sanitation.
 - `[todo]` Settings migration and corrupt MMKV payload behavior.
