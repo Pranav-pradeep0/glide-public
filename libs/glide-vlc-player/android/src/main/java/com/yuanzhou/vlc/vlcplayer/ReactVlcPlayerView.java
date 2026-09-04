@@ -2258,12 +2258,28 @@ class ReactVlcPlayerView extends TextureView implements
             mMediaPlayer.setSpuTrack(track);
     }
 
+    /**
+     * Stop playback. Idempotent.
+     *
+     * <p>Leaving a player screen runs three stop paths in JavaScript — the back handler,
+     * navigation's {@code beforeRemove}, and unmount cleanup — which is why every stop was
+     * journalled twice. Guarding here rather than deleting one of those callers is
+     * deliberate: they are not redundant with each other (an external-open Activity
+     * finishes without a navigation transition), and the guard covers callers that are not
+     * JavaScript at all, such as the media session.
+     */
     public void stopPlayer() {
         if (mMediaPlayer == null)
             return;
+        // Unconditional: focus abandonment is idempotent on its own and must not be
+        // skipped for a player already in a terminal state after EOF.
+        abandonAudioFocusInternal();
+        if (mNativeStopped) {
+            VlcLog.trace("STOP", "stopPlayer() ignored — already stopped");
+            return;
+        }
         VlcLog.event("INTENT", "stop");
         VlcLog.trace("STOP", "stopPlayer()");
-        abandonAudioFocusInternal();
         mNativeStopped = true;
         mEnded = false;
         mMediaPlayer.stop();
