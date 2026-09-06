@@ -2,7 +2,7 @@
 
 **Created:** 2026-09-06
 **Prerequisite reading:** `docs/exoplayer-migration.md` (why), tracker §11.5–11.6 (decision).
-**Status:** planning. Phase 0 complete; nothing else started.
+**Status:** planning. Phase 0 complete, all four decisions settled; nothing else started.
 
 This is the working document for replacing LibVLC with Media3/ExoPlayer. It is written to
 be picked up cold, in a new session, without the conversation that produced it.
@@ -163,16 +163,16 @@ an engine-specific one.
 | B6 | Audio / subtitle track selection | native + retry | `TrackSelectionParameters` |
 | B7 | Haptic cues | `ffmpeg-kit` extraction → `ContextAnalyzer` | **unchanged** — needs the whole cue list upfront |
 | B8 | Subtitle rendering & styling | `SubtitleOverlay` | unchanged; cues now from ExoPlayer |
-| B9 | Bitmap subtitles (PGS/VobSub) | VLC SPU | ExoPlayer PGS — **unverified** |
+| B9 | Bitmap subtitles (PGS/VobSub) | VLC SPU | `Cue.bitmap` drawn by our own overlay — D3 |
 | B10 | PiP | `VlcPipController` (624) | mostly unchanged; bounds hack may simplify |
 | B11 | Background playback + notification | `GlidePlaybackService` + adapter | `MediaSession` + real ExoPlayer |
 | B12 | Bookmarks, playlist, resume, settings | JS | unchanged |
-| B13 | Audio delay | `--audio-desync` / `setAudioDelay` | **no ExoPlayer equivalent** — custom `AudioProcessor`, or drop |
+| B13 | Audio delay | `--audio-desync` / `setAudioDelay` | **dropped** — D1 |
 | B14 | Subtitle delay | VLC SPU delay | offset in `SubtitleOverlay` — free |
 | B15 | Thumbnails | `ffmpeg-kit` | unchanged |
 
-Only **B13** has no clean answer. Decide it early: a custom `AudioProcessor` is real work
-for a feature whose usage is unmeasured.
+All settled; see §3.2. The only one carrying residual risk is **B1**, the six resize modes,
+which is why Phase 3 is the risk peak.
 
 ## 1.5 Category C — bloat to delete regardless
 
@@ -295,14 +295,65 @@ Every phase, without exception:
    that cannot fail is not a check.
 5. Anything unexplained gets written down, not assumed benign.
 
-## 3.2 Open decisions
+## 3.2 Decisions — all four settled 2026-09-06
 
-| # | Decision | Needed by |
-|---|---|---|
-| D1 | Audio delay: custom `AudioProcessor` or drop? | Phase 2 |
-| D2 | LGPL: shared-library FFmpeg build, or accept static linking? | before any public release |
-| D3 | Bitmap subtitles: acceptable if ExoPlayer's PGS is weaker? | Phase 2 |
-| D4 | Keep the decoder-mode setting, or remove it? (recommend remove) | Phase 1 |
+### D1. Audio delay — **drop it**
+
+There is no ExoPlayer equivalent, so keeping it means writing a custom `AudioProcessor`
+that buffers and re-times PCM. That is real work for a feature whose usage nobody has
+measured, and it would be the only piece of the migration built on speculation.
+
+Note that `--audio-desync=100` was baked into the VLC init options with no recorded reason
+— most likely compensating for something in VLC's own pipeline. Do not port a constant
+nobody can justify into an engine that may not need it.
+
+**Subtitle delay stays** and is free: cues are rendered by our overlay, so it is an offset in
+JavaScript. That is also the delay users actually reach for.
+
+Revisit only if audio sync complaints appear against real content. Adding it later is a
+contained change; building it now is not.
+
+### D2. LGPL — **keep static linking; make the decoder repo public**
+
+Shared libraries were the instinctive answer and are the wrong one here: FFmpeg built shared
+would produce `libavcodec.so`, `libavformat.so` and friends, and the app **already ships
+those names** from `ffmpeg-kit`. Two different `libavcodec.so` cannot coexist in
+`lib/arm64-v8a/`. Working around that means `--build-suffix`, which forks the build script
+for every media3 upgrade.
+
+Static linking has no collision, is what upstream ships, and the LGPL obligation is
+satisfiable without touching the build at all:
+
+- the code that links FFmpeg is media3's `decoder_ffmpeg`, which is **Apache-2.0 and
+  public** — Glide itself never links FFmpeg;
+- so make `glide-ffmpeg-decoder` **public**, and attach the FFmpeg static libraries and
+  `build.properties` to each release.
+
+Anyone can then modify FFmpeg and relink `libffmpegJNI.so` from published inputs and public
+source. That is what §6 asks for, achieved by publishing rather than by re-engineering.
+
+Cheaper, no fork, no name collision, and it makes the build auditable — which tracker §4.1
+wants of anything reaching a release anyway.
+
+### D3. Subtitles — **keep the custom overlay, and render bitmaps in it too**
+
+The overlay stays exactly as it is. `androidx.media3.common.text.Cue` carries **both**
+`text` and `bitmap`, so PGS and VobSub arrive through the same `onCues` callback as text
+cues, as bitmaps to draw.
+
+This removes the dependency on ExoPlayer's subtitle *rendering* entirely — we consume cues
+and draw everything ourselves, which is what we already do — and it retires VLC's SPU path
+along with `setSpuTrack`, `vlcTextTrackId` and the bitmap/text branch in
+`usePlayerTracks`. One rendering path instead of two.
+
+Also settles the earlier open question about android_display refusing to load without a
+subtitles surface: irrelevant, because VLC is going.
+
+### D4. Decoder mode — **remove the setting**
+
+Hardware / software / hardware_plus is a VLC concept exposed in the UI. ExoPlayer selects
+per device and falls back to the FFmpeg extension automatically. Remove the setting, the
+`playerKey` remount it forces, and the `hwDecoderEnabled`/`hwDecoderForced` props.
 
 ## 3.3 What would make this plan wrong
 
