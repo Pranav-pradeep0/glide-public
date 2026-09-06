@@ -70,6 +70,19 @@ const SKIP_TEXT_TAGS = new Set(['rt', 'rp']);
  * DVD/stream conversions. A forgiving tokenizer gives more predictable results
  * on-device than trying to render raw HTML-like text.
  */
+/**
+ * The font files actually bundled in android/app/src/main/assets/fonts.
+ *
+ * Each is its own Android family with no style variants, so any request for a bold or
+ * italic *variant* of one of these resolves to a system font instead. Weight is handled by
+ * choosing the right family (see VideoPlayerScreen's subtitleSettings); italic cannot be,
+ * because we ship no italic file.
+ */
+const BUNDLED_FONT_FAMILIES = ['NetflixSans-Light', 'NetflixSans-Medium', 'NetflixSans-Bold'];
+
+const usesBundledFont = (family?: string): boolean =>
+    Platform.OS === 'android' && !!family && BUNDLED_FONT_FAMILIES.includes(family);
+
 export class SubtitleHtmlParser {
     static resolveSegmentTextStyle(
         segment: ParsedSegment,
@@ -88,7 +101,9 @@ export class SubtitleHtmlParser {
             segmentStyle.fontWeight = baseFontWeight;
         }
 
-        if (baseStyle.fontStyle) {
+        // Same trap as the per-segment italic below: an italic base style on a bundled
+        // family would swap the whole line to a system font.
+        if (baseStyle.fontStyle && !usesBundledFont(segmentStyle.fontFamily)) {
             segmentStyle.fontStyle = baseStyle.fontStyle;
         }
 
@@ -122,7 +137,25 @@ export class SubtitleHtmlParser {
         }
 
         if (segment.italic) {
-            segmentStyle.fontStyle = 'italic';
+            // Only when the platform can actually deliver an italic *of this font*.
+            //
+            // React Native resolves a style variant on Android by filename:
+            // ReactFontManager looks for `<family>_italic.ttf|.otf` in assets/fonts and,
+            // failing that, calls Typeface.create(family, ITALIC). "NetflixSans-Medium" is
+            // not a system family name, so that call returns **Roboto italic** — the font
+            // silently changes mid-line wherever a subtitle uses <i>, which is what users
+            // see as "some words are in the wrong font".
+            //
+            // We ship Light, Medium and Bold and no italics, so asking for italic on a
+            // bundled family can only lose the font. Keeping the typeface the user chose
+            // matters more than the slant.
+            //
+            // To get real italics, drop `NetflixSans-Medium_italic.otf` (and _bold_italic)
+            // into android/app/src/main/assets/fonts — RN picks them up by that exact
+            // naming with no code change, and this guard then stops applying.
+            if (!usesBundledFont(segmentStyle.fontFamily)) {
+                segmentStyle.fontStyle = 'italic';
+            }
         }
 
         if (segment.underline) {
