@@ -1774,6 +1774,209 @@ root-package dependency and therefore needs its own migration checklist.
   dependency substitutions, and duplicate app-level FFmpeg/smart-exception dependencies.
 - `[todo]` Keep the focused wrapper repair and full migration as separate commits/phases.
 
+### 11.5 HDR10 renders washed out — a LibVLC 3.x capability limit (2026-09-06)
+
+Reported from device use: HDR10 files play with flat, desaturated colour. VLC's own
+Android app plays the same file correctly on the same phone (Nothing AIN065, Android 16,
+display reports `supportedHdrTypes=[2,3,4]`, `mMaxLuminance=420`, `HDR_CONVERSION_SYSTEM`).
+
+**This was chased through four wrong explanations before the mechanism was established.**
+Each was plausible, each was disproved by a device capture, and the pattern in every case
+was reasoning from what was *present* in the build rather than what actually *ran*. VLC was
+silent throughout because no log listener is set and verbosity defaults to 0; `-vv` should
+have been the first move, not the fifth.
+
+- `[done]` `TextureView` was the first suspect and is a real limitation — Android documents
+  that HDR needs `SurfaceView` — so the view was migrated. It measurably improved
+  display-mode fit and is worth keeping on that basis, but it **did not** change HDR
+  colour. Necessary, not sufficient.
+- `[done]` The `--video-filter=adjust` enhancement toggle appearing to "fix" colour was a
+  red herring: `shouldUseEnhancementCompatiblePipeline` is sticky, so `--no-mediacodec-dr`
+  survives the toggle being turned off.
+- `[done]` libplacebo *is* linked into this build — the binary carries its ABI-check string
+  and the `tone-mapping`, `tone-mapping-param` and `rendering-intent` options that VLC 3.0
+  only registers under `HAVE_LIBPLACEBO`, and the configure line carries `--enable-gles2`.
+  None of that helps, which is the point: presence is not reachability.
+
+**Mechanism, from device captures.** VLC selects its vout like this:
+
+- `android_display` refuses to load: `can't get Subtitles Surface` →
+  `cannot blend subtitles with an opaque surface, trying next vout`. Glide never calls
+  `IVLCVout.setSubtitlesView`. VLC 3.0's `modules/video_output/android/display.c` gates
+  this on `!vd->obj.force && sys->p_window->b_opaque`.
+- VLC therefore falls back to `gles2`, which opens with `I420` as its display format. A
+  10-bit `I0AL` decoder output gets a swscale filter appended and the HDR precision is
+  destroyed before anything could tone map it.
+- Naming the module explicitly (`--vout=android_display`) sets `obj.force` and *does* load
+  it opaque with hardware decode — and colour is **still wrong**. VLC 3.0's
+  `android_display` never calls `setBuffersDataSpace`, so the surface is never tagged
+  BT2020/PQ and the compositor has nothing to act on. Forcing it also breaks every resize
+  mode, because scaling becomes the surface's job while our geometry drives VLC's
+  `setScale`/`setAspectRatio`.
+- `[keep]` The `Could not initialize NativeWindow Priv API` warning is **not** related.
+  Those symbols are buffer management (`connect`, `setUsage`, `setBuffersGeometry`,
+  `dequeue`, `queue`); none touch colour.
+
+- `[done]` `[decision]` LibVLC `3.7.5` was tried and reverted. It is VLC core 3.0.24-beta1
+  against 3.6.5's 3.0.22-rc1, with a byte-identical configure line, and it did not change
+  HDR colour. It also regressed playback: `Opaque Vout request failed` →
+  `AMediaCodec.configure failed`, and the first playback of a session did not start until
+  the video was closed and reopened. Do not take 3.7.5 for this.
+- `[decision]` **HDR10 cannot be rendered correctly on LibVLC 3.x here.** The remaining
+  options are to evaluate LibVLC 4 EAP, where libplacebo runs across the pipeline rather
+  than only in an 8-bit ES2 vout, or to accept the limitation and say so in the UI.
+  Section 18 currently forbids LibVLC 4 EAP; that rule predates this evidence and needs an
+  explicit owner decision rather than being quietly broken.
+- `[todo]` Independent of HDR, the enhancement toggle is a **performance defect**. Setting
+  `--no-mediacodec-dr` makes `AMediaCodec.configure` fail outright on this device, so
+  playback silently falls back to software-decoding 4K and swscaling `I0AL` to `RV16`
+  (RGB565). It is measurably laggy and stays laggy for the rest of the session because the
+  flag is sticky. Fix this whatever is decided about HDR.
+
+### 11.6 Plan — HDR, the LibVLC question, and enhancement (2026-09-06)
+
+Three symptoms, one cause: **LibVLC 3.x on modern Android cannot negotiate HDR, and its
+filter architecture cannot apply a video filter without giving up hardware decoding.**
+Everything below follows from that, and from one rule: prove the engine before migrating to
+it. This section has already cost four confident wrong explanations.
+
+**What Android actually requires**, from the platform HDR guide, is short: a `SurfaceView`,
+and a `MediaCodec` configured against it with the HDR profile set (`KEY_PROFILE`, e.g.
+`AV1ProfileMain10` / `HEVCProfileMain10HDR10`). Then "standard MediaCodec playback flow
+handles HDR without any special handling" and the system does the tone mapping. No
+dataspace call is needed from the app. So the bar is low, and VLC 3.x is not clearing it —
+consistent with the 23 consecutive
+`Exception occurred in MediaCodecInfo.getCapabilitiesForType` lines in every device capture,
+which is VLC failing to enumerate codec capabilities on Android 16 before it ever gets to
+profile negotiation.
+
+#### Phase 1 — stop the bleeding (no engine decision required)
+
+- `[todo]` **Fix the enhancement defect.** `--no-mediacodec-dr` makes
+  `AMediaCodec.configure` fail on this device, dropping to software 4K decode and `RV16`.
+  Until a GPU path exists, enhancement must not silently do this: either gate it off above
+  a resolution threshold, or clear `mEnhancementCompatiblePipeline` on toggle-off so the
+  damage is not sticky for the session. It is currently a performance defect sold as a
+  colour feature.
+- `[todo]` **Provide the subtitles surface.** `ReactVlcPlayerView` becomes a `FrameLayout`
+  holding two `SurfaceView`s, mirroring VLC's own `VLCVideoLayout`. This stops
+  `android_display` being rejected, which is what silently forces the 8-bit `gles2` path
+  today, and restores bitmap (PGS/VobSub) subtitles. It does **not** fix HDR on its own.
+- `[todo]` **Land the `TextureView` → `SurfaceView` migration** already on
+  `spike/surfaceview-hdr`. It measurably improved display-mode fit and is required by every
+  option below. Needs the section 8.5 geometry matrix and the reported
+  background-resume crashes cleared first.
+
+#### Phase 2 — one cheap experiment that decides everything
+
+- `[todo]` **Play the same HDR10 file through ExoPlayer on this device.** Media3 `1.7.1` is
+  already a dependency for the media session, so this is a throwaway screen with an
+  `ExoPlayer` and a `SurfaceView` — no migration, no commitment. Android's own guidance is
+  "use ExoPlayer, which supports HDR by default and handles these requirements internally."
+
+  This is the measurement the whole question turns on. If ExoPlayer renders it correctly,
+  the engine is the problem and Phase 3 is justified on evidence. If ExoPlayer is *also*
+  washed out, the problem is the device or the file, LibVLC is exonerated, and no migration
+  should happen at all. Either answer is worth far more than another option guess.
+
+**Phase 2 result, 2026-09-06: ExoPlayer renders HDR correctly on this device.** A
+debug-only `HdrSpikeActivity` — an `ExoPlayer` and a `SurfaceView`, nothing else — played a
+2160p HDR10+/DV file and reported:
+
+    track codec=video/dolby-vision colorSpace=6 colorTransfer=6 colorRange=2
+
+`colorSpace=6` is BT.2020 and `colorTransfer=6` is ST2084 (PQ), so the decoder negotiated
+true HDR, and the picture was correct on screen. Same device, same panel, same class of
+file that LibVLC 3.x renders washed out. **The engine is the problem, and the migration is
+justified on measurement rather than argument.**
+
+**Phase 2 also settled the audio question, and the answer is the bad one.** This device
+declares no Dolby decoder of any kind — the full audio list from
+`/vendor/etc/media_codecs*.xml` is 3gpp, alac, amr-wb, amr-wb-plus, dsd, evrc, flac, g711,
+gsm, mp4a-latm, mpeg, opus, qcelp, raw, vorbis, x-ape, x-ms-wma. No `ac3`, `eac3`, `ac4`,
+`dts` or `truehd`. So:
+
+**Confirmed on device 2026-09-06 against a DUAL E-AC-3 file.** Both audio tracks report
+`SUPPORTED=false SELECTED=false`, and ExoPlayer raised **no error** — its track selector
+simply declines to pick a track it has no decoder for and plays on, video-only. The file is
+silent, with nothing in the log to explain it. That is a worse failure mode than a crash and
+must not reach a user.
+
+Two other results from the same capture:
+
+- `[keep]` **ExoPlayer parses embedded subtitles natively**: seven tracks came back as
+  `application/x-media3-cues` with `SUPPORTED=true`, immediately. Glide's current path
+  shells out to `ffmpeg-kit` per track and the device log measures that at 1.5-3.0 s per
+  extraction before any cue is available. Migrating the engine therefore also removes a
+  multi-second delay and a whole extraction/caching subsystem from the subtitle path.
+  Confirm `ffmpeg-kit`'s remaining callers before assuming the dependency can go.
+- `[keep]` `Frankenstein...DD 5.1.Atmos.mkv` is **SDR**, not HDR — `colorSpace=-1
+  colorTransfer=-1`, 1920x1080. Every HDR observation this session came from the 2160p
+  `The Boys` file at 3840x1600. Do not use the Frankenstein file as an HDR comparison.
+
+- `[todo]` The Media3 **FFmpeg decoder extension is mandatory**, not optional insurance.
+  Build it with `ENABLED_DECODERS=(ac3 eac3 dca mlp truehd)` against FFmpeg 6.0. Without
+  it, moving to ExoPlayer loses audio outright on every AC-3/E-AC-3 file — which is most
+  of this library. This is the single largest piece of Phase 3 work.
+- `[keep]` Atmos is **not** a regression. E-AC-3 JOC is a 5.1 core plus proprietary object
+  metadata; FFmpeg decodes the core and discards the metadata, and VLC uses FFmpeg's `eac3`
+  decoder, so nothing on this device renders true Atmos today either. Do not let the word
+  "Atmos" in a filename block this decision.
+
+#### Phase 3 — engine strategy
+
+- `[done]` `[decision]` **Replace LibVLC with ExoPlayer outright. Owner decision
+  2026-09-06**, taken knowingly against the format loss below, for half the APK and the
+  performance and feature wins measured in Phase 2. Rejected: dual-engine, which keeps every
+  format but saves nothing on size and leaves two engines to maintain. Nova Video Player
+  runs dual-engine (avos + a custom ExoPlayer fork on `dev-v2-ffmpeg`), but it is Android
+  TV-first, where passthrough to a receiver changes the audio calculus entirely, and its
+  native core is a decade of accumulated code that would have to be rebuilt here rather
+  than reused.
+
+**What is actually lost.** Verified against Media3's extractor set, not assumed:
+
+- **WMV / ASF.** No extractor exists in Media3 and the FFmpeg extension is audio-only, so
+  this is a container gap that cannot be closed by enabling decoders. Remove `.wmv` from
+  `VIDEO_EXTENSIONS` and `DeepLinkService` rather than failing on open.
+- **RTMP.** Not supported. `rtsp://` *is*, via `media3-exoplayer-rtsp`. Remove the
+  `rtmp://` branches in `NavigationService` and `VideoPlayerScreen`.
+- **AVI is *not* lost** — `AviExtractor` is in Media3; the published supported-formats page
+  omits it. Do not drop `.avi` from the advertised list.
+- Audio delay needs a custom `AudioProcessor` or must be dropped. Subtitle delay is free:
+  cues are rendered by `SubtitleOverlay`, so it is an offset in JavaScript.
+- The 10-band equalizer moves to `android.media.audiofx.Equalizer` against ExoPlayer's
+  audio session id, which is a system-level effect rather than a VLC-only one.
+
+**What section 9 gets back.** `VlcMedia3Player` exists only because LibVLC is not a Media3
+`Player` — ~170 lines of `SimpleBasePlayer` adapter mirroring VLC's state, plus every defect
+found in it: the position supplier outliving a released player, the session never being
+registered without a `MediaController`, and the PiP-close state divergence. Handing a real
+`ExoPlayer` to `MediaSession` deletes the adapter and that entire class of bug.
+
+**Detail: `docs/exoplayer-migration.md`.** The FFmpeg build, its CI, licensing, the feature
+port matrix and the sequencing live there rather than doubling this section. This section
+remains the decision of record.
+
+#### Phase 3 work items, in dependency order
+
+- `[decision]` **Option A — Media3/ExoPlayer as the primary engine, LibVLC as fallback.**
+  HDR10 works by default; colour enhancement becomes `ExoPlayer.setVideoEffects()` with
+  `Contrast`, `HslAdjustment` and `RgbAdjustment`, which are `GlEffect` shader programs on
+  the GPU and therefore keep hardware decoding — solving the enhancement defect properly
+  rather than gating it. Media3 session and notification are already integrated. Cost is
+  real: ExoPlayer does not cover every container, codec and network protocol VLC does, so
+  this is a dual-engine design, not a replacement.
+- `[decision]` **Option B — LibVLC 4 EAP.** 4.0 carries libplacebo across the pipeline and
+  advertises improved HDR. But it is EAP, section 18 forbids it, the API differs from 3.x,
+  and it would land on top of 198 `mMediaPlayer` call sites. Reopen section 18's rule
+  explicitly if this is chosen; do not drift into it.
+- `[keep]` **Option C — stay on 3.x and document HDR as unsupported.** Legitimate if
+  Phase 2 shows the gap is small or the audience does not care. Requires honest UI copy,
+  not silence.
+- `[done]` LibVLC `3.7.5` is **not** an option: measured, no colour change, and it regressed
+  first playback. See 11.5.
+
 ### 11.4 Final native package validation
 
 - `[todo]` Run `zipalign -c -P 16 -v 4` on each signed APK.
