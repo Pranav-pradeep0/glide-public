@@ -91,6 +91,12 @@ android/app/my-upload-key.keystore
 glide-crash.txt
 glide-exit-info.txt
 
-# Temporary: proving the FFmpeg decoder extension. Replace with the GitHub Packages
-# coordinate from glide-ffmpeg-decoder once a version is tagged.
+# Vendored AARs stay out of the repo -- tracker 12.3 is removing the ones that remain.
 android/app/libs/*.aar
+# ...with one exception, deliberately. The Media3 FFmpeg decoder is now mandatory: with
+# LibVLC gone it is the only thing that decodes AC-3, E-AC-3, DTS and TrueHD, and this
+# device has none of them in hardware. Without it a release build plays those tracks
+# silently with no error. It is ignored everywhere else and unresolvable from a clone, so
+# CI could not build a release at all. Committed until the GitHub Packages coordinate from
+# glide-ffmpeg-decoder exists (plan section 4.3), which is the real fix.
+!android/app/libs/lib-decoder-ffmpeg-release.aar
