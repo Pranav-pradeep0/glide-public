@@ -6,10 +6,13 @@
  * as well as toast notifications.
  */
 
-import { useCallback, useState, useMemo } from 'react';
+import { useCallback, useState, useMemo, useRef, useEffect } from 'react';
 import { useVideoHistoryStore } from '@/store/videoHistoryStore';
 import { useShallow } from 'zustand/shallow';
 import { UsePlayerBookmarksReturn, PLAYER_CONSTANTS, formatTime } from './types';
+
+/** BookmarkToast's own auto-hide is 2000 ms; this only has to outlast it. */
+const TOAST_FALLBACK_HIDE_MS = 2600;
 
 // ============================================================================
 // TYPES
@@ -59,22 +62,48 @@ export function usePlayerBookmarks(options: UsePlayerBookmarksOptions): UsePlaye
 
     const [showToast, setShowToast] = useState(false);
     const [toastMessage, setToastMessage] = useState('');
-    const [toastIcon, setToastIcon] = useState('bookmark');
     const [toastKey, setToastKey] = useState(0);
 
     // ========================================================================
     // TOAST HELPERS
     // ========================================================================
 
-    const showToastWithMessage = useCallback((message: string, icon: string = 'bookmark') => {
-        setToastMessage(message);
-        setToastIcon(icon);
-        setShowToast(true);
-        setToastKey(prev => prev + 1);
-    }, []);
+    /**
+     * The timeout lives here, not in BookmarkToast.
+     *
+     * BookmarkToast auto-hides itself after `duration` and reports it through `onHide`, but
+     * the screen unmounts it whenever the player enters PiP. Unmounting cancels the
+     * animation, so `onHide` never fires and `showToast` stays true forever — and the toast
+     * replays on the next mount. That is why an "enabled" toast reappeared on returning to
+     * the player from PiP or from the notification. Owning visibility means owning the
+     * timeout that ends it.
+     */
+    const toastTimerRef = useRef<NodeJS.Timeout | null>(null);
 
     const hideToast = useCallback(() => {
+        if (toastTimerRef.current) {
+            clearTimeout(toastTimerRef.current);
+            toastTimerRef.current = null;
+        }
         setShowToast(false);
+    }, []);
+
+    const showToastWithMessage = useCallback((message: string) => {
+        setToastMessage(message);
+        setShowToast(true);
+        setToastKey(prev => prev + 1);
+
+        if (toastTimerRef.current) {clearTimeout(toastTimerRef.current);}
+        // Slightly longer than BookmarkToast's own 2000 ms so the component still owns the
+        // exit animation in the normal case; this only catches the unmounted one.
+        toastTimerRef.current = setTimeout(() => {
+            toastTimerRef.current = null;
+            setShowToast(false);
+        }, TOAST_FALLBACK_HIDE_MS);
+    }, []);
+
+    useEffect(() => () => {
+        if (toastTimerRef.current) {clearTimeout(toastTimerRef.current);}
     }, []);
 
     // ========================================================================
@@ -110,7 +139,7 @@ export function usePlayerBookmarks(options: UsePlayerBookmarksOptions): UsePlaye
      */
     const deleteBookmark = useCallback((bookmarkId: string) => {
         storeRemoveBookmark(videoPath, bookmarkId);
-        showToastWithMessage('Bookmark deleted', 'bookmark-remove');
+        showToastWithMessage('Bookmark deleted');
 
         if (__DEV__) {
             if (__DEV__) {console.log('[usePlayerBookmarks] Bookmark deleted:', bookmarkId);}
@@ -136,7 +165,6 @@ export function usePlayerBookmarks(options: UsePlayerBookmarksOptions): UsePlaye
         bookmarks,
         showToast,
         toastMessage,
-        toastIcon,
         toastKey,
 
         addBookmark,
@@ -146,7 +174,7 @@ export function usePlayerBookmarks(options: UsePlayerBookmarksOptions): UsePlaye
         showToastWithMessage,
     }), [
         bookmarks,
-        showToast, toastMessage, toastIcon, toastKey,
+        showToast, toastMessage, toastKey,
         addBookmark, deleteBookmark, jumpToBookmark,
         hideToast, showToastWithMessage,
     ]);
