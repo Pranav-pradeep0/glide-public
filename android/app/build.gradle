@@ -198,6 +198,11 @@ dependencies {
     // Phase 2 spike, debug only: does ExoPlayer render HDR10 correctly on this device?
     // media3-session/common are already used by the player module at the same version.
     debugImplementation "androidx.media3:media3-exoplayer:1.11.0"
+    // TEMPORARY, debug only. Proving the FFmpeg decoder extension restores E-AC-3 audio
+    // before committing to it. Built by the private glide-ffmpeg-decoder repo; replace
+    // with its GitHub Packages coordinate once a version is tagged, so this never becomes
+    // another vendored AAR of the kind tracker 12.3 is removing. Not committed.
+    debugImplementation files("libs/lib-decoder-ffmpeg-release.aar")
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")

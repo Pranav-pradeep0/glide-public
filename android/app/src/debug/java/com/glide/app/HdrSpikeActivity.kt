@@ -7,8 +7,11 @@ import android.view.SurfaceView
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
+import androidx.media3.decoder.ffmpeg.FfmpegLibrary
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 
 /**
@@ -56,7 +59,21 @@ class HdrSpikeActivity : Activity() {
         )
         setContentView(root)
 
-        player = ExoPlayer.Builder(this).build().apply {
+        // The FFmpeg extension is inert unless the renderer is registered. MODE_ON keeps
+        // platform decoders first and falls back to FFmpeg only where the device has none
+        // -- which on this device is every one of AC-3, E-AC-3, DTS and TrueHD. MODE_PREFER
+        // would force software decoding even where hardware exists; never use it here.
+        val renderersFactory = DefaultRenderersFactory(this)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+
+        Log.w(TAG, "ffmpeg extension available=${FfmpegLibrary.isAvailable()} " +
+            "version=${FfmpegLibrary.getVersion()} " +
+            "eac3=${FfmpegLibrary.supportsFormat(MimeTypes.AUDIO_E_AC3)} " +
+            "ac3=${FfmpegLibrary.supportsFormat(MimeTypes.AUDIO_AC3)} " +
+            "dts=${FfmpegLibrary.supportsFormat(MimeTypes.AUDIO_DTS)} " +
+            "truehd=${FfmpegLibrary.supportsFormat(MimeTypes.AUDIO_TRUEHD)}")
+
+        player = ExoPlayer.Builder(this, renderersFactory).build().apply {
             setVideoSurfaceView(surfaceView)
             addListener(object : Player.Listener {
                 override fun onVideoSizeChanged(videoSize: VideoSize) {

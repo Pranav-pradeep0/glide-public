@@ -208,6 +208,24 @@ tracker 4.1 already treats provenance as a release requirement.
 | `rtmp://` | VLC | **dropped** | accepted |
 | `rtsp://` | VLC | `media3-exoplayer-rtsp` | low |
 
+## 5a. Verified 2026-09-06: the FFmpeg extension works
+
+Built by the private repo, consumed as a local AAR, renderer registered with
+`EXTENSION_RENDERER_MODE_ON`, same file and same activity as the failing measurement:
+
+    ffmpeg extension available=true version=Lavc60.3.100
+        eac3=true ac3=true dts=true truehd=true
+
+    before:  track codec=audio/eac3 channels=6 SUPPORTED=false SELECTED=false   (silent)
+    after:   track codec=audio/eac3 channels=6 SUPPORTED=true  SELECTED=true
+
+`Lavc60.3.100` is libavcodec 60.3.100, i.e. FFmpeg 6.0 — the pin held. The AAR is 2.2 MB
+across four ABIs; `libffmpegJNI.so` is **1.17 MB** in the arm64 APK, against `libvlc.so`
+at 43 MB.
+
+Steps 1 and 2 of the sequence below are therefore done. The blocking item is cleared and
+the migration is unblocked.
+
 ## 6. Sequence
 
 1. **FFmpeg extension in CI**, consumable from Glide. Nothing else can be verified without

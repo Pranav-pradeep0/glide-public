@@ -90,3 +90,7 @@ android/app/my-upload-key.keystore
 # Ad-hoc logcat dumps captured while debugging
 glide-crash.txt
 glide-exit-info.txt
+
+# Temporary: proving the FFmpeg decoder extension. Replace with the GitHub Packages
+# coordinate from glide-ffmpeg-decoder once a version is tagged.
+android/app/libs/*.aar
