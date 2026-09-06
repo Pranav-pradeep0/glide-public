@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect } from 'react';
-import { StyleSheet, useWindowDimensions } from 'react-native';
+import { Image, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
     useSharedValue,
@@ -8,8 +8,12 @@ import Animated, {
     runOnJS,
 } from 'react-native-reanimated';
 import type { SubtitleCue } from '@/types';
+import type { BitmapCue } from '@/components/VideoPlayer/GlidePlayer';
 import { FormattedSubtitleText } from '@/utils/SubtitleHtmlParser';
 
+
+/** Tracking added to subtitle text, in px. See the comment at its use site. */
+const SUBTITLE_LETTER_SPACING = 0.3;
 
 export interface SubtitleSettings {
     fontSize: number;
@@ -27,6 +31,8 @@ export interface SubtitleSettings {
 
 interface SubtitleOverlayProps {
     currentCue: SubtitleCue | null;
+    /** Bitmap (PGS/VobSub) cues from the native player. Drawn instead of text. */
+    bitmapCues?: BitmapCue[];
     settings: SubtitleSettings;
     onPositionChange?: (yOffset: number) => void;
     onFontSizeChange?: (fontSize: number) => void;
@@ -35,6 +41,7 @@ interface SubtitleOverlayProps {
 
 export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = React.memo(({
     currentCue,
+    bitmapCues,
     settings,
     onPositionChange,
     onFontSizeChange,
@@ -90,7 +97,10 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = React.memo(({
                 return 0;
             case 'bottom':
             default:
-                return height * 0.42; // Push closer to bottom
+                // ~12% up from the bottom edge. 0.42 sat below the transport controls and
+                // close enough to the gesture bar to feel cramped; this is the conventional
+                // subtitle band. Draggable either way, and the drag is what persists.
+                return height * 0.38;
         }
     }, [settings.position, settings.positionOffsetRatio, height]);
 
@@ -263,6 +273,47 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = React.memo(({
                 .toString(16)
                 .padStart(2, '0')}`;
 
+    /**
+     * Bitmap subtitles (PGS/VobSub) are pictures, not text, so none of the styling below
+     * applies to them — no font, colour, outline or background. They are drawn where the
+     * source says, using media3's viewport fractions, and only fall back to bottom-centre
+     * when the source left the geometry unset (-1).
+     *
+     * They also bypass the drag-to-reposition gesture: the position is baked into the image
+     * by the authoring, and moving it would misalign it with the picture it belongs to.
+     */
+    if (bitmapCues && bitmapCues.length > 0) {
+        return (
+            <View style={styles.container} pointerEvents="none">
+                {bitmapCues.map((cue, i) => {
+                    const hasGeometry = cue.position >= 0 && cue.line >= 0;
+                    const aspect = cue.height > 0 ? cue.width / cue.height : 1;
+                    return (
+                        <Image
+                            key={`${i}-${cue.line}-${cue.position}`}
+                            source={{ uri: `data:image/png;base64,${cue.png}` }}
+                            resizeMode="contain"
+                            style={
+                                hasGeometry
+                                    ? {
+                                        position: 'absolute',
+                                        left: `${cue.position * 100}%`,
+                                        top: `${cue.line * 100}%`,
+                                        width: cue.size > 0 ? `${cue.size * 100}%` : undefined,
+                                        height: cue.bitmapHeight > 0
+                                            ? `${cue.bitmapHeight * 100}%`
+                                            : undefined,
+                                        aspectRatio: cue.bitmapHeight > 0 ? undefined : aspect,
+                                    }
+                                    : styles.bitmapFallback
+                            }
+                        />
+                    );
+                })}
+            </View>
+        );
+    }
+
     return (
         <GestureDetector gesture={composedGesture}>
             <Animated.View
@@ -300,6 +351,11 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = React.memo(({
                                 fontFamily: settings.fontFamily,
                                 lineHeight: resolvedLineHeight,
                                 textAlign: 'center',
+                                // Slight positive tracking. Subtitles sit over moving,
+                                // often noisy picture, where tightly-set letters bleed
+                                // into each other; a little air makes them separable
+                                // without looking spaced out. Tune here if it reads loose.
+                                letterSpacing: SUBTITLE_LETTER_SPACING,
                                 includeFontPadding: false, // Android specific fix for vertical alignment
                                 ...textShadowStyle,
                             }}
@@ -315,6 +371,14 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = React.memo(({
 
 
 const styles = StyleSheet.create({
+    /** Used when a bitmap cue arrives with no geometry: full width, sitting near the bottom. */
+    bitmapFallback: {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        bottom: '8%',
+        height: '20%',
+    },
     container: {
         position: 'absolute',
         left: 0,

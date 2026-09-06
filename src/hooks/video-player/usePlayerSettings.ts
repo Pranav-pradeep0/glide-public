@@ -1,11 +1,11 @@
 /**
  * usePlayerSettings Hook
  *
- * Manages player settings like mute, repeat, decoder, resize mode, and sleep timer.
+ * Manages player settings like mute, repeat, resize mode, and sleep timer.
  */
 
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import { PlayerResizeMode } from '@glide/vlc-player';
+import type { PlayerResizeMode } from '@/components/VideoPlayer/GlidePlayer';
 import { PlayerSettings, UsePlayerSettingsReturn } from './types';
 import { EQUALIZER_PRESETS } from '@/config/equalizerPresets';
 
@@ -14,7 +14,6 @@ import { EQUALIZER_PRESETS } from '@/config/equalizerPresets';
 // ============================================================================
 
 interface UsePlayerSettingsOptions {
-    onDecoderChange?: () => void;
     onSleepTimerEnd?: () => void;
     showToast?: (message: string, icon?: string) => void;
     initialAudioDelay?: number;
@@ -30,9 +29,7 @@ const initialSettings: PlayerSettings = {
     muted: false,
     repeat: false,
     sleepTimer: null,
-    decoder: 'hardware',
     resizeMode: 'contain',
-    playerKey: 0,
     skipDuration: 30,
     backgroundPlayEnabled: false,
     videoEnhancement: false,
@@ -66,13 +63,11 @@ const initialSettings: PlayerSettings = {
  * Settings include:
  * - Mute toggle
  * - Repeat mode
- * - Decoder selection (hardware, software, hardware+)
  * - Resize mode
  * - Sleep timer
  */
 export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePlayerSettingsReturn {
     const {
-        onDecoderChange,
         onSleepTimerEnd,
         showToast,
         initialAudioDelay = 0,
@@ -125,26 +120,6 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
     // DECODER
     // ========================================================================
 
-    const setDecoder = useCallback((decoder: 'hardware' | 'software' | 'hardware_plus') => {
-        setSettings(prev => {
-            if (prev.decoder === decoder) { return prev; }
-
-            return {
-                ...prev,
-                decoder,
-                playerKey: prev.playerKey + 1,
-            };
-        });
-
-        // Notify about decoder change for toast
-        const decoderName = decoder === 'hardware_plus' ? 'HW+' :
-            decoder === 'hardware' ? 'HW' : 'SW';
-        showToast?.(`Decoder switched to ${decoderName}`, 'decoder');
-
-        // Call callback for any additional handling
-        onDecoderChange?.();
-    }, [showToast, onDecoderChange]);
-
     // ========================================================================
     // RESIZE MODE
     // ========================================================================
@@ -191,12 +166,12 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
                 onSleepTimerEnd?.();
             }, minutes * 60 * 1000);
 
-            showToast?.(`Sleep timer set for ${minutes} minutes`, 'sleep-timer');
+            showToast?.(`Sleep timer set for ${minutes} minutes`);
         } else if (minutes === -1) {
             // End of video - handled in player's onEnd
-            showToast?.('Sleep timer set for End of Video', 'sleep-timer');
+            showToast?.('Sleep timer set for End of Video');
         } else {
-            showToast?.('Sleep timer disabled', 'sleep-timer');
+            showToast?.('Sleep timer disabled');
         }
     }, [clearSleepTimer, onSleepTimerEnd, showToast]);
 
@@ -210,10 +185,7 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
         // Marked experimental until the Media3 foreground service exists (tracker §9).
         // Playback is owned by the Activity, so Android can reclaim it while backgrounded,
         // and from target SDK 35 it refuses audio focus to a background app outright.
-        showToast?.(
-            newValue ? 'Background play on · experimental' : 'Background play off',
-            'background-play'
-        );
+        showToast?.(newValue ? 'Background play on · experimental' : 'Background play off');
         setSettings(prev => ({
             ...prev,
             backgroundPlayEnabled: newValue,
@@ -231,7 +203,7 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
                 ? 'Color Enhancement Enabled'
                 : 'Color Enhancement Disabled';
 
-            showToast?.(message, 'video-enhancement');
+            showToast?.(message);
 
             return {
                 ...prev,
@@ -322,7 +294,6 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
         settings,
         toggleMute,
         toggleRepeat,
-        setDecoder,
         setResizeMode,
         toggleResizeMode,
         setSleepTimer,
@@ -343,7 +314,7 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
     }), [
         settings,
         toggleMute, toggleRepeat,
-        setDecoder, setResizeMode, toggleResizeMode,
+        setResizeMode, toggleResizeMode,
         setSleepTimer, clearSleepTimer,
         toggleBackgroundPlay, toggleVideoEnhancement,
         toggleEqualizer, setEqualizerPreset, setCustomEqualizerBands, setSingleBand, audioEqualizer,

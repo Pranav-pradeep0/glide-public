@@ -2,7 +2,7 @@ import React, { memo, useRef, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { Feather } from '@react-native-vector-icons/feather';
-import { PlayerResizeMode } from '@glide/vlc-player';
+import type { PlayerResizeMode } from '@/components/VideoPlayer/GlidePlayer';
 import { AudioIcon, SubtitleIcon, BookmarkListIcon } from './PlayerIcons';
 import { useAppStore } from '../../store/appStore';
 import HapticModule from '../../native/HapticModule';
@@ -44,8 +44,6 @@ interface QuickSettingsPanelProps {
     onToggleRepeat: () => void;
     sleepTimer: number | null;
     onSetSleepTimer: (minutes: number | null) => void;
-    decoder: 'hardware' | 'software' | 'hardware_plus';
-    onSetDecoder: (mode: 'hardware' | 'software' | 'hardware_plus') => void;
     onOpenPlaylist?: () => void;
     onOpenAudio: () => void;
     onOpenSubtitle: () => void;
@@ -334,29 +332,6 @@ export const QuickSettingsPanel: React.FC<QuickSettingsPanelProps> = memo((props
                             </ScrollView>
                         </View>
 
-                        {/* DECODER */}
-                        <View style={styles.section}>
-                            <Text style={styles.sectionTitle}>DECODER</Text>
-                            <View style={styles.segmentContainer}>
-                                {(['hardware', 'hardware_plus', 'software'] as const).map(mode => (
-                                    <Pressable
-                                        key={mode}
-                                        style={[
-                                            styles.segmentBtn,
-                                            props.decoder === mode && styles.activeSegment,
-                                        ]}
-                                        onPress={() => props.onSetDecoder(mode)}
-                                    >
-                                        <Text style={[
-                                            styles.segmentText,
-                                            props.decoder === mode && styles.activeSegmentText,
-                                        ]}>
-                                            {mode === 'hardware_plus' ? 'HW+' : mode === 'hardware' ? 'HW' : 'SW'}
-                                        </Text>
-                                    </Pressable>
-                                ))}
-                            </View>
-                        </View>
 
                         {/* ACTIONS LIST */}
                         <View style={[styles.section, { marginBottom: 60 }]}>

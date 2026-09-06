@@ -8,7 +8,7 @@ export class DeepLinkService {
      * Check if a URI looks like a video file
      */
     static isVideoUri(uri: string): boolean {
-        const videoExtensions = ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.3gp', '.ts', '.mpg', '.mpeg', '.m3u8'];
+        const videoExtensions = ['.mp4', '.mkv', '.avi', '.mov', '.flv', '.webm', '.m4v', '.3gp', '.ts', '.mpg', '.mpeg', '.m3u8'];
         const lowerUri = uri.toLowerCase();
 
         // Check by extension (works for all URI types)

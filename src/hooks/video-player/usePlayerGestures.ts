@@ -18,7 +18,7 @@ import {
     SharedValue,
     runOnJS,
 } from 'react-native-reanimated';
-import type { PlayerResizeMode } from '@glide/vlc-player';
+import type { PlayerResizeMode } from '@/components/VideoPlayer/GlidePlayer';
 
 const { AudioControlModule } = NativeModules;
 

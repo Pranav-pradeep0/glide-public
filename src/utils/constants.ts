@@ -1,7 +1,7 @@
 import * as RNFS from '@dr.pogodin/react-native-fs';
 
 export const VIDEO_EXTENSIONS = [
-    '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv',
+    '.mp4', '.mkv', '.avi', '.mov', '.flv',
     '.webm', '.m4v', '.3gp', '.mpeg', '.mpg',
 ];
 

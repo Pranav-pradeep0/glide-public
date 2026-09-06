@@ -1,4 +1,3 @@
-
 import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
     StyleSheet,
@@ -15,7 +14,7 @@ import { useSafeAreaInsets, initialWindowMetrics } from 'react-native-safe-area-
 import { useIsFocused, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { SystemBars } from 'react-native-edge-to-edge';
-import { PlayerResizeMode } from '@glide/vlc-player';
+import type { PlayerResizeMode } from '@/components/VideoPlayer/GlidePlayer';
 
 // Native Modules
 const { AudioControlModule } = NativeModules;
@@ -178,8 +177,7 @@ export default function VideoPlayerScreen({ route }: Props) {
     const source = useMemo(() => {
         if (videoPath.startsWith('http://') ||
             videoPath.startsWith('https://') ||
-            videoPath.startsWith('rtsp://') ||
-            videoPath.startsWith('rtmp://')) {
+            videoPath.startsWith('rtsp://')) {
             return { uri: videoPath, isNetwork: true };
         }
         if (videoPath.startsWith('content://')) {
@@ -330,7 +328,7 @@ export default function VideoPlayerScreen({ route }: Props) {
 
     // Settings hook (independent, needed by other hooks)
     const settingsHook = usePlayerSettings({
-        showToast: (message, icon) => bookmarksHook.showToastWithMessage(message, icon),
+        showToast: (message) => bookmarksHook.showToastWithMessage(message),
         onSleepTimerEnd: () => {
             player.stop();
             navigation.goBack();
@@ -625,7 +623,7 @@ export default function VideoPlayerScreen({ route }: Props) {
     const handleToggleHaptics = useCallback(() => {
         setHapticsEnabled(prev => {
             const next = !prev;
-            bookmarksHook.showToastWithMessage(`Haptics ${next ? 'Enabled' : 'Disabled'}`, 'haptics');
+            bookmarksHook.showToastWithMessage(`Haptics ${next ? 'Enabled' : 'Disabled'}`);
             if (next) {
                 HapticEngineService.getInstance().triggerUIFeedback('light');
             }
@@ -937,7 +935,7 @@ export default function VideoPlayerScreen({ route }: Props) {
         if (isNetworkStream) {return;}
 
         if (!RECAP_STT_AVAILABLE) {
-            bookmarksHook.showToastWithMessage('Recap is not available in this build', 'recap');
+            bookmarksHook.showToastWithMessage('Recap is not available in this build');
             return;
         }
         // If we already have recap text, just show it
@@ -951,7 +949,7 @@ export default function VideoPlayerScreen({ route }: Props) {
         if (!resumePosition) {return;}
 
         if (!isRecapEligible) {
-            bookmarksHook.showToastWithMessage('Recap unavailable for this title', 'recap');
+            bookmarksHook.showToastWithMessage('Recap unavailable for this title');
             return;
         }
 
@@ -984,7 +982,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                 setRecapVisible(false);
                 setIsGeneratingRecap(false);
                 setRecapLoadingMessage(undefined);
-                bookmarksHook.showToastWithMessage('Not enough dialogue for a recap', 'recap');
+                bookmarksHook.showToastWithMessage('Not enough dialogue for a recap');
                 return;
             }
 
@@ -1000,7 +998,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                 setRecapText(null);
                 setRecapVisible(false);
                 setRecapLoadingMessage(undefined);
-                bookmarksHook.showToastWithMessage('Recap generation failed', 'error');
+                bookmarksHook.showToastWithMessage('Recap generation failed');
             }
         } catch (error) {
             console.error('[VideoPlayerScreen] Recap error:', error);
@@ -1008,7 +1006,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                 setRecapText(null);
                 setRecapVisible(false);
                 setRecapLoadingMessage(undefined);
-                bookmarksHook.showToastWithMessage('Recap generation error', 'error');
+                bookmarksHook.showToastWithMessage('Recap generation error');
             }
         } finally {
             if (isMounted.current) {
@@ -1221,8 +1219,6 @@ export default function VideoPlayerScreen({ route }: Props) {
                     <AnimatedVideoView
                         ref={player.videoRef}
                         source={source}
-                        playerKey={settingsHook.settings.playerKey}
-                        decoder={settingsHook.settings.decoder}
                         paused={player.state.paused || resumeModalVisible || recapVisible}
                         rate={effectivePlaybackRate}
                         muted={settingsHook.settings.muted || resumeModalVisible}
@@ -1231,16 +1227,14 @@ export default function VideoPlayerScreen({ route }: Props) {
                         playInBackground={settingsHook.settings.backgroundPlayEnabled}
                         pipEnabled={pipEnabled}
                         pipPresentationActive={pipPresentationActive}
-                        currentTimeRef={player.currentTimeRef}
-                        duration={player.state.duration}
                         videoEnhancement={settingsHook.settings.videoEnhancement}
                         audioTrack={tracksHook.selectedAudioTrackId}
-                        textTrack={tracksHook.vlcTextTrackId ?? -1}
+                        textTrack={tracksHook.nativeTextTrackOrdinal}
+                        onBitmapCues={tracksHook.handleBitmapCues}
                         title={videoName}
                         artist={albumName || 'Glide'}
                         animatedStyle={gestures.videoAnimatedStyle}
                         audioEqualizer={settingsHook.audioEqualizer}
-                        audioDelay={settingsHook.settings.audioDelay}
                         initialResumeSeconds={resumePosition ?? undefined}
                         onLoad={player.handleLoad}
                         onProgress={player.handleProgress}
@@ -1390,8 +1384,6 @@ export default function VideoPlayerScreen({ route }: Props) {
                     onToggleRepeat={settingsHook.toggleRepeat}
                     sleepTimer={settingsHook.settings.sleepTimer}
                     onSetSleepTimer={settingsHook.setSleepTimer}
-                    decoder={settingsHook.settings.decoder}
-                    onSetDecoder={settingsHook.setDecoder}
                     onOpenPlaylist={isNetworkStream ? undefined : handleQSOpenPlaylist}
                     onOpenAudio={handleQSOpenAudio}
                     onOpenSubtitle={handleQSOpenSubtitle}
@@ -1488,6 +1480,7 @@ export default function VideoPlayerScreen({ route }: Props) {
             {!pipPresentationActive && (
                 <SubtitleOverlay
                     currentCue={tracksHook.currentSubtitleCue}
+                    bitmapCues={tracksHook.bitmapCues}
                     settings={subtitleSettings}
                     onPositionChange={handleSubtitlePositionChange}
                 />
@@ -1502,7 +1495,6 @@ export default function VideoPlayerScreen({ route }: Props) {
                         message={bookmarksHook.toastMessage}
                         duration={PLAYER_CONSTANTS.BOOKMARK_TOAST_DURATION_MS}
                         onHide={bookmarksHook.hideToast}
-                        icon={bookmarksHook.toastIcon}
                     />
                 )
             }

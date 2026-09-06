@@ -2,7 +2,8 @@
 
 **Created:** 2026-09-06
 **Prerequisite reading:** `docs/exoplayer-migration.md` (why), tracker §11.5–11.6 (decision).
-**Status:** planning. Phase 0 complete, all four decisions settled; nothing else started.
+**Status:** complete. Phases 0-4 done and verified on device; LibVLC removed. Outstanding by
+decision: B9 (bitmap subtitles) and A7 (subtitle cue display).
 
 This is the working document for replacing LibVLC with Media3/ExoPlayer. It is written to
 be picked up cold, in a new session, without the conversation that produced it.
@@ -247,6 +248,83 @@ across a phone call and another app — with **no focus code of our own**.
 
 **Exit:** a video plays start to finish, correctly, with the flag on.
 
+#### Phase 1 as built — 2026-09-06
+
+Three Kotlin files, ~500 lines, in `android/app/src/main/java/com/glide/app/player/`:
+`GlidePlayerView` (the view), `GlidePlayerViewManager`, `GlidePlayerPackage`. It speaks the
+**same props and the same event names** as `RCTVLCPlayer`, so `usePlayerCore`,
+`VideoPlayerScreen` and the hooks are untouched and the two engines run the same JS on the
+same actions. `VLCPlayer.tsx` picks the native component from an `engine` prop;
+`AnimatedVideoView` reads `settings.playerEngine` straight from the store and puts the engine
+in the React key, so switching rebuilds the native view. Flag lives in Settings → Playback →
+*Experimental Player Engine*, default `vlc`.
+
+`media3-exoplayer` moved from `debugImplementation` to `implementation`. The FFmpeg decoder
+AAR stays `debugImplementation` — `DefaultRenderersFactory` loads
+`androidx.media3.decoder.ffmpeg.FfmpegAudioRenderer` by `Class.forName`, so a build without
+it compiles and runs, just with no FFmpeg fallback. Verified on device:
+`DefaultRenderersFactory: Loaded FfmpegAudioRenderer.`
+
+Deleted-on-arrival, as planned: A1, A2, A3, A6, A8. The view holds **9 fields** against 81
+and **one** Handler — the progress ticker, which is unavoidable because ExoPlayer has no
+position-push API.
+
+Not implemented on purpose, so the phase boundary stays honest: tracks (`[LOAD]` reports
+`audioTracks=0`), subtitles, enhancement, equalizer, audio delay, the six resize modes
+(letterbox only), title/artist, media session, PiP (command id 6 registered but inert, so
+`dispatchViewManagerCommand` cannot throw). Playback rate *is* wired — one line, and its
+absence would have muddied the comparison.
+
+#### Phase 1 measurements — device AIN065 / Android 16, 2026-09-06
+
+Baseline recorded on the VLC path first, same file, same scripted actions, `am force-stop`
+before each capture, per §3.1.
+
+| Check | VLC baseline | ExoPlayer |
+|---|---|---|
+| Duration | 3948456 ms | 3948456 ms — identical |
+| Resume at offset | `target=873274ms actual=873265ms delta=9ms` | opened at `startPositionMs=2394720`, no correction pass, no seek |
+| Seek accuracy | `SEEK: requested position=0.1994` → settles | `seek to 787279ms` → `landed at 787279ms`, **delta 0** |
+| Rapid seek (4 drags in ~600 ms) | all applied | all applied, every one landing exactly |
+| `SEEK_VERIFY`-class drift | n/a | **none** — `onPositionDiscontinuity` reports the landing directly |
+| EOF | — | `load duration=8600ms` → `state=ENDED` at +8.6 s → JS `[END] video ended` |
+| Our own audio-focus code | `AUDIO_FOCUS: requested → GRANTED` | **0 lines** |
+
+Audio focus is held by Media3 on our behalf, which is A1 working as designed:
+
+    Audio Focus stack: pack: com.glide.app
+      client: androidx.media3.common.audio.AudioFocusManager
+      gain: GAIN -- attr: usage=USAGE_MEDIA content=CONTENT_TYPE_MOVIE
+
+4K HDR renders at the correct 3840x1600 aspect, letterboxed, resuming at the saved position.
+
+**Unexplained/uncomfortable, recorded rather than assumed benign (§3.1 step 5):**
+
+1. A `handleResumeModalAction('restart')` fires that nobody knowingly pressed, ~2 s after
+   the media opens, on **both** engines. It does *not* reproduce on a launch with no input
+   at all, so something in the touch path reaches it — but the timestamps do not line up
+   with any scripted tap either, and there are 1.1 s of complete log silence before it.
+   `onRestart` on `ResumeModal` is its only caller, and `resumeModalVisible` starts from
+   `useState(shouldResume)` which is false at mount because `resumePosition` loads async.
+   That does not add up yet; it is written down rather than explained away.
+   On VLC it is harmless only by accident: `commitSeek(0)` is
+   refused with `commitSeek refused — no duration yet`, because VLC has not published a
+   length yet. ExoPlayer knows the duration in ~870 ms, so the same call lands and resume is
+   destroyed — `seek to 0ms` right after `resume position=2378.52s`. The app itself notices:
+   `Skipping save: Player at start but resume expected at 2378.517`. **Restart has been
+   quietly broken on the VLC path**, and the duration-guard was hiding it. Not a Phase 1
+   regression — a clean run with no input resumes correctly on ExoPlayer — but it must be
+   traced before the default flips. Find the phantom caller.
+2. `FfmpegLibrary: No aac decoder available` is expected (§3.2 of the migration doc enables
+   only ac3/eac3/dca/mlp/truehd) but confirms ExoPlayer probes the extension for codecs the
+   hardware already has. Harmless; noted so it is not re-investigated.
+
+**Phase 1 exit met.** Audio confirmed audible on the E-AC-3 file by hand, 2026-09-06.
+
+**Still open, deferred to Phase 4's manual matrix:** focus behaviour across a real phone
+call and another app taking focus. The mechanism is verified — Media3's `AudioFocusManager`
+holds `GAIN` — but the interruption itself has not been exercised.
+
 ### Phase 2 — Tracks, subtitles, speed, effects
 
 Audio/subtitle selection via `TrackSelectionParameters`; display cues from `onCues`; speed
@@ -260,6 +338,129 @@ with no extraction delay; speed 0.25→4.0 with pitch preserved **on an E-AC-3 t
 enhancement on/off with **hardware decode retained** — the specific defect being fixed;
 haptics still fire (extraction path untouched).
 
+#### Phase 2 progress — 2026-09-06
+
+**Done: audio tracks.** Enumerated in `onTracksChanged`, reported in the load event, selected
+with a `TrackSelectionOverride`. The index *is* the id JS sees, since the JS layer only ever
+round-trips the id and displays the name. The name keeps the language in it on purpose —
+`findMatchingAudioTrack` picks the preferred-language track by substring-matching the name.
+No retry loop and no coalescing Handler (A6): `TrackSelectionParameters` is accepted at any
+time, unlike VLC's `setAudioTrack`. Measured:
+
+    audio track 0 codec=audio/mp4a-latm lang=en channels=6 SUPPORTED=true
+    audio track 1 codec=audio/eac3   lang=hi channels=6 SUPPORTED=true SELECTED=true
+    audio track select id=0  ->  track 0 SELECTED=true, track 1 SELECTED=false
+
+E-AC-3 reports `SUPPORTED=true`, which is the Phase 0 FFmpeg work holding. Switching
+confirmed by hand in the real UI.
+
+**Done: colour enhancement (A4), and the plan was wrong about how.** §1.3 proposed
+`HslAdjustment` + `Contrast`. On device that kills playback outright:
+
+    IllegalArgumentException: HDR is not yet supported
+        at androidx.media3.effect.HslShaderProgram.<init>(HslShaderProgram.java:47)
+    -> ERROR_CODE_VIDEO_FRAME_PROCESSING_FAILED, player drops to STATE_IDLE
+
+`HslAdjustment` refuses HDR in media3 1.11.0 — on exactly the content this migration exists
+to fix. `RgbMatrix` has no such restriction and works in *linear* RGB (BT.2020 for HDR,
+BT.709 for SDR), so enhancement is now a single custom `RgbMatrix` doing luminance-preserving
+saturation plus gain. Contrast is dropped: it needs a pivot, and a 0.5 pivot is meaningless
+in linear light where HDR values exceed 1.0. VLC's contrast was 1.08 — small enough that
+dropping it beats shipping something wrong on HDR.
+
+**A4 was wrong about the recreate, and finding out cost us the whole migration for an hour.**
+The plan said enhancement would need "no player recreate". The obvious way to get that is to
+call `setVideoEffects` unconditionally before `prepare()` — with an empty list when disabled —
+since the pipeline is only set up if it has been called at least once beforehand. That was
+done, and it silently destroyed HDR on every playback.
+
+Calling `setVideoEffects` **at all**, even with an empty list, arms
+`DefaultVideoFrameProcessor`, and that GL path tone-maps HDR to 8-bit sRGB. It reported no
+error. It showed up as a slightly washed-out picture with visible grain in dark scenes, on
+HDR content only, and it corrected itself for a moment on any rotation or window change —
+which is what a user notices and no log does. Measured with `dumpsys SurfaceFlinger`, same
+file and same ExoPlayer, against the Phase 0 spike as a control:
+
+| | display colorMode | video layer dataspace |
+|---|---|---|
+| Phase 0 spike (never calls setVideoEffects) | `DISPLAY_P3` | **`BT2020_ITU_PQ`** |
+| effects armed with an empty list | `SRGB` | `V0_SRGB` — no BT2020 layer at all |
+| after the fix | `DISPLAY_P3` | **`BT2020_ITU_PQ`** |
+
+So `setVideoEffects` is now called **only when enhancement is actually on**, and toggling it
+re-opens the media at the current position, because arming the frame processor is a
+prepare-time decision. A toggle therefore costs a re-prepare — worse than the plan hoped,
+still far better than VLC, which dropped the device to software 4K decode for the rest of the
+session. **Never call `setVideoEffects` speculatively.**
+
+Two lessons worth carrying into phases 3 and 4. First, "it plays and there are no errors in
+the log" is not evidence that video is correct; the HDR path has to be asserted directly, and
+`dumpsys SurfaceFlinger`'s layer dataspace is the assertion. Second, keeping the spike in the
+debug build paid for itself — a minimal known-good control on the same device and file turned
+a vague "it looks a bit washed out" into a settled cause in two commands. **Do not delete the
+spike before Phase 4.**
+
+Measured with enhancement on:
+
+| | enhancement off | enhancement on |
+|---|---|---|
+| video decoder | `c2.qti.hevc.decoder` | `c2.qti.hevc.decoder` — **hardware retained** |
+| display brightness reason | `[ hdr ]` | `[ hdr ]` — **HDR retained** |
+| frame-processing errors | 0 | 0 |
+
+That is the A4 defect fixed and verified, not argued.
+
+**HDR survives enhancement too** — measured, because the reasonable expectation was that it
+would not. With the frame processor armed *and* an effect in it, the display stays
+`colorMode=DISPLAY_P3` and the layer is `dataspace=BT2020_PQ`. `RgbMatrix` declares HDR
+support and it carries through to the output surface, so no SDR gating is needed and the
+toggle is safe on HDR content. The empty-list case was broken not because the pipeline
+cannot do HDR, but because arming it for nothing still inserted a converter.
+
+The toggle's re-open preserves position: `enhancement=true` then
+`open ... startPositionMs=2657167`, the same offset it was at.
+
+**Also fixed: event dispatch.** `getJSModule(RCTEventEmitter)` — what the VLC view still
+uses — logs an "Unhandled SoftException" per event under the New Architecture saying it will
+stop working once interop is disabled. Events did arrive, but one stack trace per progress
+tick is intolerable in a migration whose method is reading device logs. Now dispatched via
+`UIManagerHelper.getEventDispatcherForReactTag` and a small `Event` subclass.
+
+**Done: equalizer (A9).** `android.media.audiofx.Equalizer` on the player's own audio
+session, rebuilt from `Player.Listener.onAudioSessionIdChanged` because the session id does
+not exist until the audio renderer initialises and changes across media. The UI's ten fixed
+bands (60Hz-16kHz) are mapped onto however many the device implements — five, typically — by
+nearest centre frequency. A device refusing the effect, or another app holding it at higher
+priority, is caught: losing the equalizer must not take playback down with it.
+`MODIFY_AUDIO_SETTINGS` added to the manifest (normal permission, no prompt). Verified
+`audioSessionId=28761` arrives and the effect applies; **proper A/B still needs headphones**.
+
+**Deferred: A7's display path — and A7 as written conflicts with D1.** Investigated and not
+built, deliberately.
+
+`FloatingSyncPanel` calls `onChange(value - 50)` unbounded, so subtitle delay goes negative —
+subtitles *earlier*. D1 settled that this "stays and is free… an offset in JavaScript", which
+is true only while JS holds the **whole** cue list. `onCues` streams cues as playback reaches
+them, so a negative offset is not implementable on it at any price.
+
+Worse, A7 retires nothing. Three consumers need the full list upfront regardless:
+haptics (B7, explicitly kept), the negative delay offset, and `FloatingSyncPanel`, which is
+handed `subtitleCues` to build its reference-point picker. So moving *display* to `onCues`
+would leave the extraction running and cost a shipped feature to save 1.5-3.0 s on a cold
+cache — the cue store caches per (path, track), so it is a first-open cost only.
+
+Where `onCues` is a genuine gain is **bitmap** subtitles: ExoPlayer decodes PGS/VobSub to
+`Cue.bitmap`, which the ffmpeg text path cannot represent at all, and that is what keeps
+VLC's SPU renderer (`vlcTextTrackId`) alive. That is B9, and it is the piece worth building.
+Note it is not free either: an Android `Bitmap` has to reach a JS overlay, which means PNG
+plus base64 per cue.
+
+**Decision 2026-09-06: skip the text-cue swap, keep extraction, and revisit bitmap cues as
+B9.** Phase 3 is the risk peak and is worth more than the subtitle latency win.
+
+**Not measured:** playback speed is wired but pitch preservation at 0.25-4.0x on an E-AC-3
+track has not been checked.
+
 ### Phase 3 — Surface, geometry, PiP, session
 
 SurfaceView geometry and the six resize modes; PiP; `MediaSession` with the real ExoPlayer.
@@ -269,6 +470,242 @@ Deletes: A5.
 **Verify:** all six modes on 16:9, 2.39:1, portrait, rotated-metadata and SAR≠1 fixtures
 (tracker §8.5); zoom/pan; PiP enter/exit/resize; notification transport controls; lock
 screen; task dismissal.
+
+#### Phase 3 progress — 2026-09-06
+
+**Done: B1, the six resize modes — and it was not the risk peak after all.**
+`computeGeometry` was already a pure function, so it was **ported verbatim** into
+`Geometry.kt` rather than re-derived against `AspectRatioFrameLayout`: same arithmetic, same
+best-fit hysteresis thresholds, so the modes cannot drift from the behaviour users have.
+Only the output is translated — VLC took an aspect-ratio string plus a `setScale` factor,
+whereas we lay out the SurfaceView ourselves, so the answer is a scale on the SAR-corrected
+source size, or `fill`.
+
+SAR comes free: `VideoSize.pixelWidthHeightRatio` is exactly the pixel aspect ratio, and
+rotation needs no handling at all — media3 applies it internally and
+`unappliedRotationDegrees` is deprecated and always zero. That covers two of §8.5's five
+fixtures without code.
+
+Because the function is pure, the modes are checked on the JVM with no device and no
+Robolectric: `GeometryTest`, 12 cases across 16:9, 2.39:1, portrait, SAR≠1, degenerate
+zero-size input, and both directions of the best-fit hysteresis. Writing it caught two wrong
+assumptions of mine before the device did — cover on 16:9 into a 2.23:1 view crops ~20%, so
+best-fit correctly refuses it, and for a source narrower than the view `cropRatio` and
+`maxBar` are algebraically the same quantity, making the real gate 0.05 enter / 0.08 exit.
+
+Device agrees with the tests, all six within ~1 ms of the mode change:
+
+| mode | child for 3840x1600 in 2412x1080 |
+|---|---|
+| contain | 2412x1005 |
+| cover | 2592x1080 (overflows width, crops sides) |
+| fill | 2412x1080 |
+| scale-down | 2412x1005 (4K overflows, so identical to contain) |
+| none | 3840x1600 (native, overflowing) |
+| best-fit | 2412x1005 — crop would be 6.9%, past the 6% enter threshold |
+
+**`requestLayout()` does not work in a React Native view.** Found by measurement: six
+`resizeMode=` lines in a row with not one `layout` line between them, then a layout only
+when rotation forced a real pass. RN drives layout from its own shadow tree and does not
+re-measure an Android view on request, so the new mode sat in the field doing nothing — on
+screen, "changing the resize mode does nothing until you rotate". The child layout is now
+re-run directly via `relayoutSurface()`. Worth remembering for anything else in this view
+that changes geometry outside a layout pass.
+
+**Done: A5, the media session.** `GlidePlayerService` is a `MediaSessionService` that builds
+`MediaSession.Builder(this, exoPlayer)` — **directly on the player**. That is A5: no
+`SimpleBasePlayer` subclass mirroring engine state, and therefore none of the divergence bugs
+that came with mirroring it. `GlidePlayerHolder` is the meeting point, mirroring the existing
+`VlcPlaybackHost` pattern including its non-sticky restart reasoning (the player lives in the
+React view and dies with the process, so a sticky restart finds nothing and is killed for
+never going foreground).
+
+One deliberate difference from the VLC version: `clear()` releases the session
+**synchronously** via a held service reference before the player is released. `stopService`
+is asynchronous, so relying on it alone leaves the session holding a released player — the
+exact defect class §1.3 A5 lists. `media3-session` had to be added to the app module:
+the player module declares it `implementation`, which is not transitive.
+
+Title and artist now feed `MediaMetadata` for the notification and lock screen, applied with
+`replaceMediaItem` rather than `setMediaItem` — the latter would restart playback from the
+beginning just to relabel a notification.
+
+**Done: PiP, by moving rather than rewriting.** `VlcPipController` turned out to be coupled to
+the VLC view through exactly two non-`View` methods, so it was ported verbatim to
+`GlidePipController`. Its aspect clamping, PiP bounds enforcement and ancestor-transform
+neutralisation were all earned against real device behaviour; re-deriving them would have
+thrown that away for no gain. The VLC copy dies with its module in phase 4. `VideoSize`
+reports SAR as a float, so it is passed to PiP as a rational over a fixed denominator.
+
+`onHostPause` now ignores backgrounding while in PiP — a PiP window is a foreground
+presentation even though the Activity reports paused.
+
+#### Phase 3 verified on device — 2026-09-06, AIN065 / Android 16
+
+Run with `scripts/verify-player-engine.sh`, which states for each check the line that would
+appear if it were broken. **Zero errors, zero crashes across the whole matrix.**
+
+| Check | Result |
+|---|---|
+| Open, resume, load | `startPositionMs=1867559` honoured, no seek to 0, `load duration=3948456ms` |
+| Media session | `media session created` — A5 live, no adapter |
+| HDR | `colorMode=DISPLAY_P3`, `dataspace=BT2020_ITU_PQ` |
+| Decoders | `c2.qti.hevc.decoder` (hardware) + `Loaded FfmpegAudioRenderer`; E-AC-3 `SUPPORTED=true` |
+| Six resize modes | all six correct in **both** orientations, each within ~1 ms of the mode change |
+| Enhancement | HDR retained (`BT2020_PQ`), position preserved across the re-open |
+| PiP | enter/exit/resize clean; bounds re-assertion firing (`re-laid out to 243x156, re-asserting 769x323`); aspect clamped 2.4 -> 119/50 |
+| Notification, lock screen, background playback | confirmed by hand |
+
+Portrait `cover` is worth recording as evidence the geometry port is real: 3840x1600 into
+1080x2412 needs scale 1.5075, giving a 5789x2412 child — a deliberate 5x overflow that the
+parent clips, which is exactly what cover means.
+
+**Two reports from the device session, both investigated:**
+
+1. *"The 'enabled' toast reappears when returning to the player from PiP or the
+   notification."* Real bug, and **engine-independent** — the VLC path has it too.
+   `BookmarkToast` owned its own auto-hide timer, but `showToast` lives in
+   `usePlayerBookmarks`, and `VideoPlayerScreen` unmounts the toast whenever
+   `pipPresentationActive` is true. Unmounting cancels the animation, `onHide` never fires,
+   `showToast` stays true forever, and the toast replays on the next mount. Fixed at the
+   root: the hook that owns visibility now owns the timeout that ends it.
+2. *"Entering the player from the notification is slow."* Measured, and **not the engine**.
+   Warm re-entry is `Displayed ... +190ms` with no player recreation at all — the Activity is
+   `singleTask` and simply comes forward. Cold start is `+1s447ms` to Displayed and then
+   **7.8 s** before the React root mounts. That is JS startup in a **debug build pulling from
+   Metro**; a release build ships precompiled Hermes bytecode. The React tree is identical on
+   both engines, so VLC is equally slow. Re-measure on release before treating it as a defect.
+
+### Phase 4 — done 2026-09-06
+
+The release-cycle gap was dropped deliberately: the app has three users, so "ship one release
+with VLC as an escape hatch" bought nothing. The **two-step structure was kept**, because that
+part was never about time — it is what makes the flip and the deletion revertible separately.
+
+**Step 1 — default flipped.** `playerEngine` defaulted to `exoplayer`, with the Settings row
+reworded from "Experimental" to a "Legacy Player Engine" escape hatch. That row is now gone
+too (step 2), along with the setting: with one engine there is no choice to present.
+
+**Step 2 — LibVLC deleted.** `libs/glide-vlc-player/` and its package.json entry are gone.
+`VLCPlayer.tsx` is replaced by `src/components/VideoPlayer/GlidePlayer.tsx`, which carries
+only the props the native view implements — no init options, decoder mode, media options,
+`initType`, network/asset classification, forced aspect ratios or subtitle-slave path. Only
+four ref methods survived, because only four were ever called: `seek`, `previewSeek`,
+`stopPlayer`, `enterPictureInPicture`.
+
+**Measured, release APK arm64:**
+
+| | before | after |
+|---|---|---|
+| APK | 73.5 MB | **33.6 MB** |
+| `libvlc.so` | 41.1 MB (56% of the APK) | absent |
+
+The plan's "43 MB, 53%" estimate was close: 41.1 MB and 56%. Note it is *stored
+uncompressed* — `.so` files are, so the APK drop is the full library size. The debug APK
+tells you nothing here (123 -> 120 MB) because dev tooling dominates it; measure release.
+
+**Cleanups that fell out, mostly because they had nothing left to do:**
+
+- The decoder-mode setting (D4) and its UI. It was the only thing bumping `playerKey`, so
+  the remount mechanism went with it — and with no remounts, `AnimatedVideoView`'s
+  live-position resume branch (and its `currentTimeRef`/`duration` props) became dead too.
+  Resume is now one expression.
+- `getOptimizedInitOptions` and the whole VLC init-option table.
+- `vlcTextTrackId` and the bitmap/text branch in `usePlayerTracks`.
+- `audioDelay` reaching native (D1: dropped).
+- `.wmv` and `rtmp://` claims in `VIDEO_EXTENSIONS`, `DeepLinkService`, `NavigationService`
+  and `VideoPlayerScreen`. `rtsp://` is still claimed, so `media3-exoplayer-rtsp` was added
+  — `DefaultMediaSourceFactory` finds `RtspMediaSource` by `Class.forName`, so the
+  dependency is the whole wiring.
+
+**Two things deleting VLC broke, both caught by measurement, both fixed:**
+
+1. **The release APK shipped no `libffmpegJNI.so`.** The decoder AAR was still
+   `debugImplementation` — correct while VLC was the default and could cover for it. With
+   VLC gone, a release build would have played AC-3/E-AC-3/DTS/TrueHD **silently with no
+   error**, which is precisely the phase 0 blocking failure, with nothing to fall back on.
+   Now `implementation`. It is still a local file, so a machine without it fails the build
+   loudly — the right failure, but §4.3's GitHub Packages coordinate is now overdue.
+2. **`ForegroundServiceDidNotStartInTimeException`, ~30 s into playback.**
+   `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MEDIA_PLAYBACK` and `POST_NOTIFICATIONS`
+   were declared in the *VLC module's* manifest and arrived by merge. Deleting the module
+   took them with it, so Media3's `MediaNotificationManager` called
+   `startForegroundService()` on a service the system would not let go foreground. Declared
+   on the app now. Verified: 55 s of playback, zero crashes, all three granted.
+
+**Third thing deleting VLC broke: network streams never recovered.** Reported as "seeking a
+stream doesn't work — a double-tap seek was fine but a long seek wasn't". It was not a seek
+bug. The log:
+
+    seek to 1347123ms of 9349090ms exact=true   -> landed
+    seek to 1358653ms of 9349090ms exact=true   -> landed
+    player error ERROR_CODE_IO_NETWORK_CONNECTION_FAILED
+    Caused by: java.net.ConnectException: Failed to connect to /127.0.0.1:11470
+    state=IDLE
+
+Port 11470 is Stremio's local streaming server. Confirmed on device: Stremio's **process is
+alive** but it holds **no LISTEN socket on any port** — every socket on 11470 is state `06`
+(TIME_WAIT), the remains of connections it served earlier and then stopped accepting. The
+short double-tap seeks landed because they stayed **inside the already-buffered range** and
+needed no HTTP request; the long seek jumped outside the buffer, forced a fresh range
+request, and there was nothing to connect to. Short-works/long-fails is the signature of a
+buffer boundary, not of seeking.
+
+**This is not a Glide bug and it reproduced on LibVLC**, which is the clearest evidence that
+the engine is not involved: no player can fetch from a server that is not listening. If it
+recurs, check `cat /proc/net/tcp6 | awk '$4=="0A"'` for a listener before suspecting the
+player. Nothing in Glide can keep another app's server alive.
+
+The external cause was Stremio's server being gone, but investigating it exposed a genuine
+regression we had introduced: an IO error leaves ExoPlayer in `STATE_IDLE` permanently, so playback is dead
+until the video is reopened. LibVLC hid this with `--http-reconnect`, and deleting the VLC
+init options deleted that safety net with it. `GlidePlayerView` now retries recoverable IO
+errors (the `2000` block) up to three times, 1.5 s apart, and only reports the error to JS
+once they are exhausted; `prepare()` resumes from the stopped position, and the counter
+resets on `STATE_READY` so a long session is not killed by three unrelated hiccups.
+
+### B9 — bitmap subtitles, built 2026-09-06
+
+Accepted as a regression when VLC was deleted, then built straight afterwards. Implements D3:
+ExoPlayer decodes PGS/VobSub to `Cue.bitmap`, and **our existing overlay draws them**, so
+there is one rendering path instead of VLC's separate SPU surface.
+
+**The mapping is the part worth remembering.** JS identifies a subtitle by
+`SubtitleTrack.index`, which is ffmpeg's **absolute stream index** — it counts video and
+audio streams too, so a file with 1 video + 2 audio gives subtitle indices 3, 4, 5.
+ExoPlayer numbers text tracks separately from 0. Passing ffmpeg's index straight through
+would address the wrong track or none at all. JS therefore sends the **ordinal among
+subtitle streams** (`findIndex` over the subtitle list) and native selects its Nth text
+track. Both sides log codec and language so a mismatch is visible rather than mysterious —
+the ordinal assumes both enumerate the container in the same order, which is true for MKV
+but is an assumption, not a guarantee.
+
+**Text subtitles deliberately did not move.** Only *bitmap* tracks set `textTrack`; text
+still comes from ffmpeg extraction, because haptics and negative subtitle delay both need
+the whole cue list upfront and `onCues` cannot provide it (see the A7 note above). So the
+split is: pictures from the engine, text from extraction, both drawn by the same overlay.
+
+Bitmap cues bypass the overlay's drag-to-reposition and all its text styling — a PGS cue is
+a picture with the position baked in by the authoring, so font, colour, outline and dragging
+are all meaningless for it. Geometry comes through as media3's viewport fractions, with
+`DIMEN_UNSET` sent as -1 and the overlay falling back to bottom-centre.
+
+ponytail: cues cross the bridge as base64 PNG rather than as files. A PGS cue is mostly
+transparent, compresses to tens of KB, and changes every few seconds, so there is nothing to
+clean up. If a source ever produces large or rapid cues, write PNGs to `cacheDir` and send
+`file://` URIs instead. Cues repeat every frame while one is on screen, so native only emits
+when the set actually changes.
+
+**`[unverified]` — no PGS content to test with.** The test file's five subtitle tracks are
+all `subrip`. This compiles, typechecks and installs, but not one bitmap cue has been drawn
+on a device. The ordinal mapping in particular is the thing most likely to be wrong. Play a
+Blu-ray remux with a PGS track before believing any of it, and check the native
+`text track N codec=... lang=...` lines line up with the JS subtitle list.
+
+**The phase 0 spike is deliberately kept**, against this plan's own instruction to delete it.
+It is debug-only, so it costs nothing in a release build, and as a minimal known-good control
+on the same device and file it identified the HDR tone-mapping regression in two commands.
+Delete it when there is no longer anything to compare against.
 
 ### Phase 4 — Default flip and cleanup
 

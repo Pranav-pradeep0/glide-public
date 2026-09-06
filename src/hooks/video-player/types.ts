@@ -3,7 +3,7 @@
  * Shared types for all video player hooks
  */
 
-import { VLCPlayer, PlayerResizeMode } from '@glide/vlc-player';
+import type { BitmapCue, GlidePlayerRef, PlayerResizeMode } from '@/components/VideoPlayer/GlidePlayer';
 import { SharedValue } from 'react-native-reanimated';
 import { SubtitleCue, VideoBookmark } from '@/types';
 
@@ -212,9 +212,7 @@ export interface PlayerSettings {
     muted: boolean;
     repeat: boolean;
     sleepTimer: number | null; // null = off, -1 = end of video, number = minutes
-    decoder: 'hardware' | 'software' | 'hardware_plus';
     resizeMode: PlayerResizeMode;
-    playerKey: number; // Used to force remount on decoder change
     skipDuration: 5 | 10 | 30; // seconds for skip forward/backward
     backgroundPlayEnabled: boolean; // Continue audio when app is backgrounded
     videoEnhancement: boolean;
@@ -244,7 +242,7 @@ export interface PlayerSettings {
 
 export interface UsePlayerCoreReturn {
     // Refs - allowing null for useRef initialization
-    videoRef: React.RefObject<VLCPlayer | null>;
+    videoRef: React.RefObject< GlidePlayerRef | null>;
     currentTimeRef: React.MutableRefObject<number>;
 
     // State
@@ -336,6 +334,10 @@ export interface UsePlayerTracksReturn {
     selectedSubtitleTrackIndex: number | null;
     subtitleCues: SubtitleCue[];
     currentSubtitleCue: SubtitleCue | null;
+    bitmapCues: BitmapCue[];
+    /** Ordinal among subtitle streams for the native player; -1 disables text output. */
+    nativeTextTrackOrdinal: number;
+    handleBitmapCues: (event: { cues: BitmapCue[] }) => void;
     selectSubtitleTrack: (trackIndex: number | null) => void;
 
     // External subtitles
@@ -352,7 +354,6 @@ export interface UsePlayerTracksReturn {
     subtitleTracksForSelector: any[];
 
     // Native VLC Text Track ID
-    vlcTextTrackId?: number;
 
     // Actions
     setSubtitleCues: React.Dispatch<React.SetStateAction<SubtitleCue[]>>;
@@ -362,7 +363,6 @@ export interface UsePlayerBookmarksReturn {
     bookmarks: VideoBookmark[];
     showToast: boolean;
     toastMessage: string;
-    toastIcon: string;
     toastKey: number;
 
     // Actions
@@ -370,7 +370,7 @@ export interface UsePlayerBookmarksReturn {
     deleteBookmark: (bookmarkId: string) => void;
     jumpToBookmark: (timestamp: number) => void;
     hideToast: () => void;
-    showToastWithMessage: (message: string, icon?: string) => void;
+    showToastWithMessage: (message: string) => void;
 }
 
 export interface UsePlayerSettingsReturn {
@@ -379,7 +379,6 @@ export interface UsePlayerSettingsReturn {
     // Actions
     toggleMute: () => void;
     toggleRepeat: () => void;
-    setDecoder: (decoder: 'hardware' | 'software' | 'hardware_plus') => void;
     setResizeMode: (mode: PlayerResizeMode) => void;
     toggleResizeMode: () => void;
     setSleepTimer: (minutes: number | null) => void;
@@ -504,51 +503,4 @@ export const createDebounce = <T extends (...args: any[]) => void>(
     return debounced;
 };
 
-/**
- * Generate optimized VLC init options based on source and decoder.
- */
-export const getOptimizedInitOptions = (
-    uri: string,
-    decoder: 'hardware' | 'software' | 'hardware_plus',
-): string[] => {
-    const isNetworkStream = uri.startsWith('http') || uri.startsWith('rtsp');
-
-    const baseOptions = [
-        '--no-video-title-show',
-        '--no-sub-autodetect-file',
-    ];
-
-    // --input-fast-seek is deliberately absent. VLC applies it input-wide as the
-    // precision flag for every DEMUX_SET_TIME/DEMUX_SET_POSITION, so it made user seeks
-    // land 19-35s from the requested time and resume land 2-9s early on device. A
-    // per-call precise seek cannot override it. VLC's own Android app also defaults to
-    // precise seeking and exposes fast seek as an opt-in setting.
-
-    // Decoder Options
-    if (decoder === 'software') {
-        baseOptions.push('--codec=avcodec');
-    } else {
-        // Hardware decoders
-        baseOptions.push(
-            '--avcodec-fast',             // Standard speed optimization
-            '--avcodec-skiploopfilter=1', // Safe quality compromise (skips only non-ref frames)
-            '--avcodec-threads=0'
-        );
-    }
-
-    if (isNetworkStream) {
-        return [
-            ...baseOptions,
-            '--network-caching=600',
-            '--live-caching=600',
-            '--clock-jitter=0',
-            '--http-reconnect',
-        ];
-    } else {
-        return [
-            ...baseOptions,
-            '--file-caching=600', // Slight buffer (600ms) to smooth out speed changes
-        ];
-    }
-};
 

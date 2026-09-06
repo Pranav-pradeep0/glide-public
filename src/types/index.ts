@@ -1,5 +1,6 @@
 // src/types/index.ts
 
+
 export interface VideoFile {
     name: string;
     path: string;

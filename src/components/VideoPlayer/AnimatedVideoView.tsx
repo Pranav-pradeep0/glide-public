@@ -1,33 +1,34 @@
 /**
  * AnimatedVideoView Component
  *
- * A memoized wrapper around VLCPlayer that handles zoom/pan animations.
- * This component is isolated to prevent unnecessary re-renders of the heavy VLCPlayer.
+ * A memoized wrapper around the native player that handles zoom/pan animations.
+ * Isolated so parent state changes do not re-render the heavy native view.
  */
 
 import React, { memo, forwardRef, useMemo, useCallback } from 'react';
 import { StyleSheet } from 'react-native';
 import Animated, { AnimatedStyle } from 'react-native-reanimated';
-import { VLCPlayer, PlayerResizeMode, VLCPlayerSource } from '@glide/vlc-player';
+import GlidePlayer, {
+    BitmapCue,
+    GlidePlayerRef,
+    PlayerResizeMode,
+    PlayerSource,
+} from '@/components/VideoPlayer/GlidePlayer';
 import {
     VLCLoadData,
     VLCProgressData,
     VLCSeekEvent,
     VLCBufferingEvent,
-    getOptimizedInitOptions,
 } from '@/hooks/video-player/types';
 
 // ============================================================================
 // TYPES
 // ============================================================================
 
-
 interface AnimatedVideoViewProps {
     // Source
-    source: VLCPlayerSource;
-    playerKey: number;
-    decoder: 'hardware' | 'software' | 'hardware_plus';
-    videoEnhancement: boolean; // Prop to enable/disable enhancement
+    source: PlayerSource;
+    videoEnhancement: boolean;
 
     // Playback state
     paused: boolean;
@@ -38,12 +39,10 @@ interface AnimatedVideoViewProps {
     playInBackground: boolean;
     pipEnabled: boolean;
     pipPresentationActive: boolean;
-    /** Sampled only when playerKey changes, to resume after a decoder/enhancement remount. */
-    currentTimeRef: React.MutableRefObject<number>;
-    duration: number;
 
     // Tracks
     audioTrack?: number;
+    /** Ordinal among subtitle streams for bitmap subs; -1 disables native text output. */
     textTrack?: number;
 
     // Metadata
@@ -52,7 +51,6 @@ interface AnimatedVideoViewProps {
 
     // Audio
     audioEqualizer?: number[];
-    audioDelay?: number;
 
     /**
      * Where to begin playback on the first mount, in seconds, from watch history.
@@ -63,7 +61,7 @@ interface AnimatedVideoViewProps {
     // Animation style from gestures
     animatedStyle: AnimatedStyle<any>;
 
-    // VLC callbacks
+    // Player callbacks
     onLoad: (data: VLCLoadData) => void;
     onProgress: (data: VLCProgressData) => void;
     onEnd: () => void;
@@ -73,24 +71,17 @@ interface AnimatedVideoViewProps {
     onPaused: () => void;
     onStopped: () => void;
     onSeek: (data: VLCSeekEvent) => void;
+    onBitmapCues?: (event: { cues: BitmapCue[] }) => void;
 }
 
 // ============================================================================
 // COMPONENT
 // ============================================================================
 
-/**
- * Memoized VLC player wrapper with animated container.
- *
- * Uses forwardRef to expose the VLCPlayer ref to parent.
- * Memoized to prevent re-renders when parent state changes.
- */
-const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
+const AnimatedVideoView = forwardRef<GlidePlayerRef, AnimatedVideoViewProps>(
     function AnimatedVideoView(props, ref) {
         const {
             source,
-            playerKey,
-            decoder,
             videoEnhancement,
             paused,
             rate,
@@ -100,14 +91,11 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
             playInBackground,
             pipEnabled,
             pipPresentationActive,
-            currentTimeRef,
-            duration,
             audioTrack,
             textTrack,
             title,
             artist,
             audioEqualizer,
-            audioDelay,
             initialResumeSeconds,
             animatedStyle,
             onLoad,
@@ -119,85 +107,54 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
             onPaused,
             onStopped,
             onSeek,
+            onBitmapCues,
         } = props;
 
         /**
          * Where the native player should open, in seconds.
          *
-         * A remount resumes from the live position; the first mount resumes from watch
-         * history. Both cases build a *new* native view, so JavaScript has to carry the
-         * offset across — a position saved inside the outgoing view would be lost with it.
-         * Same-view recreates (an enhancement toggle, reviving a stopped player) are
-         * handled natively and do not come through here.
+         * The whole resume mechanism. It travels inside the source so it cannot race the
+         * source prop, and native passes it straight to setMediaItem's start position.
          *
-         * This is the whole resume mechanism now. It travels inside the source so it
-         * cannot race the source prop, and native turns it into VLC's :start-time when the
-         * demuxer is opened. Nothing seeks: LibVLC drops a setTime issued during its
-         * startup ramp, which is why the previous 100 ms-after-onLoad seek landed at 0.
+         * This used to also recover a live position across remounts, because switching
+         * decoder rebuilt the native view and a position held inside the outgoing view was
+         * lost with it. ExoPlayer picks its own decoder, that setting is gone, and the one
+         * remaining same-view recreate (the enhancement toggle) captures its own position
+         * natively — so nothing remounts and the live-position branch went with it.
          */
-        const startTimeSeconds = useMemo(() => {
-            const END_GUARD_SECONDS = 0.2;
+        const startTimeSeconds =
+            initialResumeSeconds && initialResumeSeconds > 0 ? initialResumeSeconds : 0;
 
-            if (playerKey > 0 && duration > 1) {
-                // Read the live position here rather than taking it as a prop: the screen
-                // no longer re-renders on progress, so a prop value would be stale.
-                const maxSeek = Math.max(0, duration - END_GUARD_SECONDS);
-                const clamped = Math.max(0, Math.min(maxSeek, currentTimeRef.current));
-                // Deliberately no minimum: a remount near the start must still resume
-                // where it was, not jump to zero.
-                return clamped > 0 && clamped < maxSeek ? clamped : 0;
-            }
-
-            return initialResumeSeconds && initialResumeSeconds > 0 ? initialResumeSeconds : 0;
-            // eslint-disable-next-line react-hooks/exhaustive-deps
-        }, [playerKey]); // Re-calc only when the player is rebuilt
-
-        // Simple onPlaying handler - no more manual seeking needed!
         const handlePlaying = useCallback(() => {
             onPlaying();
         }, [onPlaying]);
 
-        const vlcSource = useMemo(() => {
-            const mediaOpts = repeat ? [':input-repeat=65535'] : [];
-
-            return {
-                ...source,
-                initType: 2 as 1 | 2,
-                initOptions: getOptimizedInitOptions(source.uri, decoder),
-                decoderMode: decoder,
-                mediaOptions: mediaOpts,
-                // Seconds. Native opens the demuxer here, so resume needs no seek.
-                startTime: startTimeSeconds > 0 ? startTimeSeconds : undefined,
-            };
-        }, [source, decoder, repeat, startTimeSeconds]);
-
-        if (playerKey > 0) {
-            if (__DEV__) {console.log('[AnimatedVideoView] Init Options:', vlcSource.initOptions);}
-        }
+        const playerSource = useMemo(() => ({
+            ...source,
+            // Seconds. Native opens the media here, so resume needs no seek.
+            startTime: startTimeSeconds > 0 ? startTimeSeconds : undefined,
+        }), [source, startTimeSeconds]);
 
         return (
             <Animated.View style={[
                 styles.container,
                 pipPresentationActive ? styles.pipContainer : animatedStyle,
             ]}>
-                <VLCPlayer
-                    key={playerKey}
+                <GlidePlayer
                     ref={ref}
-                    source={vlcSource}
+                    source={playerSource}
                     paused={paused}
                     rate={rate}
-                    seek={-1}
                     style={styles.video}
                     audioTrack={audioTrack}
-                    textTrack={textTrack ?? -1}
-                    autoplay={!paused}
+                    textTrack={textTrack}
+                    onBitmapCues={onBitmapCues}
                     muted={muted}
                     resizeMode={resizeMode}
                     repeat={repeat}
                     title={title}
                     artist={artist}
                     audioEqualizer={audioEqualizer}
-                    audioDelay={audioDelay}
                     videoEnhancement={videoEnhancement}
                     onLoad={onLoad}
                     onProgress={onProgress}
@@ -220,20 +177,14 @@ const AnimatedVideoView = forwardRef<VLCPlayer, AnimatedVideoViewProps>(
 // MEMOIZATION
 // ============================================================================
 
-/**
- * Custom comparison function for memo.
- * Only re-render when VLC-relevant props change.
- */
+/** Only re-render when something the native view actually reads changes. */
 function areEqual(prevProps: AnimatedVideoViewProps, nextProps: AnimatedVideoViewProps): boolean {
-    // Always re-render if these change (they directly affect VLC)
-    if (prevProps.playerKey !== nextProps.playerKey) {return false;}
     if (prevProps.source.uri !== nextProps.source.uri) {return false;}
     if (prevProps.paused !== nextProps.paused) {return false;}
     if (prevProps.rate !== nextProps.rate) {return false;}
     if (prevProps.muted !== nextProps.muted) {return false;}
     if (prevProps.repeat !== nextProps.repeat) {return false;}
     if (prevProps.resizeMode !== nextProps.resizeMode) {return false;}
-    if (prevProps.decoder !== nextProps.decoder) {return false;}
     if (prevProps.videoEnhancement !== nextProps.videoEnhancement) {return false;}
     if (prevProps.pipEnabled !== nextProps.pipEnabled) {return false;}
     if (prevProps.pipPresentationActive !== nextProps.pipPresentationActive) {return false;}
@@ -242,16 +193,12 @@ function areEqual(prevProps: AnimatedVideoViewProps, nextProps: AnimatedVideoVie
     if (prevProps.title !== nextProps.title) {return false;}
     if (prevProps.artist !== nextProps.artist) {return false;}
     if (prevProps.audioEqualizer !== nextProps.audioEqualizer) {return false;}
-    if (prevProps.audioDelay !== nextProps.audioDelay) {return false;}
     if (prevProps.playInBackground !== nextProps.playInBackground) {return false;}
-    if (prevProps.onEnd !== nextProps.onEnd) {return false;} // Important: Check for onEnd handler updates (auto-play closure)
+    // Important: the auto-play-next closure lives in onEnd.
+    if (prevProps.onEnd !== nextProps.onEnd) {return false;}
 
-    // Ignore duration changes: they must not trigger a re-render unless playerKey also
-    // changes. Position is not a prop at all — it is read from the ref on remount.
-
-    // animatedStyle is handled by reanimated
-    // Callback references should be stable via useCallback
-
+    // Position and duration are deliberately not props: neither changes what the native
+    // view renders, and taking them would re-render this on every progress tick.
     return true;
 }
 
@@ -281,6 +228,3 @@ const styles = StyleSheet.create({
         height: '100%',
     },
 });
-
-
-

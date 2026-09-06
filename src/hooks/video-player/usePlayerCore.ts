@@ -4,7 +4,7 @@
 
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { VLCPlayer } from '@glide/vlc-player';
+import type { GlidePlayerRef } from '@/components/VideoPlayer/GlidePlayer';
 import { useSharedValue, useFrameCallback } from 'react-native-reanimated';
 import { getResumablePosition } from '@/utils/playbackResume';
 import {
@@ -68,7 +68,7 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
 
     // ── REFS ─────────────────────────────────────────────────────────────────
 
-    const videoRef = useRef<VLCPlayer | null>(null);
+    const videoRef = useRef< GlidePlayerRef | null>(null);
 
     // Time tracking — refs are source of truth; state drives display only
     const currentTimeRef = useRef<number>(0);

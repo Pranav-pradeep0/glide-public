@@ -16,6 +16,7 @@ import {
 } from './types';
 import { findMatchingAudioTrack } from '@/utils/languages';
 import { SubtitleCueStore } from '@/services/SubtitleCueStore';
+import type { BitmapCue } from '@/components/VideoPlayer/GlidePlayer';
 
 // ============================================================================
 // TYPES
@@ -77,12 +78,43 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
         }
     }, [initialSubtitleTrackIndex]);
 
-    // VLC Native Text Track ID (for bitmap subtitles like PGS/VobSub)
-    // -1 = disabled (or using custom overlay), >= 0 = enabled native track
-    const [vlcTextTrackId, setVlcTextTrackId] = useState<number>(-1);
 
     const [subtitleCues, setSubtitleCues] = useState<SubtitleCue[]>([]);
     const [currentSubtitleCue, setCurrentSubtitleCue] = useState<SubtitleCue | null>(null);
+
+    /** Bitmap (PGS/VobSub) cues currently on screen, straight from the native player. */
+    const [bitmapCues, setBitmapCues] = useState<BitmapCue[]>([]);
+
+    /**
+     * Which subtitle track the native player should decode, as an **ordinal among subtitle
+     * streams** — not ffmpeg's `index`, which counts video and audio streams too and so
+     * would address the wrong track (or none).
+     *
+     * Only ever set for bitmap subtitles. Text subtitles come from the ffmpeg extraction
+     * path, which haptics and negative subtitle delay both depend on.
+     */
+    const nativeTextTrackOrdinal = useMemo(() => {
+        if (selectedSubtitleTrackIndex === null || selectedSubtitleTrackIndex === -999) {
+            return -1;
+        }
+        const ordinal = subtitleTracks.findIndex(t => t.index === selectedSubtitleTrackIndex);
+        if (ordinal < 0 || !subtitleTracks[ordinal]?.isBitmap) {
+            return -1;
+        }
+        return ordinal;
+    }, [selectedSubtitleTrackIndex, subtitleTracks]);
+
+    // Native keeps sending cues for whatever it last decoded; clear them the moment the
+    // selection stops being a bitmap track, or a stale image would sit on screen.
+    useEffect(() => {
+        if (nativeTextTrackOrdinal < 0) {
+            setBitmapCues([]);
+        }
+    }, [nativeTextTrackOrdinal]);
+
+    const handleBitmapCues = useCallback((event: { cues: BitmapCue[] }) => {
+        setBitmapCues(event?.cues ?? []);
+    }, []);
 
     // External subtitles
     const [externalSubtitles, setExternalSubtitles] = useState<ExternalSubtitle[]>([]);
@@ -169,31 +201,25 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
             if (selectedSubtitleTrackIndex === null) {
                 setSubtitleCues([]);
                 setCurrentSubtitleCue(null);
-                setVlcTextTrackId(-1); // Disable native
                 return;
             }
 
             // External subtitle (special index -999)
             if (selectedSubtitleTrackIndex === -999) {
                 // Cues already set by loadExternalCues
-                setVlcTextTrackId(-1); // Disable native for external (we render them)
                 return;
             }
 
-            // Check if it's a bitmap subtitle (PGS, VobSub, etc.)
+            // Bitmap subtitles (PGS, VobSub) are decoded by ExoPlayer and arrive as cue
+            // images through onBitmapCues; the overlay draws them. ffmpeg cannot give us
+            // text for them, so the extraction path below is skipped entirely.
             const selectedTrack = subtitleTracks.find(t => t.index === selectedSubtitleTrackIndex);
             if (selectedTrack && selectedTrack.isBitmap) {
-                if (__DEV__) {
-                    if (__DEV__) {console.log(`[usePlayerTracks] Bitmap subtitle detected (${selectedTrack.codec}), using VLC native rendering`);}
-                }
-                setSubtitleCues([]); // Clear overlay
+                if (__DEV__) {console.log(`[usePlayerTracks] Bitmap subtitle (${selectedTrack.codec}) — rendering natively`);}
+                setSubtitleCues([]);
                 setCurrentSubtitleCue(null);
-                setVlcTextTrackId(selectedTrack.index); // Enable native
                 return;
             }
-
-            // It's a text subtitle, disable native and extract
-            setVlcTextTrackId(-1);
 
             try {
                 const cues = await SubtitleCueStore.getCues(videoPath, selectedSubtitleTrackIndex);
@@ -348,8 +374,10 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
         selectedSubtitleTrackIndex,
         subtitleCues,
         currentSubtitleCue,
+        bitmapCues,
+        nativeTextTrackOrdinal,
+        handleBitmapCues,
         selectSubtitleTrack,
-        vlcTextTrackId, // Expose for player to use
 
         // External
         externalSubtitles,
