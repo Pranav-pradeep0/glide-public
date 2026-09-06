@@ -195,6 +195,10 @@ dependencies {
     implementation 'com.arthenica:smart-exception-java:0.2.1'
     implementation "androidx.core:core-splashscreen:1.0.1"
 
+    // Phase 2 spike, debug only: does ExoPlayer render HDR10 correctly on this device?
+    // media3-session/common are already used by the player module at the same version.
+    debugImplementation "androidx.media3:media3-exoplayer:1.11.0"
+
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")
     } else {
