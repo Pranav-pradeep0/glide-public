@@ -1,0 +1,115 @@
+package com.glide.app.player
+
+import android.util.Log
+import androidx.media3.common.util.UnstableApi
+import com.facebook.react.bridge.ReadableArray
+import com.facebook.react.bridge.ReadableMap
+import com.facebook.react.common.MapBuilder
+import com.facebook.react.uimanager.SimpleViewManager
+import com.facebook.react.uimanager.ThemedReactContext
+import com.facebook.react.uimanager.annotations.ReactProp
+
+/**
+ * Only the props that are actually implemented are declared. A prop that is absent here is
+ * absent on purpose: subtitles, enhancement, the equalizer, audio delay, resize modes, title
+ * and artist, and PiP all belong to later steps, and declaring a no-op setter for each would
+ * hide which of them are really wired.
+ */
+@UnstableApi
+class GlidePlayerViewManager : SimpleViewManager<GlidePlayerView>() {
+
+    override fun getName() = REACT_CLASS
+
+    override fun createViewInstance(context: ThemedReactContext) = GlidePlayerView(context)
+
+    override fun onDropViewInstance(view: GlidePlayerView) {
+        view.cleanUpResources()
+    }
+
+    override fun getExportedCustomDirectEventTypeConstants(): Map<String, Any> {
+        val builder = MapBuilder.builder<String, Any>()
+        for (event in GlidePlayerView.EVENTS) {
+            builder.put(event, MapBuilder.of("registrationName", event))
+        }
+        return builder.build()
+    }
+
+    @ReactProp(name = "source")
+    fun setSource(view: GlidePlayerView, src: ReadableMap?) = view.setSource(src)
+
+    @ReactProp(name = "paused", defaultBoolean = false)
+    fun setPaused(view: GlidePlayerView, paused: Boolean) = view.setPaused(paused)
+
+    @ReactProp(name = "seek", defaultFloat = -1f)
+    fun setSeek(view: GlidePlayerView, seek: Float) = view.setSeek(seek)
+
+    @ReactProp(name = "previewSeek", defaultFloat = -1f)
+    fun setPreviewSeek(view: GlidePlayerView, seek: Float) = view.setPreviewSeek(seek)
+
+    @ReactProp(name = "rate", defaultFloat = 1f)
+    fun setRate(view: GlidePlayerView, rate: Float) = view.setRate(rate)
+
+    @ReactProp(name = "muted", defaultBoolean = false)
+    fun setMuted(view: GlidePlayerView, muted: Boolean) = view.setMuted(muted)
+
+    @ReactProp(name = "repeat", defaultBoolean = false)
+    fun setRepeat(view: GlidePlayerView, repeat: Boolean) = view.setRepeat(repeat)
+
+    @ReactProp(name = "playInBackground", defaultBoolean = false)
+    fun setPlayInBackground(view: GlidePlayerView, enabled: Boolean) =
+        view.setPlayInBackground(enabled)
+
+    @ReactProp(name = "audioTrack", defaultInt = -1)
+    fun setAudioTrack(view: GlidePlayerView, id: Int) {
+        if (id >= 0) view.setAudioTrack(id)
+    }
+
+    @ReactProp(name = "pipEnabled", defaultBoolean = false)
+    fun setPipEnabled(view: GlidePlayerView, enabled: Boolean) = view.setPipEnabled(enabled)
+
+    @ReactProp(name = "title")
+    fun setTitle(view: GlidePlayerView, title: String?) = view.setVideoTitle(title)
+
+    @ReactProp(name = "artist")
+    fun setArtist(view: GlidePlayerView, artist: String?) = view.setVideoArtist(artist)
+
+    /** Ordinal among the container's subtitle streams, or -1 to disable. Bitmap subs only. */
+    @ReactProp(name = "textTrack", defaultInt = -1)
+    fun setTextTrack(view: GlidePlayerView, ordinal: Int) = view.setTextTrack(ordinal)
+
+    @ReactProp(name = "resizeMode")
+    fun setResizeMode(view: GlidePlayerView, mode: String?) = view.setResizeMode(mode)
+
+    @ReactProp(name = "audioEqualizer")
+    fun setAudioEqualizer(view: GlidePlayerView, bands: ReadableArray?) =
+        view.setAudioEqualizer(bands)
+
+    @ReactProp(name = "videoEnhancement", defaultBoolean = false)
+    fun setVideoEnhancement(view: GlidePlayerView, enabled: Boolean) =
+        view.setVideoEnhancement(enabled)
+
+    @ReactProp(name = "progressUpdateInterval", defaultFloat = 0f)
+    fun setProgressUpdateInterval(view: GlidePlayerView, intervalMs: Float) =
+        view.setProgressUpdateInterval(intervalMs.toLong())
+
+    // Same command ids as RCTVLCPlayer, so VLCPlayer.tsx dispatches to either engine
+    // without knowing which one it has.
+    override fun getCommandsMap(): Map<String, Int> = mapOf(
+        "pausePlayer" to 4,
+        "stopPlayer" to 5,
+        "enterPictureInPicture" to 6
+    )
+
+    override fun receiveCommand(view: GlidePlayerView, commandId: Int, args: ReadableArray?) {
+        when (commandId) {
+            4 -> view.pausePlayer()
+            5 -> view.stopPlayer()
+            6 -> view.enterPictureInPicture()
+            else -> Unit
+        }
+    }
+
+    private companion object {
+        const val REACT_CLASS = "RCTGlidePlayer"
+    }
+}

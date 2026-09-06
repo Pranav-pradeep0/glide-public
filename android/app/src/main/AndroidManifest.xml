@@ -5,6 +5,21 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- android.media.audiofx.Equalizer, attached to the player's own audio session. A
+         normal permission, granted at install; it does not prompt. Replaces VLC's
+         engine-specific equalizer with the system one. -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
+    <!-- The media session service. These used to arrive by manifest merge from the VLC
+         player module; deleting that module took them with it, and Media3's
+         MediaNotificationManager then called startForegroundService() on a service the
+         system would not let go foreground — crashing the app with
+         ForegroundServiceDidNotStartInTimeException about 30s into playback. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- Android 13+. Without it the session notification is never posted, so the service
+         cannot go foreground even with the permissions above. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WRITE_SETTINGS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
@@ -50,6 +65,18 @@
             <category android:name="android.intent.category.LAUNCHER" />
         </intent-filter>
       </activity>
+
+      <!-- Media3 owns the notification, media buttons and lock-screen controls, derived
+           from the real ExoPlayer. No adapter, and no notification code in the view.
+           Permissions are declared above, on the app itself. -->
+      <service
+        android:name="com.glide.app.player.GlidePlayerService"
+        android:exported="false"
+        android:foregroundServiceType="mediaPlayback">
+        <intent-filter>
+            <action android:name="androidx.media3.session.MediaSessionService" />
+        </intent-filter>
+      </service>
 
       <activity
         android:name=".VideoPlayerActivity"
