@@ -11,6 +11,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.hypot
@@ -134,6 +135,18 @@ class ColorEnhancementTest {
             assertTrue("not monotonic at $nits nits", out > previous)
             previous = out
             nits *= 1.2f
+        }
+    }
+
+    @Test
+    fun `media3 shader overrides match the media3 version in use`() {
+        // res/raw replaces two media3 shaders to fix fp16 black crush. A stale copy after a
+        // media3 upgrade would silently run old shader code against new uniforms.
+        val media3 = Regex("""media3-effect:([\d.]+)""").find(File("build.gradle").readText())!!.groupValues[1]
+        listOf("fragment_shader_transformation_external_yuv_es3", "fragment_shader_oetf_es3").forEach {
+            val glsl = File("src/main/res/raw/$it.glsl").readText()
+            assertTrue("$it must be re-copied from media3 $media3", "override of media3 $media3:" in glsl)
+            assertTrue("$it must use highp", "precision highp float;" in glsl && "precision mediump" !in glsl)
         }
     }
 

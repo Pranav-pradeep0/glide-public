@@ -29,6 +29,19 @@ import kotlin.math.pow
  * the transfer function does not need to be known. The `* pqMaxLuminance` line that earlier
  * notes quoted belongs to the HDR-to-SDR tone-mapping branch, which does not run when the
  * output is HDR.
+ *
+ * ## Why `res/raw` overrides two media3 shaders
+ *
+ * Those two passes declare `precision mediump float`, which is fp16 on the Adreno this was
+ * measured on, and fp16 arithmetic flushes denormals. The input pass holds PQ light on the
+ * 0..10,000-nit scale before scaling it, so everything under fp16's smallest normal,
+ * 6.1e-5 * 10,000 = **0.61 nits**, became exactly 0. Measured on device with a readback of
+ * the texture this pass receives, on a dark HDR scene: 89.9% of pixels were 0 and nothing
+ * sat between 0 and 0.61 nits. That, not any enhancement maths, is what crushed HDR blacks
+ * whenever an effect was on. The copies in `res/raw` differ from media3 1.11.0's only in
+ * `precision highp float`; with them, 0.0% of the same scene is 0. App resources override
+ * library resources of the same name, so upgrading media3 means re-copying both files --
+ * [ColorEnhancementTest] fails until that is done.
  */
 internal object ColorEnhancement {
 
