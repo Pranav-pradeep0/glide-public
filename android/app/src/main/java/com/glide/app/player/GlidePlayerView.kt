@@ -21,6 +21,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.text.Cue
 import androidx.media3.common.VideoSize
 import androidx.media3.common.Effect
+import androidx.media3.common.util.GlUtil
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.RgbMatrix
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -113,13 +114,6 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
     private val textTracks = mutableListOf<Pair<TrackGroup, Int>>()
     private var pendingTextTrack: Int? = null
     private var lastBitmapCueSignature: String? = null
-
-    /**
-     * The video's colour transfer (C.COLOR_TRANSFER_ST2084, _HLG, _SDR...). Needed because
-     * PQ and HLG normalise linear light to completely different scales, and the enhancement
-     * matrix's contrast pivot depends on which one this is.
-     */
-    private var videoColorTransfer = C.COLOR_TRANSFER_SDR
 
     private var videoWidth = 0
     private var videoHeight = 0
@@ -447,59 +441,23 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
         openMedia()
     }
 
+    // HDR effect first: media3 folds only *trailing* matrices into its final pass, which is
+    // where the SDR matrix has always run. Each one is a no-op in the other range.
     private fun buildEffects(): List<Effect> =
-        if (enhancementEnabled) listOf(enhancementMatrix) else emptyList()
+        if (enhancementEnabled) listOf(HdrColorEnhancement, enhancementMatrix) else emptyList()
 
     /**
-     * Colour enhancement as a single RGB matrix: luminance-preserving saturation, then
-     * contrast about mid-grey.
+     * SDR colour enhancement: luminance-preserving saturation, then contrast about mid-grey.
+     * HDR is [HdrColorEnhancement], because a matrix cannot do HDR contrast without erasing
+     * the shadows -- see [ColorEnhancement].
      *
      * Media3's obvious choice -- `HslAdjustment` plus `Contrast`, which the migration plan
      * proposed -- cannot be used at all: `HslShaderProgram` throws
      * `IllegalArgumentException: HDR is not yet supported`, killing playback on exactly the
-     * content this migration exists to fix. `RgbMatrix` has no such restriction.
-     *
-     * ## Why the pivot has to depend on the transfer function
-     *
-     * `RgbMatrix` hands us *linear* RGB, and the scale of "linear" is not the same for SDR
-     * and HDR. From media3's own shader
-     * (`fragment_shader_transformation_external_yuv_es3.glsl`):
-     *
-     *     // Input and output are both normalized to [0, 1].
-     *     const float pqMaxLuminance = 10000.0;
-     *     linearRgbBt2020 = linearRgbBt2020 * pqMaxLuminance;  // Scale luminance.
-     *
-     * So for PQ, linear 1.0 is **10,000 nits**, not white. An earlier version pivoted
-     * contrast at 0.18 for everything, which in PQ space means 1800 nits -- about nine
-     * times diffuse white. The resulting offset was `0.18 * (1 - c)`, which subtracted more
-     * than the entire value of every midtone: mid-grey sits at 0.00365 and the offset was
-     * -0.0063, so everything below roughly 61 nits clamped to pure black. That is most of
-     * the picture, and it is why HDR looked far worse than SDR rather than merely different.
-     *
-     * Mid-grey is 18% of diffuse white in each space. Diffuse white is:
-     *   - SDR: 1.0 by definition.
-     *   - PQ:  203 / 10000, from ITU-R BT.2408's HDR Reference White of 203 cd/m².
-     *   - HLG: 0.264963, the BT.2100 HLG inverse OETF evaluated at signal 0.75
-     *          (reference white): `(exp((0.75 - c) / a) + b) / 12`, using the same a, b, c
-     *          the shader's `hlgEotfSingleChannel` uses.
-     *
-     * `useHdr` alone cannot tell PQ from HLG -- their pivots differ by 13x -- so the
-     * transfer function is read from the video Format and stored in [videoColorTransfer].
-     *
-     * Saturation needs no pivot (it is a pure linear mix) but is deliberately gentler on
-     * HDR: BT.2020 is a far wider gamut than BT.709, so the same boost pushes colours past
-     * what the panel can show, where they clip and shift hue.
-     *
-     * These constants are the calibration knob, and they trade in one direction: more
-     * colour is also more chroma noise, worst in dark scenes. Going much further wants a
-     * real tone curve with a shoulder, not bigger numbers.
+     * content this migration exists to fix.
      */
-    private val enhancementMatrix = object : RgbMatrix {
-        override fun getMatrix(presentationTimeUs: Long, useHdr: Boolean): FloatArray =
-            ColorEnhancement.matrix(
-                useHdr = useHdr,
-                isHlg = videoColorTransfer == C.COLOR_TRANSFER_HLG,
-            )
+    private val enhancementMatrix = RgbMatrix { _, useHdr ->
+        if (useHdr) GlUtil.create4x4IdentityMatrix() else ColorEnhancement.sdrMatrix()
     }
 
     /**
@@ -770,20 +728,6 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
                     audioTracks.add(group.mediaTrackGroup to i)
                 }
             }
-            // The selected video track's transfer function decides the enhancement pivot.
-            for (group in tracks.groups) {
-                if (group.type != C.TRACK_TYPE_VIDEO) continue
-                for (i in 0 until group.length) {
-                    if (!group.isTrackSelected(i)) continue
-                    val transfer = group.getTrackFormat(i).colorInfo?.colorTransfer
-                        ?: C.COLOR_TRANSFER_SDR
-                    if (transfer != videoColorTransfer) {
-                        videoColorTransfer = transfer
-                        Log.w(TAG, "colorTransfer=$transfer (6=ST2084/PQ, 7=HLG, 3=SDR)")
-                    }
-                }
-            }
-
             textTracks.clear()
             for (group in tracks.groups) {
                 if (group.type != C.TRACK_TYPE_TEXT) continue
