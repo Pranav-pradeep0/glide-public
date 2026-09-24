@@ -410,6 +410,63 @@ Measured with enhancement on:
 
 That is the A4 defect fixed and verified, not argued.
 
+#### The enhancement constants were wrong three times, and only the third was taste
+
+Worth recording in full, because each wrong answer looked reasonable.
+
+**First: VLC's numbers ported verbatim.** `--saturation=1.30 --brightness=1.03` applied to
+*linear* light rather than the gamma-encoded values VLC fed them to. Visible grain, worst in
+dark scenes. A uniform gain in linear light is an exposure lift, and lifting the blacks is
+exactly what makes compression noise visible.
+
+**Second, and the serious one: a contrast pivot correct for SDR and ~50x wrong for PQ.**
+Contrast needs a pivot, and mid-grey is 0.18 *of diffuse white* — but "diffuse white" is not
+1.0 in every space. From media3's own shader,
+`fragment_shader_transformation_external_yuv_es3.glsl`:
+
+    // Applies the appropriate EOTF ... Input and output are both normalized to [0, 1].
+    const float pqMaxLuminance = 10000.0;
+    linearRgbBt2020 = linearRgbBt2020 * pqMaxLuminance;  // Scale luminance.
+
+Under PQ, linear 1.0 is **10,000 nits**. A pivot of 0.18 therefore means 1800 nits, about
+nine times diffuse white, and the resulting offset `0.18 * (1 - c)` = -0.0063 was larger
+than the entire value of every midtone:
+
+| | linear | with pivot 0.18 | with the correct pivot |
+|---|---|---|---|
+| mid-grey (36.5 nits) | 0.003654 | **-0.0025, clamped to pure black** | unchanged |
+| diffuse white (203 nits) | 0.0203 | 147 nits, darkened 27% | ~215 nits |
+
+Everything below roughly 61 nits crushed to black — most of the frame. SDR was unaffected
+because 0.18 is right there, which is exactly why the report was "SDR okayish, HDR very
+bad": the same code, two colour spaces, one of them silently destroyed.
+
+Mid-grey is 18% of diffuse white, and diffuse white is:
+
+| space | diffuse white (linear) | pivot | source |
+|---|---|---|---|
+| SDR | 1.0 | 0.18 | by definition |
+| PQ | 203/10000 = 0.0203 | 0.003654 | ITU-R BT.2408 HDR Reference White, 203 cd/m² |
+| HLG | 0.264963 | 0.047693 | BT.2100 inverse OETF at signal 0.75 |
+
+`useHdr` cannot distinguish PQ from HLG and their pivots differ by 13x, so the transfer
+function is read from the selected video `Format.colorInfo.colorTransfer`.
+
+**Third: strength.** Saturation is gentler on HDR (1.10 against SDR's 1.18) because BT.2020
+is a far wider gamut, so an equal boost pushes colours past what the panel can show, where
+they clip and shift hue. These are genuinely a knob; the two above were not.
+
+The arithmetic now lives in `ColorEnhancement.kt`, pure and separate from the view, with 8
+JVM tests: mid-grey pivots exactly in all three spaces, PQ midtones stay positive, 5-nit
+shadows survive, the HLG constant is re-derived from the BT.2100 formula, and the three
+pivots must stay on different scales. The second bug would have been caught in
+milliseconds by any one of them.
+
+**The ceiling.** `RgbMatrix` is a linear operation, so no value of these constants can give
+a tone-curve shoulder, hue-selective saturation (skin tones), or luminance-weighted
+saturation (less boost where chroma noise lives). Those need a custom
+`BaseGlShaderProgram`. Not a defect, and not scheduled — see tracker §19.1.
+
 **HDR survives enhancement too** — measured, because the reasonable expectation was that it
 would not. With the frame processor armed *and* an effect in it, the display stays
 `colorMode=DISPLAY_P3` and the layer is `dataspace=BT2020_PQ`. `RgbMatrix` declares HDR

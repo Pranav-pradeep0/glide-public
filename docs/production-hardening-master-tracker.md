@@ -1746,11 +1746,43 @@ root-package dependency and therefore needs its own migration checklist.
 
 ## 11. P2 — native media dependencies and 16 KB support
 
-### 11.1 LibVLC
+### 11.0 Status 2026-09-11 — the engine migration closed most of this section
 
-- `[todo]` Complete geometry fixtures first, then upgrade LibVLC `3.6.5` → stable `3.7.5`.
-- `[todo]` Do not ship LibVLC 4 EAP.
-- `[todo]` Re-run resize, SAR, tracks, snapshots, PiP, codecs, streams, and native ELF checks.
+LibVLC is deleted (see `docs/player-engine-migration-plan.md`, phase 4). Everything in 11.1
+is therefore moot, and the 16 KB problem has narrowed from "the native media stack" to two
+named files.
+
+**Measured on the 2.0.0 release APK**, by reading `PT_LOAD` `p_align` out of the ELF program
+headers of every packaged `arm64-v8a` library:
+
+| library | p_align | |
+|---|---|---|
+| `libffmpegJNI.so` (new Media3 decoder) | 16384 | OK |
+| `libavcodec/avformat/avutil/swresample/swscale.so` | 16384 | OK |
+| every React Native, Hermes, Reanimated, MMKV, Stallion library | 16384 | OK |
+| **`libffmpegkit.so`** | **4096** | **blocks 16 KB devices** |
+| **`libffmpegkit_abidetect.so`** | **4096** | **blocks 16 KB devices** |
+
+So 32 of 34 packaged libraries are already correct, `libvlc.so` is gone entirely, and the
+only two that are not are exactly the FFmpegKit *wrapper* libraries 11.2 already identified.
+The hypothesis in 11.2 was right; this is the measurement behind it.
+
+That makes 11.2 the live item and 11.3 the fallback, not the other way round: the blocker is
+two small wrapper libraries, not the FFmpeg libraries they wrap.
+
+Reproduce with the ELF parse rather than trusting the build plugin — it needs no NDK on
+PATH, only `od`:
+
+    e_phoff @0x20 (u64), e_phentsize @0x36 (u16), e_phnum @0x38 (u16);
+    per entry: p_type @+0 (u32, PT_LOAD == 1), p_align @+48 (u64)
+
+### 11.1 LibVLC — closed, LibVLC removed
+
+- `[done]` Superseded entirely: LibVLC was replaced by Media3/ExoPlayer and deleted in
+  2.0.0. There is no 3.6.5 to upgrade, no EAP decision to make, and `libvlc.so` (41.1 MB,
+  56% of the release APK) is no longer packaged.
+- `[done]` Resize, SAR, PiP and codec checks were re-run against the new engine instead;
+  see the phase 3 verification table in the migration plan.
 
 ### 11.2 Focused FFmpegKit wrapper repair
 
@@ -2451,6 +2483,44 @@ HTTP/HTTPS/RTSP, audio focus, calls, screen lock, and process pressure.
 
 Security/release containment can interrupt this order. Otherwise, do not start a later
 phase merely because it is more interesting than the current exit criteria.
+
+### 19.1 Revised order after the engine migration — 2026-09-11
+
+Steps 3, 4 and 6 above were written around LibVLC and have to be re-read. The engine
+migration (`docs/player-engine-migration-plan.md`) shipped as 2.0.0 and closed step 6's
+LibVLC half outright, plus most of section 11 and section 8's geometry work. What is
+actually next, in order:
+
+1. **Finish verifying 2.0.0 on device, then tag it.** The build is committed and the release
+   APK builds at 33.6 MB, but three things are unverified: the corrected colour-enhancement
+   values, the `setFixedSize` fix for the resize-mode flash, and bitmap (PGS) subtitles,
+   which have never had a single cue drawn on a device for want of test content. Nothing
+   below matters until the thing users run is known good.
+
+2. **16 KB: rebuild the two FFmpegKit wrapper libraries (11.2).** Now the narrowest it will
+   ever be — 32 of 34 packaged libraries already pass, and the two that fail are named and
+   measured in 11.0. This blocks 16 KB devices and Play going forward, and it is the last
+   native-alignment item.
+
+3. **Discharge the LGPL obligation (11.3, migration D2).** Overdue and now more so: 2.0.0
+   ships `libffmpegJNI.so` with FFmpeg *statically* linked, and the AAR was committed to a
+   public repo to unblock CI. Publishing `glide-ffmpeg-decoder` with its build inputs is
+   what makes the relink path real; committing a binary does not.
+
+4. **Consume the decoder AAR from GitHub Packages (§4.3).** Removes the committed binary and
+   restores 12.3's no-vendored-AAR rule, which 2.0.0 deliberately broke to stay buildable.
+
+5. **Section 15, tests and guardrails.** The largest remaining bucket at 29 items, and the
+   migration made it cheaper: `Geometry.kt` and `ColorEnhancement.kt` are pure and already
+   carry 20 JVM tests between them, which is the pattern the rest should follow.
+
+6. **Section 12 cleanup**, then 14 (iOS scope) and the rest as originally ordered.
+
+Deliberately *not* next, though both are tempting: a custom GL shader for colour enhancement
+(the current `RgbMatrix` is linear and so cannot do a tone-curve shoulder, hue-selective
+saturation, or luminance-weighted saturation), and A7's subtitle-cue swap, which was
+investigated and rejected — see the migration plan. Neither is a defect; both are quality
+work behind three real blockers.
 
 ## 20. Primary references checked
 
