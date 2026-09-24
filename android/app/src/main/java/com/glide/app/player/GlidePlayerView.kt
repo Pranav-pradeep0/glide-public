@@ -114,6 +114,13 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
     private var pendingTextTrack: Int? = null
     private var lastBitmapCueSignature: String? = null
 
+    /**
+     * The video's colour transfer (C.COLOR_TRANSFER_ST2084, _HLG, _SDR...). Needed because
+     * PQ and HLG normalise linear light to completely different scales, and the enhancement
+     * matrix's contrast pivot depends on which one this is.
+     */
+    private var videoColorTransfer = C.COLOR_TRANSFER_SDR
+
     private var videoWidth = 0
     private var videoHeight = 0
     /** Pixel aspect ratio, from VideoSize.pixelWidthHeightRatio. 1 for square pixels. */
@@ -441,85 +448,58 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
     }
 
     private fun buildEffects(): List<Effect> =
-        if (enhancementEnabled) listOf(EnhancementMatrix) else emptyList()
+        if (enhancementEnabled) listOf(enhancementMatrix) else emptyList()
 
     /**
-     * Saturation and gain as a single RGB matrix.
+     * Colour enhancement as a single RGB matrix: luminance-preserving saturation, then
+     * contrast about mid-grey.
      *
-     * Media3's obvious choice here -- `HslAdjustment` plus `Contrast`, which is what the
-     * migration plan proposed -- cannot be used: `HslShaderProgram` throws
-     * `IllegalArgumentException: HDR is not yet supported`, killing playback outright on
-     * exactly the HDR content this migration exists to fix. Measured on device, 2026-09-06.
+     * Media3's obvious choice -- `HslAdjustment` plus `Contrast`, which the migration plan
+     * proposed -- cannot be used at all: `HslShaderProgram` throws
+     * `IllegalArgumentException: HDR is not yet supported`, killing playback on exactly the
+     * content this migration exists to fix. `RgbMatrix` has no such restriction.
      *
-     * `RgbMatrix` has no such restriction, and it hands us the frame in *linear* RGB --
-     * BT.2020 for HDR, BT.709 for SDR -- which is the right space for a luminance-preserving
-     * saturation matrix anyway.
+     * ## Why the pivot has to depend on the transfer function
      *
-     * ponytail: no contrast term. Contrast needs a pivot, and a 0.5 pivot is meaningless in
-     * linear light where HDR values run past 1.0. VLC's contrast was 1.08 -- small enough
-     * that dropping it costs little against shipping something wrong on HDR. Saturation is
-     * what users actually see. Add a proper tone-curve effect if the look needs it.
+     * `RgbMatrix` hands us *linear* RGB, and the scale of "linear" is not the same for SDR
+     * and HDR. From media3's own shader
+     * (`fragment_shader_transformation_external_yuv_es3.glsl`):
+     *
+     *     // Input and output are both normalized to [0, 1].
+     *     const float pqMaxLuminance = 10000.0;
+     *     linearRgbBt2020 = linearRgbBt2020 * pqMaxLuminance;  // Scale luminance.
+     *
+     * So for PQ, linear 1.0 is **10,000 nits**, not white. An earlier version pivoted
+     * contrast at 0.18 for everything, which in PQ space means 1800 nits -- about nine
+     * times diffuse white. The resulting offset was `0.18 * (1 - c)`, which subtracted more
+     * than the entire value of every midtone: mid-grey sits at 0.00365 and the offset was
+     * -0.0063, so everything below roughly 61 nits clamped to pure black. That is most of
+     * the picture, and it is why HDR looked far worse than SDR rather than merely different.
+     *
+     * Mid-grey is 18% of diffuse white in each space. Diffuse white is:
+     *   - SDR: 1.0 by definition.
+     *   - PQ:  203 / 10000, from ITU-R BT.2408's HDR Reference White of 203 cd/m².
+     *   - HLG: 0.264963, the BT.2100 HLG inverse OETF evaluated at signal 0.75
+     *          (reference white): `(exp((0.75 - c) / a) + b) / 12`, using the same a, b, c
+     *          the shader's `hlgEotfSingleChannel` uses.
+     *
+     * `useHdr` alone cannot tell PQ from HLG -- their pivots differ by 13x -- so the
+     * transfer function is read from the video Format and stored in [videoColorTransfer].
+     *
+     * Saturation needs no pivot (it is a pure linear mix) but is deliberately gentler on
+     * HDR: BT.2020 is a far wider gamut than BT.709, so the same boost pushes colours past
+     * what the panel can show, where they clip and shift hue.
+     *
+     * These constants are the calibration knob, and they trade in one direction: more
+     * colour is also more chroma noise, worst in dark scenes. Going much further wants a
+     * real tone curve with a shoulder, not bigger numbers.
      */
-    private object EnhancementMatrix : RgbMatrix {
-        /**
-         * Saturation only, and gently. **These are the calibration knob** — raise them and
-         * the picture gets noisy, not just more colourful.
-         *
-         * VLC used `--saturation=1.30 --brightness=1.03`, applied to *gamma-encoded* values.
-         * Porting those numbers verbatim into linear light was wrong and looked it: visible
-         * grain, worst in dark scenes.
-         *
-         * The brightness term is gone entirely. A uniform gain in linear light is an
-         * exposure lift, and lifting the blacks is exactly what makes compression noise
-         * visible in the shadows. At 1.03 it bought three percent of brightness the panel
-         * already provides, in exchange for that.
-         *
-         * Saturation is weaker on HDR than SDR. Saturation amplifies *chroma* noise, which
-         * reads as coloured speckle, and BT.2020 content is already wide-gamut — the same
-         * boost that flatters a dull SDR encode pushes HDR channels out of gamut, where
-         * they clip. media3 tells us which we are in, so use it.
-         *
-         * Raising these is the knob, and it trades in one direction: more colour also means
-         * more chroma noise, worst in dark scenes. If it needs to go much further than this
-         * it wants a real shader with a shoulder, not a bigger number.
-         */
-        private const val SATURATION_SDR = 1.32f
-        private const val SATURATION_HDR = 1.20f
-
-        /**
-         * Contrast about linear mid-grey, which is where the visible "pop" comes from.
-         *
-         * A pivot matters: scaling everything uniformly is an exposure lift, and lifting the
-         * blacks is what made the first attempt grainy. Pivoting at 0.18 -- the linear value
-         * of an 18% grey card -- pushes shadows *down* while lifting highlights, so it deepens
-         * blacks rather than amplifying the noise in them.
-         *
-         * Expressed as scale plus offset, which is why the 4th column is not zero:
-         *   out = c * in + pivot * (1 - c)
-         */
-        private const val CONTRAST_SDR = 1.12f
-        private const val CONTRAST_HDR = 1.06f
-        private const val LINEAR_MID_GREY = 0.18f
-
-        override fun getMatrix(presentationTimeUs: Long, useHdr: Boolean): FloatArray {
-            val (lr, lg, lb) = if (useHdr) {
-                Triple(0.2627f, 0.6780f, 0.0593f)   // BT.2020 luma weights
-            } else {
-                Triple(0.2126f, 0.7152f, 0.0722f)   // BT.709
-            }
-            val s = if (useHdr) SATURATION_HDR else SATURATION_SDR
-            val c = if (useHdr) CONTRAST_HDR else CONTRAST_SDR
-            val inv = 1f - s
-            val offset = LINEAR_MID_GREY * (1f - c)
-            // Column-major, as GL wants: element (row i, col j) lives at index j * 4 + i,
-            // so the translation occupies indices 12..14.
-            return floatArrayOf(
-                (lr * inv + s) * c, (lr * inv) * c, (lr * inv) * c, 0f,
-                (lg * inv) * c, (lg * inv + s) * c, (lg * inv) * c, 0f,
-                (lb * inv) * c, (lb * inv) * c, (lb * inv + s) * c, 0f,
-                offset, offset, offset, 1f
+    private val enhancementMatrix = object : RgbMatrix {
+        override fun getMatrix(presentationTimeUs: Long, useHdr: Boolean): FloatArray =
+            ColorEnhancement.matrix(
+                useHdr = useHdr,
+                isHlg = videoColorTransfer == C.COLOR_TRANSFER_HLG,
             )
-        }
     }
 
     /**
@@ -790,6 +770,20 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
                     audioTracks.add(group.mediaTrackGroup to i)
                 }
             }
+            // The selected video track's transfer function decides the enhancement pivot.
+            for (group in tracks.groups) {
+                if (group.type != C.TRACK_TYPE_VIDEO) continue
+                for (i in 0 until group.length) {
+                    if (!group.isTrackSelected(i)) continue
+                    val transfer = group.getTrackFormat(i).colorInfo?.colorTransfer
+                        ?: C.COLOR_TRANSFER_SDR
+                    if (transfer != videoColorTransfer) {
+                        videoColorTransfer = transfer
+                        Log.w(TAG, "colorTransfer=$transfer (6=ST2084/PQ, 7=HLG, 3=SDR)")
+                    }
+                }
+            }
+
             textTracks.clear()
             for (group in tracks.groups) {
                 if (group.type != C.TRACK_TYPE_TEXT) continue
@@ -833,6 +827,21 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
             // media3 applies it internally and width/height already account for it.
             videoSar = videoSize.pixelWidthHeightRatio.takeIf { it > 0f } ?: 1f
             Log.w(TAG, "video ${videoWidth}x$videoHeight sar=$videoSar")
+
+            // Pin the surface buffer to the video's own dimensions.
+            //
+            // By default a SurfaceView sizes its buffer from its layout, and a SurfaceView
+            // owns a separate compositor layer -- so every resize-mode change reallocated
+            // the buffer queue, and the gap between releasing the old buffer and filling
+            // the new one is the flash seen when switching modes.
+            //
+            // With a fixed size, changing the mode only moves and scales the *view*; the
+            // buffer never changes, so there is nothing to reallocate. The decoder was
+            // already producing frames at exactly this size, so nothing is resampled that
+            // was not being resampled before.
+            if (videoWidth > 0 && videoHeight > 0) {
+                surfaceView.holder.setFixedSize(videoWidth, videoHeight)
+            }
             // PiP wants the pixel ratio as a rational; media3 reports it as a float.
             pipController.setVideoGeometry(
                 videoWidth, videoHeight, (videoSar * SAR_DENOMINATOR).roundToLong().toInt(),
