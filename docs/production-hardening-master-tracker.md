@@ -2516,11 +2516,13 @@ actually next, in order:
 
 6. **Section 12 cleanup**, then 14 (iOS scope) and the rest as originally ordered.
 
-Deliberately *not* next, though both are tempting: a custom GL shader for colour enhancement
-(the current `RgbMatrix` is linear and so cannot do a tone-curve shoulder, hue-selective
-saturation, or luminance-weighted saturation), and A7's subtitle-cue swap, which was
-investigated and rejected — see the migration plan. Neither is a defect; both are quality
-work behind three real blockers.
+Deliberately *not* next: A7's subtitle-cue swap, which was investigated and rejected — see the
+migration plan. It is quality work behind three real blockers, not a defect.
+
+The custom GL shader for colour enhancement *did* turn out to be a defect, because the
+`RgbMatrix` erased HDR shadow detail. It was built for HDR on 2026-09-24 (migration plan, *HDR
+enhancement moved to an ICtCp shader*) and is **unverified on device**. That check folds into
+item 1.
 
 ## 20. Primary references checked
 

@@ -465,7 +465,8 @@ milliseconds by any one of them.
 **The ceiling.** `RgbMatrix` is a linear operation, so no value of these constants can give
 a tone-curve shoulder, hue-selective saturation (skin tones), or luminance-weighted
 saturation (less boost where chroma noise lives). Those need a custom
-`BaseGlShaderProgram`. Not a defect, and not scheduled — see tracker §19.1.
+`BaseGlShaderProgram`. Built for HDR on 2026-09-24 — see *HDR enhancement moved to an
+ICtCp shader* below.
 
 **HDR survives enhancement too** — measured, because the reasonable expectation was that it
 would not. With the frame processor armed *and* an effect in it, the display stays
@@ -517,6 +518,52 @@ B9.** Phase 3 is the risk peak and is worth more than the subtitle latency win.
 
 **Not measured:** playback speed is wired but pitch preservation at 0.25-4.0x on an E-AC-3
 track has not been checked.
+
+#### HDR enhancement moved to an ICtCp shader — 2026-09-24
+
+**Every PQ nit figure above is 10x off.** The HDR working space is **1.0 = 1000 nits**, not
+10,000. media3's input pass (`scaleHdrLuminance`) multiplies PQ light by 10000/1000, and its
+final pass (`fragment_shader_oetf_es3.glsl`, `normalizeHdrLuminance`) divides it back before
+the OETF. That was confirmed in the 1.11.0 AAR's shaders and bytecode: the working transfer
+is forced to `LINEAR`, and the final program is `createApplyingOetf`. The `* pqMaxLuminance`
+quoted above belongs to the HDR-to-SDR tone-map branch, which does not run for HDR output.
+Two consequences:
+
+- The shipped "1 nit" pivot was really 0.1 nit, so the offset was -0.006 nits, not -0.06.
+  Everything under 0.0057 nits went to pure black and 0.01 nits lost 54%. The defect was
+  real, just deeper in the shadows than stated.
+- HLG is also normalised to 1.0 = its 1000-nit peak, so PQ and HLG diffuse white differ by
+  1.3x, not 13x. `videoColorTransfer` existed only for that distinction and was deleted.
+
+**What replaced the HDR matrix.** `HdrColorEnhancement`, a `GlEffect` +
+`BaseGlShaderProgram`, per BT.2390: working BT.2020 → LMS → PQ → ICtCp, then
+`I + 0.08·I²·(1 − I/I₁₀₀₀)` on I and ×1.10 on Ct/Cp, then back. Maths and GLSL sit side by
+side in `ColorEnhancement.kt`. The Kotlin copy is what the tests exercise.
+
+| nits | 0.01 | 0.1 | 1 | 9 | 81 | 203 | 1000 | 4000 |
+|---|---|---|---|---|---|---|---|---|
+| old matrix | -54% | 0% | +5.4% | +5.9% | +6.0% | +6.0% | +6.0% | +6% |
+| ICtCp curve | +0.3% | +1.1% | +2.9% | +5.5% | +7.0% | +6.0% | 0% | -11% |
+
+**SDR is unchanged, by construction (reasoned from the bytecode, not measured).** The effect list is `[HdrColorEnhancement, RgbMatrix]`. For SDR the
+first is `PassthroughShaderProgram`, which forwards the texture without drawing, and the
+matrix still folds into the final pass because it is trailing. For HDR the matrix returns
+identity. A golden test pins the SDR matrix values.
+
+**Cost, HDR only, estimated and not measured:** one extra full-frame RGBA16F pass (the
+pipeline goes from two passes to three) and 12 more `pow` per pixel (from 12 to 24).
+
+**Not verified on device** (none was attached). Before release:
+`dumpsys SurfaceFlinger` must still show `DISPLAY_P3` and a `BT2020_PQ` layer; an A/B on a
+dark HDR scene; and GPU busy/thermals over 10 minutes of 4K HDR against enhancement off. If
+the shader is not clearly better, the fallback is one line: return
+`PassthroughShaderProgram()` for HDR as well. HDR then goes through unenhanced, though the
+frame processor is still armed.
+
+**Open risk, upstream of any effect:** 0.06 nits is 6.1e-5 in the working space, which is
+fp16's smallest normal. A GPU that flushes fp16 denormals would zero everything below 0.06
+nits in media3's own intermediate texture, before this shader ever sees it. If deep blacks
+still crush with the shader on, suspect that first.
 
 ### Phase 3 — Surface, geometry, PiP, session
 
