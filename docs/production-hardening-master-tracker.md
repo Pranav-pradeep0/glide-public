@@ -2519,10 +2519,12 @@ actually next, in order:
 Deliberately *not* next: A7's subtitle-cue swap, which was investigated and rejected — see the
 migration plan. It is quality work behind three real blockers, not a defect.
 
-The custom GL shader for colour enhancement *did* turn out to be a defect, because the
-`RgbMatrix` erased HDR shadow detail. It was built for HDR on 2026-09-24 (migration plan, *HDR
-enhancement moved to an ICtCp shader*) and is **unverified on device**. That check folds into
-item 1.
+Colour enhancement crushing HDR blacks *was* a defect, and not the one assumed. media3's own
+shaders run at fp16 on the device and zeroed everything under 0.61 nits whenever any effect
+was on. Fixed 2026-09-25 with `highp` overrides in `res/raw`, alongside the ICtCp shader that
+replaced the HDR matrix (migration plan, *HDR enhancement moved to an ICtCp shader*). Both
+were verified on device. Still open: a ~13% even darkening in screenshots, and GPU cost.
+Those fold into item 1.
 
 ## 20. Primary references checked
 

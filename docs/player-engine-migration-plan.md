@@ -553,17 +553,40 @@ identity. A golden test pins the SDR matrix values.
 **Cost, HDR only, estimated and not measured:** one extra full-frame RGBA16F pass (the
 pipeline goes from two passes to three) and 12 more `pow` per pixel (from 12 to 24).
 
-**Not verified on device** (none was attached). Before release:
-`dumpsys SurfaceFlinger` must still show `DISPLAY_P3` and a `BT2020_PQ` layer; an A/B on a
-dark HDR scene; and GPU busy/thermals over 10 minutes of 4K HDR against enhancement off. If
-the shader is not clearly better, the fallback is one line: return
-`PassthroughShaderProgram()` for HDR as well. HDR then goes through unenhanced, though the
-frame processor is still armed.
+**The real cause of crushed HDR blacks was media3, not the matrix** — measured 2026-09-25 on
+AIN065, The Boys S05E04 (HDR10+/DV, PQ), with a temporary readback of the texture this
+shader receives. Both media3 passes that surround every effect,
+`fragment_shader_transformation_external_yuv_es3.glsl` and `fragment_shader_oetf_es3.glsl`,
+declare `precision mediump float`. That is fp16 on this GPU, and fp16 arithmetic flushes
+denormals. The input pass holds PQ light on the 0..10,000-nit scale before its x10, so
+everything under 6.1e-5 x 10,000 = **0.61 nits became exactly 0**:
 
-**Open risk, upstream of any effect:** 0.06 nits is 6.1e-5 in the working space, which is
-fp16's smallest normal. A GPU that flushes fp16 denormals would zero everything below 0.06
-nits in media3's own intermediate texture, before this shader ever sees it. If deep blacks
-still crush with the shader on, suspect that first.
+| media3 input texture, dark scene | stock shaders | `highp` overrides |
+|---|---|---|
+| pixels exactly 0 | **89.9%** | **0.0%** |
+| 0.006–0.061 nits | 0.0% | 26.4% |
+| 0.061–0.5 nits | 0.5% | 54.1% |
+| smallest non-zero channel | 6.1e-4 (a hard floor) | 7.0e-6 |
+
+The two readings are 17 s apart in the same dark scene. In same-frame screenshot pairs
+against enhancement off, the wall was -99% with stock shaders (45:23) and -12% with the
+overrides (47:13).
+
+So the "leave HDR alone" fallback would not have helped: arming *any* effect ran these
+passes. Fixed by copying both shaders into `android/app/src/main/res/raw/`, changed only to
+`precision highp float`. An app resource overrides a library resource of the same name. A
+test fails if media3 is upgraded without re-copying them.
+
+**Verified on device:** the shader compiles and runs with 0 frame-processing errors. HDR is
+retained with it on (`DISPLAY_P3`, layer `RGBA_1010102` at `BT2020_PQ`). The toggle
+reopens at the same position.
+
+**Still open:**
+- Screenshots of the same frame are ~13% darker, evenly, with enhancement on, although the GL
+  output has no zeros. The likely cause is HDR10+ dynamic metadata reaching the display only
+  on the direct decoder path, so the display tone-maps the two buffers differently.
+  Unverified; judge by eye on the panel, not from screenshots.
+- GPU busy and thermals have not been measured.
 
 ### Phase 3 — Surface, geometry, PiP, session
 
