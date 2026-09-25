@@ -45,3 +45,24 @@ describe('compareVersions', () => {
     expect(compareVersions('1.8.0', 'v1.9.0-build.3')).toBe(-1);
   });
 });
+
+describe('strict parsing', () => {
+  it('rejects what the old parser quietly reinterpreted', () => {
+    // parseInt filtering turned 1.x.3 into 1.3.0, and 2.0.0abc into 2.0.0.
+    expect(normalizeVersion('1.x.3')).toBe('');
+    expect(normalizeVersion('2.0.0abc')).toBe('');
+    expect(normalizeVersion('latest')).toBe('');
+    expect(normalizeVersion('1')).toBe('');
+  });
+
+  it('fails closed: an invalid version is never newer and never equal', () => {
+    expect(compareVersions('1.x.3', '1.0.0') > 0).toBe(false);
+    expect(compareVersions('1.x.3', '1.0.0') === 0).toBe(false);
+    expect(compareVersions('2.0.0', 'garbage') >= 0).toBe(false);
+  });
+
+  it('canonicalises to three parts', () => {
+    expect(normalizeVersion('v2.0')).toBe('2.0.0');
+    expect(normalizeVersion('v2.0.0-build.14')).toBe('2.0.0');
+  });
+});

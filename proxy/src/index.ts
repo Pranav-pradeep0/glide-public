@@ -10,6 +10,10 @@ export interface Env {
     GROQ_API_KEY: string;
     AI_RATE_LIMITER: RateLimit;
     AI_GLOBAL_LIMITER: RateLimit;
+    /** "owner/repo" whose latest release the app offers. Fixed here, never taken from a client. */
+    RELEASE_REPO?: string;
+    /** Optional secret: read-only token, lifting GitHub from 60 req/h per IP to 5000 per token. */
+    GITHUB_TOKEN?: string;
 }
 
 const GROQ_CHAT_URL = 'https://api.groq.com/openai/v1/chat/completions';
@@ -226,9 +230,83 @@ async function handleTranscribe(request: Request, env: Env): Promise<Response> {
     return json({ text: (data.text ?? '').trim() });
 }
 
+// The app's update check. Unauthenticated GitHub allows 60 requests an hour per IP, and
+// users behind one carrier NAT share that budget; once it is spent they are silently never
+// offered updates. Here GitHub is called with a token, and answers are reused for a few
+// minutes. In-isolate memory, because the Cache API is a no-op on workers.dev.
+const RELEASE_CACHE_MS = 5 * 60 * 1000;
+const RELEASE_TIMEOUT_MS = 8000;
+const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
+let releaseCache: { at: number; body: string } | null = null;
+
+async function handleLatestRelease(env: Env): Promise<Response> {
+    const repo = env.RELEASE_REPO ?? '';
+    if (!REPO_RE.test(repo)) {
+        logRoute('release', 502);
+        return err(502, 'Service not configured.');
+    }
+    if (releaseCache && Date.now() - releaseCache.at < RELEASE_CACHE_MS) {
+        logRoute('release', 200);
+        return new Response(releaseCache.body, {
+            headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+        });
+    }
+
+    const headers: Record<string, string> = {
+        accept: 'application/vnd.github+json',
+        'x-github-api-version': '2026-03-10',
+        // GitHub rejects requests without one, and Workers do not add it.
+        'user-agent': 'glide-ai-proxy',
+    };
+    if (env.GITHUB_TOKEN) {
+        headers.authorization = `Bearer ${env.GITHUB_TOKEN}`;
+    }
+    const upstream = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+        headers,
+        signal: AbortSignal.timeout(RELEASE_TIMEOUT_MS),
+    });
+    if (!upstream.ok) {
+        logUpstreamFailure('release', upstream.status);
+        return err(502, 'Release service unavailable.');
+    }
+
+    const data = await upstream.json() as {
+        tag_name?: string; html_url?: string; body?: string; prerelease?: boolean; draft?: boolean;
+        assets?: Array<{ name?: string; browser_download_url?: string }>;
+    };
+    // Only what the app reads: the release object is otherwise ~10 KB of uploader metadata.
+    const body = JSON.stringify({
+        tag_name: data.tag_name,
+        html_url: data.html_url,
+        body: data.body,
+        prerelease: data.prerelease,
+        draft: data.draft,
+        assets: (data.assets ?? []).map(a => ({ name: a.name, browser_download_url: a.browser_download_url })),
+    });
+    releaseCache = { at: Date.now(), body };
+    logRoute('release', 200);
+    return new Response(body, {
+        headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+    });
+}
+
 export default {
     async fetch(request: Request, env: Env): Promise<Response> {
         const url = new URL(request.url);
+
+        // Read-only and cached, so neither the Groq key nor the AI rate limits apply.
+        if (url.pathname === '/v1/latest-release') {
+            if (request.method !== 'GET') {
+                return err(405, 'Method not allowed.', { allow: 'GET' });
+            }
+            try {
+                return await handleLatestRelease(env);
+            } catch (error) {
+                const timedOut = error instanceof Error && error.name === 'TimeoutError';
+                logRoute('release', timedOut ? 504 : 502);
+                return timedOut ? err(504, 'Request timed out.') : err(502, 'Upstream service error.');
+            }
+        }
 
         if (request.method !== 'POST') {
             return err(405, 'Method not allowed.', { allow: 'POST' });

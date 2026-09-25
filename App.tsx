@@ -41,6 +41,11 @@ function App() {
 
     const runUpdateCheck = async () => {
       const result = await UpdateService.checkForUpdates();
+      // A failed check knows nothing. Writing it would clear an update found earlier, and
+      // the Settings card and tab badge would vanish until a check happened to succeed.
+      if (result.checkFailed) {
+        return;
+      }
       setUpdateStatus({
         available: result.available,
         latestVersion: result.latestVersion,

@@ -509,8 +509,10 @@ LibVLC natively resolves `smb`, `ftp`, `nfs`, `sftp`, `dvd`, `screen` and more.
 
 ### 7.1 Release discovery and version parsing
 
-- `[todo]` Replace permissive `normalizeVersion`/`compareVersions` behavior with strict
-  accepted input. Invalid components must fail, not disappear through `parseInt` filtering.
+- `[done]` Replace permissive `normalizeVersion`/`compareVersions` behavior with strict
+  accepted input. `1.x.3` used to become 1.3.0. Now it is invalid, compares as NaN, and so
+  is never newer and never equal: fails closed in every caller, including the cached-APK
+  staleness check.
 Verified defect, present in public 1.8.1: `getPreferredAbi()` read
 `NativeModules.PlatformConstants.supportedAbis`, which React Native does not define on
 any platform — the Android `PlatformConstants` spec exposes only `Version`, `Release`,
@@ -532,14 +534,24 @@ the exposed credential.
   silently choose ARM64. `UpdateActionButton` already degrades to “Open Release”.
 - `[done]` Validate the asset URL and asset name. `isTrustedAssetUrl` requires HTTPS and a
   GitHub release-asset host, and the checksum asset must be the APK's name plus `.sha256`.
-- `[todo]` Validate the remaining GitHub response shape: final tag and release URL.
+- `[done]` Validate the remaining GitHub response shape: an unparseable tag is a failed
+  check, and the release link must be this repository's `github.com/.../releases/` URL.
 - `[keep]` Ignore draft/prerelease releases. `/releases/latest` already returns "the most
   recent non-prerelease, non-draft release," so the client check only guards a custom
   `GITHUB_RELEASES_URL`. A prerelease channel would be new product scope, not a fix.
 - `[done]` Cap release-note length before rendering Markdown, at 8,000 characters.
 - `[todo]` Update `markdown-it`/`react-native-markdown-display` through a compatible
   package update. Split from the cap above; it belongs with the dependency work.
-- `[todo]` Send the update check through the Cloudflare Worker with a short cache.
+- `[done, deploy pending]` Send the update check through the Cloudflare Worker with a short cache.
+  `GET /v1/latest-release` calls GitHub with an optional `GITHUB_TOKEN` secret (5,000/h)
+  and caches for 5 min in memory (the Cache API is a no-op on workers.dev). The app tries
+  the proxy first and GitHub direct second. Smoke-tested against real GitHub under
+  `wrangler dev`.
+- `[done]` Verified defect: **every failed check was reported as "no update", and wiped an
+  update found earlier.** A 403 rate limit, a network error and a malformed response all
+  returned `available: false, latestVersion: null`, which `setUpdateStatus` merged over the
+  known state, so the Settings card and tab badge vanished until a check happened to
+  succeed. Checks now return `checkFailed`, and `App.tsx` keeps the last known state.
   Unauthenticated GitHub REST is 60 requests/hour keyed to the originating IP, so users
   behind carrier NAT share one budget and silently stop being offered updates.
 

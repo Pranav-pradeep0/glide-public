@@ -1,4 +1,4 @@
-import { GITHUB_OWNER, GITHUB_REPO, GITHUB_RELEASES_URL } from '@/utils/constants';
+import { AI_PROXY_URL, GITHUB_OWNER, GITHUB_REPO, GITHUB_RELEASES_URL } from '@/utils/constants';
 import { compareVersions, normalizeVersion } from '@/utils/version';
 import { fetchWithTimeout, NetworkTimeoutError } from '@/utils/network';
 import pkg from '../../package.json';
@@ -18,6 +18,11 @@ export function isTrustedAssetUrl(url: string | null | undefined): boolean {
 
 export interface UpdateInfo {
     available: boolean;
+    /**
+     * The check could not tell: network error, rate limit, or an unusable response. Distinct
+     * from "no update" -- the caller must keep what it knew rather than clear a found update.
+     */
+    checkFailed: boolean;
     currentVersion: string;
     latestVersion: string | null;
     releaseUrl: string | null;
@@ -38,17 +43,32 @@ interface GitHubReleaseResponse {
     draft?: boolean;
 }
 
-function buildLatestReleaseUrl(): string | null {
+/**
+ * Where to ask, in order. The proxy first: it calls GitHub with a token and caches, so it is
+ * not subject to GitHub's 60-requests-an-hour-per-IP budget that users behind one carrier
+ * NAT share and silently exhaust. GitHub direct is the fallback, e.g. before the proxy route
+ * is deployed.
+ */
+export function releaseSources(): string[] {
     if (GITHUB_RELEASES_URL) {
         // A custom endpoint is build configuration rather than user input, but it still
         // decides which release the updater offers and which APK it points at. Over
         // cleartext the network decides that instead, so a non-HTTPS override fails closed.
-        return GITHUB_RELEASES_URL.startsWith('https://') ? GITHUB_RELEASES_URL : null;
+        return GITHUB_RELEASES_URL.startsWith('https://') ? [GITHUB_RELEASES_URL] : [];
     }
     if (!GITHUB_OWNER || !GITHUB_REPO) {
-        return null;
+        return [];
     }
-    return `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`;
+    return [
+        ...(AI_PROXY_URL ? [`${AI_PROXY_URL}/v1/latest-release`] : []),
+        `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`,
+    ];
+}
+
+/** The "Open release" link may only point at this repository's releases. */
+function isOwnReleaseUrl(url: string | undefined): url is string {
+    return typeof url === 'string' && GITHUB_OWNER !== '' && GITHUB_REPO !== '' &&
+        url.startsWith(`https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/`);
 }
 
 // Release assets are named Glide-vX.Y.Z-arm.apk / Glide-vX.Y.Z-arm64.apk by the release workflow.
@@ -102,9 +122,10 @@ export function selectApkForDevice(
 }
 
 
-function noUpdate(currentVersion: string): UpdateInfo {
+function noUpdate(currentVersion: string, checkFailed = false): UpdateInfo {
     return {
         available: false,
+        checkFailed,
         currentVersion,
         latestVersion: null,
         releaseUrl: null,
@@ -114,62 +135,62 @@ function noUpdate(currentVersion: string): UpdateInfo {
     };
 }
 
+/**
+ * The release the updater offers, from a GitHub `releases/latest` response, or null when the
+ * response is not a usable release -- which is a failed check, not "no update".
+ */
+export function parseRelease(data: GitHubReleaseResponse | null, currentVersion: string): UpdateInfo | null {
+    if (!data || typeof data.tag_name !== 'string') {return null;}
+    // /releases/latest already excludes drafts and prereleases; this guards a custom
+    // GITHUB_RELEASES_URL that does not. A real answer, just not an update.
+    if (data.prerelease || data.draft) {return noUpdate(currentVersion);}
+
+    const latestVersion = normalizeVersion(data.tag_name);
+    if (!latestVersion) {return null;}
+    const releaseNotes = data.body
+        ? String(data.body).trim().slice(0, MAX_RELEASE_NOTES_CHARS)
+        : null;
+    const selected = selectApkForDevice(data.assets);
+    return {
+        available: compareVersions(latestVersion, currentVersion) > 0,
+        checkFailed: false,
+        currentVersion,
+        latestVersion,
+        releaseUrl: isOwnReleaseUrl(data.html_url) ? data.html_url : null,
+        releaseNotes: releaseNotes || null,
+        apkUrl: selected?.apkUrl || null,
+        apkSha256Url: selected?.sha256Url || null,
+    };
+}
+
 export class UpdateService {
     static async checkForUpdates(): Promise<UpdateInfo> {
         const currentVersion = String(pkg.version || '0.0.0');
-        const releasesUrl = buildLatestReleaseUrl();
+        const sources = releaseSources();
 
-        if (!releasesUrl) {
-            return noUpdate(currentVersion);
-        }
-
-        try {
-            const response = await fetchWithTimeout(releasesUrl, {
-                headers: {
-                    Accept: 'application/vnd.github+json',
-                    'X-GitHub-Api-Version': '2026-03-10',
-                },
-            }, UPDATE_CHECK_TIMEOUT_MS);
-
-            if (!response.ok) {
-                if (__DEV__) {
-                    console.warn('[UpdateService] Failed to fetch releases:', response.status);
+        for (const url of sources) {
+            try {
+                const response = await fetchWithTimeout(url, {
+                    headers: {
+                        Accept: 'application/vnd.github+json',
+                        'X-GitHub-Api-Version': '2026-03-10',
+                    },
+                }, UPDATE_CHECK_TIMEOUT_MS);
+                if (!response.ok) {
+                    // Status only. 403/429 is GitHub's per-IP budget, shared behind carrier NAT.
+                    console.warn('[UpdateService] Release check failed:', response.status);
+                    continue;
                 }
-                return noUpdate(currentVersion);
-            }
-
-            const data = (await response.json()) as GitHubReleaseResponse;
-
-            // /releases/latest already excludes drafts and prereleases; this stays as a
-            // guard for a custom GITHUB_RELEASES_URL that does not.
-            if (!data?.tag_name || data.prerelease || data.draft) {
-                return noUpdate(currentVersion);
-            }
-
-            const latestVersion = normalizeVersion(data.tag_name);
-            const isNewer = compareVersions(latestVersion, currentVersion) > 0;
-            const releaseNotes = data.body
-                ? String(data.body).trim().slice(0, MAX_RELEASE_NOTES_CHARS)
-                : null;
-            const selected = selectApkForDevice(data.assets);
-
-            return {
-                available: isNewer,
-                currentVersion,
-                latestVersion: latestVersion || null,
-                releaseUrl: data.html_url || null,
-                releaseNotes: releaseNotes || null,
-                apkUrl: selected?.apkUrl || null,
-                apkSha256Url: selected?.sha256Url || null,
-            };
-        } catch (error) {
-            if (__DEV__) {
+                const info = parseRelease((await response.json()) as GitHubReleaseResponse, currentVersion);
+                if (info) {return info;}
+                console.warn('[UpdateService] Release response was not a usable release');
+            } catch (error) {
                 console.warn(
-                    '[UpdateService] Update check failed:',
-                    error instanceof NetworkTimeoutError ? `timed out after ${error.timeoutMs}ms` : error
+                    '[UpdateService] Release check failed:',
+                    error instanceof NetworkTimeoutError ? `timed out after ${error.timeoutMs}ms` : String(error)
                 );
             }
-            return noUpdate(currentVersion);
         }
+        return noUpdate(currentVersion, true);
     }
 }
