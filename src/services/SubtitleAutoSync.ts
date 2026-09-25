@@ -1,0 +1,114 @@
+// src/services/SubtitleAutoSync.ts
+//
+// Automatic subtitle sync: align when people speak with when cues are shown. The maths is
+// native (SubtitleAligner.kt): it reads ~10 MB of PCM, which the JS thread must not do.
+// This file picks what to analyse and turns the answer into something safe to apply.
+
+import { NativeModules } from 'react-native';
+import { SubtitleCue } from '../types';
+import { AudioExtractor } from '../utils/AudioExtractor';
+
+/** Audio analysed per run. Minutes of evidence, not seconds, is what makes this robust. */
+export const WINDOW_S = 300;
+
+/** The window is chosen near where the viewer is, since an edit can shift sync mid-film. */
+const SEARCH_AROUND_S = 900;
+
+/** Below this many speech cues in the window there is too little pattern to align. */
+const MIN_SPEECH_CUES = 25;
+
+/** Longer cues are usually lyrics or captions held on screen, not a line being spoken. */
+const MAX_SPEECH_CUE_S = 12;
+
+export type AutoSyncResult =
+    | { kind: 'synced'; delayMs: number }
+    | { kind: 'drift' }
+    | { kind: 'unsure' }
+    | { kind: 'too-few-cues' }
+    | { kind: 'failed' };
+
+interface NativeAlignment {
+    delayMs: number;
+    ratio: number;
+    peakZ: number;
+    runnerUp: number;
+    confident: boolean;
+    drift: boolean;
+}
+
+/**
+ * A cue someone speaks. Sound descriptions ("[door slams]", "(music)") and lyrics ("♪ ... ♪")
+ * are on screen while nobody talks, and would pull the alignment toward noise.
+ */
+export function isSpeechCue(cue: SubtitleCue): boolean {
+    if (cue.endTime - cue.startTime > MAX_SPEECH_CUE_S || cue.endTime <= cue.startTime) {return false;}
+    if (/[♪♫]/.test(cue.text)) {return false;}
+    const spoken = cue.text
+        .replace(/<[^>]*>|\{[^}]*\}/g, '')      // HTML and ASS override tags
+        .replace(/\[[^\]]*\]|\([^)]*\)/g, '')   // sound descriptions
+        .replace(/[\s\d.,!?'"…:;\-–—]/g, '');
+    return spoken.length >= 2;
+}
+
+/**
+ * The 5-minute stretch with the most speech cues, within [SEARCH_AROUND_S] of the viewer.
+ * Returns its start in seconds, or null if nowhere has enough dialogue.
+ */
+export function chooseWindow(speechCues: SubtitleCue[], positionS: number): number | null {
+    const cues = [...speechCues].sort((a, b) => a.startTime - b.startTime);
+    let best: { start: number; count: number } | null = null;
+    let hi = 0;
+    for (let lo = 0; lo < cues.length; lo++) {
+        const start = Math.max(0, cues[lo].startTime - 20);
+        if (Math.abs(start - positionS) > SEARCH_AROUND_S) {continue;}
+        hi = Math.max(hi, lo);
+        while (hi < cues.length && cues[hi].endTime <= start + WINDOW_S) {hi++;}
+        const count = hi - lo;
+        const closer = best !== null && Math.abs(start - positionS) < Math.abs(best.start - positionS);
+        if (best === null || count > best.count || (count === best.count && closer)) {
+            best = { start, count };
+        }
+    }
+    return best !== null && best.count >= MIN_SPEECH_CUES ? best.start : null;
+}
+
+/** What to do with the native answer. Only a confident, plain delay is ever applied. */
+export function interpret(alignment: NativeAlignment | null): AutoSyncResult {
+    if (!alignment) {return { kind: 'unsure' };}
+    if (alignment.drift) {return { kind: 'drift' };}
+    if (!alignment.confident) {return { kind: 'unsure' };}
+    return { kind: 'synced', delayMs: Math.round(alignment.delayMs / 10) * 10 };
+}
+
+export class SubtitleAutoSync {
+    /**
+     * Work out the subtitle delay for [cues] against [videoPath]'s audio. Never applies
+     * anything itself: the caller decides, so a stale or unsure answer can be dropped whole.
+     */
+    static async compute(videoPath: string, cues: SubtitleCue[], positionS: number): Promise<AutoSyncResult> {
+        const speech = cues.filter(isSpeechCue);
+        const windowStart = chooseWindow(speech, positionS);
+        if (windowStart === null) {return { kind: 'too-few-cues' };}
+
+        const wav = await AudioExtractor.extractAudioChunk(videoPath, windowStart, WINDOW_S);
+        if (!wav) {return { kind: 'failed' };}
+        try {
+            const alignment: NativeAlignment | null = await NativeModules.SubtitleSyncModule.align(
+                wav,
+                windowStart,
+                speech.map(c => c.startTime),
+                speech.map(c => c.endTime),
+            );
+            // Logged in release too: this is the evidence for tuning the confidence thresholds.
+            console.log(`[SubtitleAutoSync] window=${windowStart.toFixed(0)}s cues=${speech.length} ` +
+                (alignment ? `delay=${alignment.delayMs.toFixed(0)}ms ratio=${alignment.ratio.toFixed(4)} ` +
+                    `z=${alignment.peakZ.toFixed(1)} runnerUp=${alignment.runnerUp.toFixed(2)}` : 'no alignment'));
+            return interpret(alignment);
+        } catch (error) {
+            console.warn('[SubtitleAutoSync] Alignment failed:', error);
+            return { kind: 'failed' };
+        } finally {
+            await AudioExtractor.cleanup();
+        }
+    }
+}

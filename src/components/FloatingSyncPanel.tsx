@@ -30,6 +30,9 @@ interface FloatingSyncPanelProps {
     currentTimeRef: React.MutableRefObject<number>;
     videoPath?: string;
     subtitleLanguage?: string;
+    /** Automatic sync from the audio (subtitles only); applies its own result. */
+    onAutoSync?: () => void;
+    autoSyncRunning?: boolean;
 }
 
 export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
@@ -41,6 +44,8 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
     currentTimeRef,
     videoPath,
     subtitleLanguage,
+    onAutoSync,
+    autoSyncRunning = false,
 }) => {
     const [searchMode, setSearchMode] = useState(false);
     const [query, setQuery] = useState('');
@@ -246,6 +251,20 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
                     {type === 'subtitle' && subtitleCues.length > 0 && !searchMode && (
                         <View style={styles.smartSection}>
                             <View style={styles.verticalDivider} />
+                            {onAutoSync && (
+                                <Pressable
+                                    style={({ pressed }) => [styles.smartButton, pressed && styles.buttonPressed]}
+                                    onPress={onAutoSync}
+                                    disabled={autoSyncRunning}
+                                    hitSlop={8}
+                                    accessibilityLabel="Sync subtitles automatically from the audio"
+                                >
+                                    {autoSyncRunning
+                                        ? <ActivityIndicator size="small" color="#CCCCCC" />
+                                        : <Feather name="zap" size={18} color="#CCCCCC" />}
+                                    <Text style={styles.smartText}>{autoSyncRunning ? 'Syncing…' : 'Auto'}</Text>
+                                </Pressable>
+                            )}
                             <Pressable
                                 style={({ pressed }) => [
                                     styles.smartButton,

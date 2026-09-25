@@ -34,6 +34,7 @@ import { SubtitleOverlay, SubtitleSettings } from '@/components/SubtitleOverlay'
 import { TrackSelector } from '@/components/TrackSelector';
 import { EqualizerModal } from '@/components/EqualizerModal';
 import { FloatingSyncPanel } from '@/components/FloatingSyncPanel';
+import { useSubtitleAutoSync } from '@/hooks/video-player/useSubtitleAutoSync';
 import { RecapModal } from '@/components/VideoPlayer/RecapModal';
 import { ResumeModal } from '@/components/VideoPlayer/ResumeModal';
 import { RecapService } from '@/services/RecapService';
@@ -420,6 +421,17 @@ export default function VideoPlayerScreen({ route }: Props) {
         duration: player.state.duration,
         currentTimeRef: player.currentTimeRef,
         onSeekToBookmark: player.commitSeek,
+    });
+
+    const { runAutoSync, autoSyncRunning } = useSubtitleAutoSync({
+        videoPath,
+        cues: tracksHook.subtitleCues,
+        isExternal: tracksHook.selectedSubtitleTrackIndex === -999,
+        enabled: !isNetworkStream,
+        currentTimeRef: player.currentTimeRef,
+        delayMs: settingsHook.settings.subtitleDelay,
+        setDelay: settingsHook.setSubtitleDelay,
+        showToast: bookmarksHook.showToastWithMessage,
     });
 
     // ========================================================================
@@ -1263,6 +1275,8 @@ export default function VideoPlayerScreen({ route }: Props) {
                     currentTimeRef={player.currentTimeRef}
                     videoPath={videoPath}
                     subtitleLanguage={tracksHook.subtitleTracks.find(t => t.index === tracksHook.selectedSubtitleTrackIndex)?.language}
+                    onAutoSync={syncPanelType === 'subtitle' && !isNetworkStream ? runAutoSync : undefined}
+                    autoSyncRunning={autoSyncRunning}
                 />
             )}
 
