@@ -588,6 +588,52 @@ reopens at the same position.
   Unverified; judge by eye on the panel, not from screenshots.
 - GPU busy and thermals have not been measured.
 
+#### Enhancement v2: one adaptive shader for SDR and HDR — 2026-09-25
+
+`ColorEnhancementEffect` replaces both the SDR `RgbMatrix` and `HdrColorEnhancement`. The
+maths, the GLSL generated from the same constants, and the tests all live around
+`ColorEnhancement.kt`. Per frame, the effect makes three draws: a 256-column luma downsample
+that is then mipmapped, a 1x1 pass that eases the scene key, and the enhancement. Everything
+stays on the GPU, with no readback stall.
+
+| | SDR (gamma working values) | HDR (ICtCp) |
+|---|---|---|
+| Tone | contrast pivot follows the scene: 0.18 on typical keys, down to 0.06 on dark ones | the lift above, plus up to +14% for 1–30 nits on dark scenes and less lift on bright ones; toe ≤ +2.2% in every scene |
+| Colour | saturation weighted by skin hue (138°), shadow and vibrance | the same, with skin at 142° in CtCp |
+| Clarity | local contrast against the 1/32-scale mip, gated and capped | the same, on I |
+| Extra | deband + one-step dither | mastering metadata (SMPTE 2086 / CTA-861.3) set on the output EGL surface |
+| Strength | 0–150% slider, plus Subtle / Natural / Vivid presets in Quick Settings; live, no re-open | same |
+
+**SDR is still the confirmed matrix at neutral settings.** That's a typical scene, strength
+100%, and colours the protections leave alone. A test pins it to 2e-4. The GL ES 2 fallback
+is the exact matrix.
+
+**Researched and not built:**
+- **SDR→HDR expansion:** media3 throws *"SDR to HDR tonemapping is not supported"* (except for
+  Ultra HDR images), so it would mean forking media3.
+- **AI upscaling and frame interpolation:** too heavy for 4K on battery, and interpolation
+  gives the soap-opera look.
+
+**Verified off-device:** 36 JVM tests and 35 JS tests pass; `tsc` is clean; ESLint has 0
+errors. All six generated shaders compile with the NDK's `glslc` (as ES 3.10, a superset of
+the 3.00 they declare). The release APK builds.
+
+**To verify on device, all at once:**
+1. **HDR:** logcat shows `HDR mastering metadata on output surface: ok=true`. Does the ~13%
+   even darkening against enhancement off disappear? `dumpsys SurfaceFlinger` should still
+   show `DISPLAY_P3` and `BT2020_PQ`.
+2. **The Boys at 45:23:** the dark scene opens up, and the probe has no zeros.
+3. **Skin:** faces don't go orange at 150%. Muted colours gain more than neon ones.
+4. **Clarity:** no halos at high-contrast edges at 150%; no blockiness in smooth gradients
+   (the blur comes from a box-filtered mip, smoothed with a tent filter).
+5. **Scene changes:** no pumping within a shot; adapts at cuts; no flash after a seek.
+6. **SDR:** bands in skies and dark gradients are gone, and the dither isn't visible as a
+   pattern. A bright typical scene looks as it did before.
+7. **Slider:** changes apply live, with no re-open; 0% looks like enhancement off.
+8. **Cost:** GPU busy % and thermals over 10 minutes of 4K HDR and 1080p SDR, against
+   enhancement off. SDR now pays a full-resolution pass that the old matrix got free inside
+   media3's final pass.
+
 ### Phase 3 — Surface, geometry, PiP, session
 
 SurfaceView geometry and the six resize modes; PiP; `MediaSession` with the real ExoPlayer.
