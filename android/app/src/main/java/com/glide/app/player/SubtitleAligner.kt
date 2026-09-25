@@ -157,27 +157,42 @@ internal object SubtitleAligner {
         )
     }
 
-    /** 16-bit mono PCM and its sample rate from a WAV file's bytes, or null if it is not one. */
-    fun pcmFromWav(bytes: ByteArray): Pair<ShortArray, Int>? {
+    /** Interleaved 16-bit PCM. */
+    class Wav(val samples: ShortArray, val channels: Int, val sampleRate: Int) {
+        fun channel(c: Int) = ShortArray(samples.size / channels) { samples[it * channels + c] }
+
+        /**
+         * Where the dialogue is: the centre channel of 5.1/7.1 (FFmpeg orders FL FR FC ...), the
+         * mid of stereo, or the only channel.
+         */
+        fun dialogue(): ShortArray = when {
+            channels >= 3 -> channel(2)
+            channels == 2 -> ShortArray(samples.size / 2) { ((samples[2 * it] + samples[2 * it + 1]) / 2).toShort() }
+            else -> samples
+        }
+    }
+
+    /** 16-bit PCM from a WAV file's bytes, any channel count, or null if it is not one. */
+    fun pcmFromWav(bytes: ByteArray): Wav? {
         val buf = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
         if (bytes.size < 12 || String(bytes, 0, 4) != "RIFF" || String(bytes, 8, 4) != "WAVE") return null
         var pos = 12
         var rate = 0
+        var channels = 0
         var ok = false
         while (pos + 8 <= bytes.size) {
             val id = String(bytes, pos, 4)
             val size = buf.getInt(pos + 4)
             val body = pos + 8
             if (id == "fmt ") {
-                val channels = buf.getShort(body + 2).toInt()
+                channels = buf.getShort(body + 2).toInt()
                 rate = buf.getInt(body + 4)
                 val bits = buf.getShort(body + 14).toInt()
-                ok = channels == 1 && bits == 16
+                ok = channels in 1..8 && bits == 16
             } else if (id == "data") {
                 if (!ok || rate <= 0) return null
-                val count = minOf(size, bytes.size - body) / 2
-                val pcm = ShortArray(count) { buf.getShort(body + 2 * it) }
-                return pcm to rate
+                val count = minOf(size, bytes.size - body) / 2 / channels * channels
+                return Wav(ShortArray(count) { buf.getShort(body + 2 * it) }, channels, rate)
             }
             pos = body + size + (size and 1)
         }

@@ -47,7 +47,10 @@ export class AudioExtractor {
     static async extractAudioChunk(
         videoPath: string,
         startTime: number,
-        duration: number = 10
+        duration: number = 10,
+        // Auto sync keeps every channel: in 5.1, dialogue is the centre channel, and a mono
+        // downmix buries it under music and effects from the other five.
+        { mono = true, sampleRate = 16000 }: { mono?: boolean; sampleRate?: number } = {},
     ): Promise<string | null> {
         if (__DEV__) { console.log(`${LOG_PREFIX} Extracting chunk at ${startTime}s for ${duration}s`); }
 
@@ -62,7 +65,8 @@ export class AudioExtractor {
             // -ar 16000: 16kHz (best for Whisper)
             // -c:a pcm_s16le: RAW PCM output (supported by Groq, extremely light build)
             // -f wav: Force WAV muxer
-            const command = `-ss ${startTime} -i "${resolvedPath}" -t ${duration} -vn -ac 1 -ar 16000 -c:a pcm_s16le -f wav -y "${outputPath}"`;
+            const channels = mono ? '-ac 1 ' : '';
+            const command = `-ss ${startTime} -i "${resolvedPath}" -t ${duration} -vn ${channels}-ar ${sampleRate} -c:a pcm_s16le -f wav -y "${outputPath}"`;
 
             if (__DEV__) { console.log(`${LOG_PREFIX} Executing FFmpeg command: ${command}`); }
             const session = await FFmpegKit.execute(command);

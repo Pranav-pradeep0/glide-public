@@ -90,7 +90,8 @@ export class SubtitleAutoSync {
         const windowStart = chooseWindow(speech, positionS);
         if (windowStart === null) {return { kind: 'too-few-cues' };}
 
-        const wav = await AudioExtractor.extractAudioChunk(videoPath, windowStart, WINDOW_S);
+        // 8 kHz covers the 300-3000 Hz speech band and keeps a 5.1 clip near 29 MB.
+        const wav = await AudioExtractor.extractAudioChunk(videoPath, windowStart, WINDOW_S, { mono: false, sampleRate: 8000 });
         if (!wav) {return { kind: 'failed' };}
         try {
             const alignment: NativeAlignment | null = await NativeModules.SubtitleSyncModule.align(

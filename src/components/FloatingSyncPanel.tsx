@@ -18,6 +18,11 @@ import { SmartSyncIcon, AutoListenIcon } from './VideoPlayer/PlayerIcons';
 import { AudioExtractor } from '../utils/AudioExtractor';
 import { SpeechToTextService } from '../services/SpeechToTextService';
 import { RECAP_STT_AVAILABLE } from '../utils/constants';
+import type { AutoSyncResult } from '../services/SubtitleAutoSync';
+import { describeAutoSync } from '../hooks/video-player/useSubtitleAutoSync';
+
+/** Coarse on the outside, fine on the inside. */
+const NUDGES_MS = [-500, -50, 50, 500];
 import Feather from '@react-native-vector-icons/feather';
 
 interface FloatingSyncPanelProps {
@@ -30,8 +35,8 @@ interface FloatingSyncPanelProps {
     currentTimeRef: React.MutableRefObject<number>;
     videoPath?: string;
     subtitleLanguage?: string;
-    /** Automatic sync from the audio (subtitles only); applies its own result. */
-    onAutoSync?: () => void;
+    /** Automatic sync from the audio (subtitles only). Applies its own result and reports it. */
+    onAutoSync?: () => Promise<AutoSyncResult | null>;
     autoSyncRunning?: boolean;
 }
 
@@ -57,19 +62,34 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
     // moving while transcription runs and while the user reviews the matches.
     const matchReferenceTimeRef = useRef(0);
 
-    // Format value with sign and unit
+    // Seconds read better than milliseconds: "+0.19 s", not "+190 ms".
     const formattedValue = useMemo(() => {
         const sign = value > 0 ? '+' : '';
-        return `${sign}${value} ms`;
+        return `${sign}${(value / 1000).toFixed(2)} s`;
     }, [value]);
 
-    const handleIncrement = useCallback(() => {
-        onChange(value + 50);
-    }, [value, onChange]);
+    const nudge = useCallback((ms: number) => onChange(value + ms), [value, onChange]);
 
-    const handleDecrement = useCallback(() => {
-        onChange(value - 50);
-    }, [value, onChange]);
+    // The last Auto result, shown inline, with Undo back to the value before it ran.
+    const [autoStatus, setAutoStatus] = useState<{ text: string; ok: boolean; undoTo: number | null } | null>(null);
+    const handleAuto = useCallback(async () => {
+        if (!onAutoSync) {return;}
+        const before = value;
+        setAutoStatus(null);
+        const result = await onAutoSync();
+        if (!result) {return;}
+        const ok = result.kind === 'synced';
+        setAutoStatus({
+            text: describeAutoSync(result),
+            ok,
+            undoTo: ok && result.delayMs !== before ? before : null,
+        });
+    }, [onAutoSync, value]);
+    const handleUndo = useCallback(() => {
+        if (autoStatus?.undoTo === null || autoStatus?.undoTo === undefined) {return;}
+        onChange(autoStatus.undoTo);
+        setAutoStatus(null);
+    }, [autoStatus, onChange]);
 
     const handleReset = useCallback(() => {
         onChange(0);
@@ -187,157 +207,130 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
         return `${m}:${s.toString().padStart(2, '0')} `;
     };
 
+    const isSubtitle = type === 'subtitle' && subtitleCues.length > 0;
+
     return (
         <Animated.View
-            style={[styles.container, searchMode && styles.containerExpanded]}
+            style={styles.container}
             entering={FadeIn.duration(200)}
             exiting={FadeOut.duration(200)}
             layout={LinearTransition.springify()}
             pointerEvents="box-none"
         >
-            <View style={[styles.pill, searchMode && styles.pillExpanded]}>
-                {/* Standard Controls Row */}
-                <View style={styles.mainRow}>
-                    {/* Header / Type Indicator */}
-                    <View style={styles.header}>
-                        <Feather
-                            name={type === 'audio' ? 'mic' : 'message-square'}
-                            size={14}
-                            color="#CCCCCC"
-                        />
-                        <Text style={styles.label}>
-                            {type === 'audio' ? 'Audio Sync' : 'Subtitle Sync'}
-                        </Text>
-                    </View>
-
-                    {/* Center Title for Search Mode */}
-                    {searchMode && (
-                        <View style={styles.searchTitleContainer}>
-                            <Text style={styles.searchTitleText}>Smart Sync</Text>
+            <View style={styles.card}>
+                {/* Header: what is being synced, by how much, reset and close */}
+                <View style={styles.headerRow}>
+                    {searchMode ? (
+                        <Pressable onPress={handleToggleSearch} hitSlop={10} style={styles.headerLeft} accessibilityLabel="Back">
+                            <Feather name="chevron-left" size={18} color="#FFF" />
+                            <Text style={styles.title}>Pick the line you heard</Text>
+                        </Pressable>
+                    ) : (
+                        <View style={styles.headerLeft}>
+                            <Feather name={type === 'audio' ? 'volume-2' : 'message-square'} size={15} color="#AAA" />
+                            <Text style={styles.title}>{type === 'audio' ? 'Audio sync' : 'Subtitle sync'}</Text>
                         </View>
                     )}
-
-                    {/* Controls Row */}
-                    {!searchMode && (
-                        <View style={styles.controls}>
-                            <Pressable
-                                style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
-                                onPress={handleDecrement}
-                                hitSlop={12}
-                            >
-                                <Feather name="minus" size={16} color="#FFFFFF" />
-                            </Pressable>
-
-                            <View style={styles.valueContainer}>
-                                <Text style={[
-                                    styles.valueText,
-                                    value !== 0 && styles.valueTextActive,
-                                ]}>
-                                    {formattedValue}
-                                </Text>
-                            </View>
-
-                            <Pressable
-                                style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
-                                onPress={handleIncrement}
-                                hitSlop={12}
-                            >
-                                <Feather name="plus" size={16} color="#FFFFFF" />
-                            </Pressable>
-                        </View>
-                    )}
-
-                    {/* Smart Sync Button (only when not searching) */}
-                    {type === 'subtitle' && subtitleCues.length > 0 && !searchMode && (
-                        <View style={styles.smartSection}>
-                            <View style={styles.verticalDivider} />
-                            {onAutoSync && (
-                                <Pressable
-                                    style={({ pressed }) => [styles.smartButton, pressed && styles.buttonPressed]}
-                                    onPress={onAutoSync}
-                                    disabled={autoSyncRunning}
-                                    hitSlop={8}
-                                    accessibilityLabel="Sync subtitles automatically from the audio"
-                                >
-                                    {autoSyncRunning
-                                        ? <ActivityIndicator size="small" color="#CCCCCC" />
-                                        : <Feather name="zap" size={18} color="#CCCCCC" />}
-                                    <Text style={styles.smartText}>{autoSyncRunning ? 'Syncing…' : 'Auto'}</Text>
-                                </Pressable>
-                            )}
-                            <Pressable
-                                style={({ pressed }) => [
-                                    styles.smartButton,
-                                    pressed && styles.buttonPressed,
-                                ]}
-                                onPress={handleToggleSearch}
-                                hitSlop={8}
-                            >
-                                <SmartSyncIcon size={20} active={false} color="#CCCCCC" />
-                                <Text style={styles.smartText}>
-                                    Smart Sync
-                                </Text>
-                            </Pressable>
-                        </View>
-                    )}
-
-                    <View style={styles.actions}>
-                        {!searchMode ? (
-                            <>
-                                <Pressable
-                                    style={({ pressed }) => [
-                                        styles.actionButton,
-                                        pressed && styles.buttonPressed,
-                                        value === 0 && styles.disabledButton,
-                                    ]}
-                                    onPress={handleReset}
-                                    disabled={value === 0}
-                                >
-                                    <Feather name="rotate-ccw" size={12} color={value === 0 ? '#666' : '#999'} />
-                                </Pressable>
-
-                                <View style={styles.divider} />
-                            </>
-                        ) : (
-                            <>
-                                <Pressable
-                                    style={({ pressed }) => [styles.actionButton, pressed && styles.buttonPressed]}
-                                    onPress={handleToggleSearch}
-                                    hitSlop={8}
-                                >
-                                    <Feather name="chevron-left" size={18} color="#CCCCCC" />
-                                </Pressable>
-
-                                <View style={styles.divider} />
-                            </>
-                        )}
-
+                    <View style={styles.headerRight}>
+                        <Text style={[styles.valueChip, value !== 0 && styles.valueChipActive]}>{formattedValue}</Text>
                         <Pressable
-                            style={({ pressed }) => [styles.actionButton, pressed && styles.buttonPressed]}
-                            onPress={onClose}
-                            hitSlop={8}
+                            onPress={handleReset}
+                            disabled={value === 0}
+                            hitSlop={10}
+                            style={[styles.iconButton, value === 0 && styles.disabled]}
+                            accessibilityLabel="Reset to zero"
                         >
-                            <Feather name="x" size={14} color="#FFFFFF" />
+                            <Feather name="rotate-ccw" size={14} color="#CCC" />
+                        </Pressable>
+                        <Pressable onPress={onClose} hitSlop={10} style={styles.iconButton} accessibilityLabel="Close">
+                            <Feather name="x" size={16} color="#CCC" />
                         </Pressable>
                     </View>
                 </View>
 
-                {/* Search Area */}
+                {!searchMode && (
+                    <>
+                        {/* Nudges: coarse on the outside, fine on the inside */}
+                        <View style={styles.nudgeRow}>
+                            {NUDGES_MS.map(ms => (
+                                <Pressable
+                                    key={ms}
+                                    onPress={() => nudge(ms)}
+                                    style={({ pressed }) => [styles.nudge, pressed && styles.pressed]}
+                                    accessibilityLabel={`${ms > 0 ? 'Later' : 'Earlier'} by ${Math.abs(ms)} milliseconds`}
+                                >
+                                    <Text style={styles.nudgeText}>
+                                        {ms > 0 ? '+' : '−'}{(Math.abs(ms) / 1000).toFixed(Math.abs(ms) >= 500 ? 1 : 2)}
+                                    </Text>
+                                </Pressable>
+                            ))}
+                        </View>
+                        <Text style={styles.hint}>
+                            {type === 'audio' ? '+ plays audio later' : '+ shows subtitles later'}
+                        </Text>
+
+                        {isSubtitle && (
+                            <View style={styles.actionRow}>
+                                {onAutoSync && (
+                                    <Pressable
+                                        onPress={handleAuto}
+                                        disabled={autoSyncRunning}
+                                        style={({ pressed }) => [styles.action, styles.actionPrimary, pressed && styles.pressed]}
+                                        accessibilityLabel="Sync subtitles automatically from the audio"
+                                    >
+                                        {autoSyncRunning
+                                            ? <ActivityIndicator size="small" color="#000" />
+                                            : <Feather name="zap" size={16} color="#000" />}
+                                        <View>
+                                            <Text style={[styles.actionTitle, styles.actionTitlePrimary]}>
+                                                {autoSyncRunning ? 'Listening…' : 'Auto sync'}
+                                            </Text>
+                                            <Text style={styles.actionSubPrimary}>From the audio</Text>
+                                        </View>
+                                    </Pressable>
+                                )}
+                                <Pressable
+                                    onPress={handleToggleSearch}
+                                    style={({ pressed }) => [styles.action, pressed && styles.pressed]}
+                                    accessibilityLabel="Pick the line you just heard"
+                                >
+                                    <SmartSyncIcon size={16} active={false} color="#FFF" />
+                                    <View>
+                                        <Text style={styles.actionTitle}>Pick a line</Text>
+                                        <Text style={styles.actionSub}>Smart Sync</Text>
+                                    </View>
+                                </Pressable>
+                            </View>
+                        )}
+
+                        {autoStatus && !autoSyncRunning && (
+                            <Animated.View entering={FadeIn.duration(150)} style={styles.statusRow}>
+                                <Feather
+                                    name={autoStatus.ok ? 'check-circle' : 'info'}
+                                    size={14}
+                                    color={autoStatus.ok ? '#4ADE80' : '#AAA'}
+                                />
+                                <Text style={styles.statusText}>{autoStatus.text}</Text>
+                                {autoStatus.undoTo !== null && (
+                                    <Pressable onPress={handleUndo} hitSlop={10} accessibilityLabel="Undo auto sync">
+                                        <Text style={styles.undo}>Undo</Text>
+                                    </Pressable>
+                                )}
+                            </Animated.View>
+                        )}
+                    </>
+                )}
+
+                {/* Pick a line: type or listen, then choose the matching subtitle */}
                 {searchMode && (
-                    <Animated.View
-                        entering={FadeIn.duration(200)}
-                        style={styles.searchArea}
-                    >
-                        <View style={[
-                            styles.inputWrapper,
-                            isFocused && styles.inputWrapperFocused,
-                        ]}>
-                            <Feather name="search" size={14} color={isFocused ? '#FFF' : '#666'} style={styles.searchIcon} />
+                    <Animated.View entering={FadeIn.duration(200)} style={styles.searchArea}>
+                        <View style={[styles.inputWrapper, isFocused && styles.inputWrapperFocused]}>
+                            <Feather name="search" size={14} color={isFocused ? '#FFF' : '#777'} />
                             <TextInput
                                 ref={inputRef}
                                 style={styles.input}
-                                placeholder="Type what you just heard..."
-                                placeholderTextColor="#666"
+                                placeholder="Type a few words you just heard"
+                                placeholderTextColor="#777"
                                 value={query}
                                 onChangeText={handleSearch}
                                 onFocus={() => setIsFocused(true)}
@@ -347,21 +340,17 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
                                 selectionColor="#FFFFFF"
                             />
                             {query.length > 0 && (
-                                <Pressable
-                                    onPress={() => handleSearch('')}
-                                    style={styles.clearButton}
-                                    hitSlop={8}
-                                >
-                                    <Feather name="x-circle" size={14} color="#666" />
+                                <Pressable onPress={() => handleSearch('')} hitSlop={8} accessibilityLabel="Clear">
+                                    <Feather name="x-circle" size={14} color="#777" />
                                 </Pressable>
                             )}
-
                             {type === 'subtitle' && videoPath && RECAP_STT_AVAILABLE && (
                                 <TouchableOpacity
                                     style={[styles.listenButton, isListening && styles.listenButtonActive]}
                                     onPress={handleAutoListen}
                                     disabled={isListening}
                                     activeOpacity={0.7}
+                                    accessibilityLabel="Listen to the last few seconds"
                                 >
                                     <AutoListenIcon size={16} color="#FFFFFF" active={isListening} />
                                 </TouchableOpacity>
@@ -370,31 +359,28 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
 
                         {isListening && (
                             <View style={styles.listeningState}>
-                                <ActivityIndicator size="small" color="#FFFFFF" style={styles.listeningSpinner} />
-                                <Text style={styles.listeningText}>Processing audio...</Text>
+                                <ActivityIndicator size="small" color="#FFFFFF" />
+                                <Text style={styles.listeningText}>Listening to the last few seconds…</Text>
                             </View>
                         )}
 
                         {!isListening && results.length > 0 && (
                             <ScrollView style={styles.resultsList} showsVerticalScrollIndicator={false}>
                                 {results.map((item, index) => {
+                                    const shift = SubtitleSyncService.calculateOffset(item.cue, matchReferenceTimeRef.current) / 1000;
                                     return (
                                         <Pressable
                                             key={`${item.cue.startTime}-${index}`}
-                                            style={({ pressed }) => [
-                                                styles.resultItem,
-                                                pressed && styles.resultItemPressed,
-                                            ]}
+                                            style={({ pressed }) => [styles.resultItem, pressed && styles.pressed]}
                                             onPress={() => applySync(item)}
                                         >
-                                            <View style={styles.resultContent}>
-                                                <Text style={styles.resultTime}>{formatMatchTime(item.cue.startTime)}</Text>
-
-                                                <Text style={styles.resultText} numberOfLines={1}>
-                                                    {item.cue.text.replace(/\n/g, ' ')}
-                                                </Text>
-                                            </View>
-                                            <Feather name="chevron-right" size={14} color="#666" />
+                                            <Text style={styles.resultTime}>{formatMatchTime(item.cue.startTime)}</Text>
+                                            <Text style={styles.resultText} numberOfLines={2}>
+                                                {item.cue.text.replace(/\n/g, ' ')}
+                                            </Text>
+                                            <Text style={styles.resultShift}>
+                                                {shift > 0 ? '+' : ''}{shift.toFixed(1)} s
+                                            </Text>
                                         </Pressable>
                                     );
                                 })}
@@ -402,9 +388,12 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
                         )}
 
                         {!isListening && query.length >= 2 && results.length === 0 && (
-                            <View style={styles.noResults}>
-                                <Text style={styles.noResultsText}>No matches found near here</Text>
-                            </View>
+                            <Text style={styles.noResultsText}>No matching line near here</Text>
+                        )}
+                        {!isListening && query.length < 2 && (
+                            <Text style={styles.noResultsText}>
+                                {RECAP_STT_AVAILABLE ? 'Or tap the mic to listen for you' : 'Matches appear as you type'}
+                            </Text>
                         )}
                     </Animated.View>
                 )}
@@ -416,261 +405,113 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
 const styles = StyleSheet.create({
     container: {
         position: 'absolute',
-        bottom: 100,
+        bottom: 96,
         left: 0,
         right: 0,
         alignItems: 'center',
-        justifyContent: 'center',
         zIndex: 2000,
     },
-    containerExpanded: {
-        bottom: 120,
-    },
-    pill: {
-        backgroundColor: 'rgba(20, 20, 20, 0.95)',
-        borderRadius: 24,
-        paddingVertical: 10,
-        paddingHorizontal: 16,
-        borderWidth: 1,
-        borderColor: 'rgba(255, 255, 255, 0.1)',
+    card: {
+        width: '92%',
+        maxWidth: 440,
+        backgroundColor: 'rgba(18, 18, 18, 0.96)',
+        borderRadius: 20,
+        padding: 14,
+        gap: 12,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: 'rgba(255, 255, 255, 0.14)',
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.3,
-        shadowRadius: 4.65,
-        elevation: 8,
-        minWidth: 380,
+        shadowOffset: { width: 0, height: 6 },
+        shadowOpacity: 0.35,
+        shadowRadius: 12,
+        elevation: 10,
     },
-    pillExpanded: {
-        borderRadius: 16,
-        paddingVertical: 12,
-        width: '90%',
-        maxWidth: 400,
-    },
-    mainRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 16,
-    },
-    header: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        paddingRight: 8,
-        borderRightWidth: 1,
-        borderRightColor: 'rgba(255, 255, 255, 0.1)',
-    },
-    label: {
-        color: '#CCCCCC',
-        fontSize: 12,
+    headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
+    headerRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    title: { color: '#FFF', fontSize: 14, fontWeight: '600' },
+    valueChip: {
+        color: '#AAA',
+        fontSize: 13,
         fontWeight: '600',
+        fontVariant: ['tabular-nums'],
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+        borderRadius: 10,
+        backgroundColor: 'rgba(255, 255, 255, 0.06)',
+        overflow: 'hidden',
     },
-    controls: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 4,
-        backgroundColor: 'rgba(255, 255, 255, 0.05)',
-        borderRadius: 16,
-        padding: 4,
-    },
-    button: {
-        width: 28,
-        height: 28,
-        borderRadius: 14,
-        backgroundColor: 'rgba(255, 255, 255, 0.1)',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    buttonPressed: {
-        backgroundColor: 'rgba(255, 255, 255, 0.2)',
-        transform: [{ scale: 0.95 }],
-    },
-    disabledButton: {
-        opacity: 0.5,
-    },
-    valueContainer: {
-        minWidth: 60,
+    valueChipActive: { color: '#FFF', backgroundColor: 'rgba(255, 255, 255, 0.14)' },
+    iconButton: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+    disabled: { opacity: 0.35 },
+    pressed: { opacity: 0.6 },
+    nudgeRow: { flexDirection: 'row', gap: 8 },
+    nudge: {
+        flex: 1,
+        height: 38,
+        borderRadius: 12,
         alignItems: 'center',
         justifyContent: 'center',
+        backgroundColor: 'rgba(255, 255, 255, 0.08)',
     },
-    valueText: {
-        color: '#FFFFFF',
-        fontSize: 14,
-        fontFamily: 'monospace',
-        fontWeight: '500',
-    },
-    valueTextActive: {
-        color: '#4CAF50',
-    },
-    actions: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-        paddingLeft: 8,
-        borderLeftWidth: 1,
-        borderLeftColor: 'rgba(255, 255, 255, 0.1)',
-    },
-    actionButton: {
-        width: 28,
-        height: 28,
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderRadius: 14,
-    },
-    actionButtonActive: {
-        backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    },
-    divider: {
-        width: 1,
-        height: 12,
-        backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    },
-    smartSection: {
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    verticalDivider: {
-        width: 1,
-        height: 24,
-        backgroundColor: 'rgba(255, 255, 255, 0.1)',
-        marginHorizontal: 4,
-    },
-    smartButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        borderRadius: 16,
-        gap: 6,
-        backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    },
-    smartButtonActive: {
-        backgroundColor: 'rgba(255, 255, 255, 0.15)',
-        borderColor: 'rgba(255, 255, 255, 0.1)',
-        borderWidth: 1,
-    },
-    searchTitleContainer: {
+    nudgeText: { color: '#FFF', fontSize: 13, fontWeight: '600', fontVariant: ['tabular-nums'] },
+    hint: { color: '#777', fontSize: 11, textAlign: 'center', marginTop: -6 },
+    actionRow: { flexDirection: 'row', gap: 8 },
+    action: {
         flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
+        gap: 10,
+        paddingVertical: 10,
+        paddingHorizontal: 12,
+        borderRadius: 14,
+        backgroundColor: 'rgba(255, 255, 255, 0.08)',
     },
-    searchTitleText: {
-        color: '#FFFFFF',
-        fontSize: 14,
-        fontWeight: '600',
-        letterSpacing: 0.5,
-    },
-    smartText: {
-        color: '#CCCCCC',
-        fontSize: 12,
-        fontWeight: '500',
-    },
-    smartTextActive: {
-        color: '#FFFFFF',
-    },
-    searchArea: {
-        marginTop: 12,
-        borderTopWidth: 1,
-        borderTopColor: 'rgba(255, 255, 255, 0.05)',
-        paddingTop: 12,
-    },
+    actionPrimary: { backgroundColor: '#FFFFFF' },
+    actionTitle: { color: '#FFF', fontSize: 13, fontWeight: '700' },
+    actionTitlePrimary: { color: '#000' },
+    actionSub: { color: '#999', fontSize: 11 },
+    actionSubPrimary: { color: '#555', fontSize: 11 },
+    statusRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    statusText: { color: '#DDD', fontSize: 12, flex: 1 },
+    undo: { color: '#FFF', fontSize: 12, fontWeight: '700', textDecorationLine: 'underline' },
+    searchArea: { gap: 10 },
     inputWrapper: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: 'rgba(255, 255, 255, 0.03)',
+        gap: 8,
+        height: 42,
+        paddingHorizontal: 12,
         borderRadius: 12,
-        paddingLeft: 10,
-        paddingRight: 3,
+        backgroundColor: 'rgba(255, 255, 255, 0.08)',
         borderWidth: 1,
-        borderColor: 'rgba(255, 255, 255, 0.08)',
+        borderColor: 'transparent',
     },
-    inputWrapperFocused: {
-        backgroundColor: 'rgba(255, 255, 255, 0.06)',
-        borderColor: 'rgba(255, 255, 255, 0.2)',
-    },
-    searchIcon: {
-        marginRight: 8,
-    },
-    input: {
-        flex: 1,
-        color: '#FFF',
-        fontSize: 14,
-        paddingVertical: 10,
-    },
-    clearButton: {
-        padding: 4,
-        marginRight: 4,
-    },
+    inputWrapperFocused: { borderColor: 'rgba(255, 255, 255, 0.3)' },
+    input: { flex: 1, color: '#FFF', fontSize: 14, paddingVertical: 0 },
     listenButton: {
-        padding: 8,
-        marginLeft: 4,
-        borderRadius: 8,
-        backgroundColor: 'rgba(255, 255, 255, 0.05)',
-        borderLeftWidth: 1,
-        borderLeftColor: 'rgba(255, 255, 255, 0.1)',
+        width: 30,
+        height: 30,
+        borderRadius: 15,
         alignItems: 'center',
         justifyContent: 'center',
+        backgroundColor: 'rgba(255, 255, 255, 0.12)',
     },
-    listenButtonActive: {
-        backgroundColor: 'rgba(255, 255, 255, 0.45)',
-    },
-    resultsList: {
-        marginTop: 8,
-        maxHeight: 150,
-    },
+    listenButtonActive: { backgroundColor: '#E53935' },
+    listeningState: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 6 },
+    listeningText: { color: '#CCC', fontSize: 12 },
+    resultsList: { maxHeight: 180 },
     resultItem: {
         flexDirection: 'row',
         alignItems: 'center',
+        gap: 10,
         paddingVertical: 10,
-        paddingHorizontal: 12,
-        borderRadius: 8,
-        marginBottom: 2,
+        paddingHorizontal: 4,
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: 'rgba(255, 255, 255, 0.08)',
     },
-    resultItemPressed: {
-        backgroundColor: 'rgba(255,255,255,0.05)',
-    },
-    resultContent: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-    },
-    resultTime: {
-        color: '#4CAF50',
-        fontSize: 11,
-        fontFamily: 'monospace',
-    },
-    resultText: {
-        flex: 1,
-        color: '#DDD',
-        fontSize: 13,
-    },
-    noResults: {
-        paddingVertical: 12,
-        alignItems: 'center',
-    },
-    noResultsText: {
-        color: '#666',
-        fontSize: 12,
-        fontStyle: 'italic',
-    },
-    listeningState: {
-        paddingVertical: 32,
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 12,
-    },
-    listeningSpinner: {
-        opacity: 0.8,
-    },
-    listeningText: {
-        color: '#FFFFFF',
-        fontSize: 13,
-        fontWeight: '500',
-        opacity: 0.6,
-    },
+    resultTime: { color: '#777', fontSize: 11, fontVariant: ['tabular-nums'], width: 40 },
+    resultText: { color: '#EEE', fontSize: 13, flex: 1 },
+    resultShift: { color: '#FFF', fontSize: 12, fontWeight: '700', fontVariant: ['tabular-nums'] },
+    noResultsText: { color: '#777', fontSize: 12, textAlign: 'center', paddingVertical: 4 },
 });
-
-

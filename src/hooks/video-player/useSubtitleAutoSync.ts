@@ -25,7 +25,8 @@ interface Options {
     showToast: (message: string) => void;
 }
 
-function describe(result: AutoSyncResult): string {
+/** One line for a result, shared by the toast and the sync panel. */
+export function describeAutoSync(result: AutoSyncResult): string {
     switch (result.kind) {
         case 'synced': {
             if (Math.abs(result.delayMs) < 100) {return 'Subtitles are in sync';}
@@ -33,7 +34,7 @@ function describe(result: AutoSyncResult): string {
             return `Subtitles synced ${result.delayMs > 0 ? '+' : ''}${s} s`;
         }
         case 'drift': return 'This subtitle was made for a different frame rate. Try another one.';
-        case 'unsure': return 'Couldn’t sync confidently here. Try Smart Sync.';
+        case 'unsure': return 'Couldn’t sync confidently here. Try Pick a line.';
         case 'too-few-cues': return 'Not enough dialogue nearby to sync';
         case 'failed': return 'Auto sync failed';
     }
@@ -49,22 +50,22 @@ export function useSubtitleAutoSync({
     const delayRef = useRef(delayMs);
     delayRef.current = delayMs;
 
-    const run = useCallback(async (manual: boolean) => {
-        if (runningRef.current || !enabled || cues.length === 0) {return;}
+    const run = useCallback(async (manual: boolean): Promise<AutoSyncResult | null> => {
+        if (runningRef.current || !enabled || cues.length === 0) {return null;}
         runningRef.current = true;
         setRunning(true);
         const analysed = cues;
         try {
             const result = await SubtitleAutoSync.compute(videoPath, analysed, currentTimeRef.current);
-            if (cuesRef.current !== analysed) {return;}   // subtitle changed meanwhile
+            if (cuesRef.current !== analysed) {return null;}   // subtitle changed meanwhile
             // An automatic answer yields to anything the user set while it ran.
-            if (!manual && delayRef.current !== 0) {return;}
-            if (result.kind === 'synced') {
-                setDelay(result.delayMs);
-                showToast(describe(result));
-            } else if (manual || result.kind === 'drift') {
-                showToast(describe(result));
+            if (!manual && delayRef.current !== 0) {return null;}
+            if (result.kind === 'synced') {setDelay(result.delayMs);}
+            // A manual run reports in the sync panel; an automatic one has only the toast.
+            if (!manual && (result.kind === 'synced' || result.kind === 'drift')) {
+                showToast(describeAutoSync(result));
             }
+            return result;
         } finally {
             runningRef.current = false;
             setRunning(false);
