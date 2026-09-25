@@ -105,6 +105,14 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
     private var pendingAudioTrack: Int? = null
 
     /**
+     * The tracks JS last asked for, for this media. A re-open (enhancement toggle, IO retry)
+     * builds a new player that starts on its default tracks, and JS will not resend a prop
+     * that has not changed -- so without this the label said English while Hindi played.
+     */
+    private var chosenAudioTrack: Int? = null
+    private var chosenTextTrack: Int? = null
+
+    /**
      * Text tracks, in the order the container declares them. JS identifies a subtitle by its
      * *ordinal among subtitle streams* rather than by ffmpeg's absolute stream index, because
      * ffmpeg counts video and audio streams too and ExoPlayer does not.
@@ -230,6 +238,11 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
         if (uri == sourceUri && startMs == startPositionMs && player != null) {
             return
         }
+        if (uri != sourceUri) {
+            // Track ids index this media's tracks; they mean nothing for another file.
+            chosenAudioTrack = null
+            chosenTextTrack = null
+        }
         sourceUri = uri
         startPositionMs = startMs
         openMedia()
@@ -270,6 +283,7 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
      * streams cues as playback reaches them.
      */
     fun setTextTrack(ordinal: Int) {
+        chosenTextTrack = ordinal
         val p = player
         if (p == null || !tracksKnown) {
             pendingTextTrack = ordinal
@@ -469,6 +483,7 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
      * `scheduleAudioTrackApply` to keep trying.
      */
     fun setAudioTrack(id: Int) {
+        chosenAudioTrack = id
         val p = player
         if (p == null || !tracksKnown) {
             pendingAudioTrack = id
@@ -577,6 +592,9 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
         tracksKnown = false
         audioTracks.clear()
         textTracks.clear()
+        // Re-applied once the new player lists its tracks (onTracksChanged).
+        pendingAudioTrack = pendingAudioTrack ?: chosenAudioTrack
+        pendingTextTrack = pendingTextTrack ?: chosenTextTrack
         lastBitmapCueSignature = null
         p.setVideoSurfaceView(surfaceView)
         p.addListener(listener)
