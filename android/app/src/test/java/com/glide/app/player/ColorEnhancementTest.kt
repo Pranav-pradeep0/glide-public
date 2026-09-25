@@ -137,20 +137,6 @@ class ColorEnhancementTest {
     }
 
     @Test
-    fun `SDR clarity adds local contrast, but not in deep shadows`() {
-        val mid = 0.5f
-        val plain = sdr(mid, mid, mid)[1]
-        val detailed = sdr(mid, mid, mid, localY = mid - 0.04f)[1]
-        assertTrue("a pixel brighter than its surround should get brighter", detailed > plain + 0.005f)
-        val deep = 0.03f
-        assertEquals(sdr(deep, deep, deep)[1].toDouble(), sdr(deep, deep, deep, localY = 0f)[1].toDouble(), 1e-6)
-    }
-
-    // ---------------------------------------------------------------------------------------
-    // HDR.
-    // ---------------------------------------------------------------------------------------
-
-    @Test
     fun `HDR round trip is exact with the enhancement at zero`() {
         // Pins the BT.2100 matrices, their inverses, the PQ pair and the working scale in one
         // go: any of them wrong and a do-nothing enhancement stops doing nothing.
@@ -280,22 +266,6 @@ class ColorEnhancementTest {
     }
 
     @Test
-    fun `HDR clarity adds local contrast, but not in deep shadows`() {
-        val v = 20f / HDR_WORKING_NITS
-        val i = nitsToI(20f)
-        val plain = hdr(v, v, v)[1]
-        val detailed = hdr(v, v, v, localI = i - 0.03f)[1]
-        assertTrue("a pixel brighter than its surround should get brighter", detailed > plain * 1.02f)
-        val deep = 0.05f / HDR_WORKING_NITS
-        val deepPlain = hdr(deep, deep, deep)[1]
-        assertEquals(deepPlain.toDouble(), hdr(deep, deep, deep, localI = 0f)[1].toDouble(), deepPlain * 1e-3)
-    }
-
-    // ---------------------------------------------------------------------------------------
-    // Plumbing.
-    // ---------------------------------------------------------------------------------------
-
-    @Test
     fun `HDR static metadata becomes EGL mastering attributes`() {
         // BT.2020 primaries, D65, 1000-nit master, MaxCLL 1000, MaxFALL 400 -- media3's layout.
         val info = ByteBuffer.allocate(25).order(ByteOrder.LITTLE_ENDIAN).apply {
@@ -324,6 +294,16 @@ class ColorEnhancementTest {
             val glsl = File("src/main/res/raw/$it.glsl").readText()
             assertTrue("$it must be re-copied from media3 $media3", "override of media3 $media3:" in glsl)
             assertTrue("$it must use highp", "precision highp float;" in glsl && "precision mediump" !in glsl)
+        }
+    }
+
+    @Test
+    fun `enhancement is per pixel, so it cannot draw halos`() {
+        // Clarity -- boosting a pixel against its blurred neighbourhood -- put a visible shadow
+        // around people against bright windows (The Boys S05E04, 19:35) and was removed. The
+        // main pass may read only its own pixel (plus debanding's flat-area taps) and the key.
+        listOf(ColorEnhancement.fragmentShader(true), ColorEnhancement.fragmentShader(false)).forEach {
+            assertTrue("main pass must not sample the luma pyramid", "uStats" !in it)
         }
     }
 

@@ -18,15 +18,13 @@ import androidx.media3.effect.GlShaderProgram
 import androidx.media3.effect.RgbMatrix
 import kotlin.math.exp
 import kotlin.math.max
-import kotlin.math.pow
 import kotlin.math.roundToInt
 
 /**
  * Colour enhancement as one GL effect for SDR and HDR -- the maths is [ColorEnhancement].
  *
  * Per frame, three draws: the frame downsampled to [ColorEnhancement.STATS_WIDTH] columns of
- * perceptual luma and mipmapped (the mean drives the scene-adaptive curve, a mid mip is the
- * blur behind clarity), a 1x1 pass easing the scene key between two ping-pong textures, then
+ * perceptual luma and mipmapped to its mean (the scene key), a 1x1 pass easing the scene key between two ping-pong textures, then
  * the enhancement itself. Everything stays on the GPU: reading the key back would stall the
  * pipeline every frame.
  *
@@ -100,8 +98,6 @@ internal class ColorEnhancementEffect : GlEffect {
                 throw VideoFrameProcessingException(e)
             }
             stats.setFloatsUniform("uFootprint", floatArrayOf(1f / statsWidth, 1f / statsHeight))
-            val level = 2f.pow(ColorEnhancement.CLARITY_LEVEL)
-            main.setFloatsUniform("uClarityTexel", floatArrayOf(level / statsWidth, level / statsHeight))
             val radius = ColorEnhancement.DEBAND_RADIUS_1080 * inputHeight / 1080f
             main.setFloatsUniformIfPresent("uDebandStep", floatArrayOf(radius / inputWidth, radius / inputHeight))
             reset = true
@@ -143,8 +139,7 @@ internal class ColorEnhancementEffect : GlEffect {
                 GLES20.glViewport(viewport[0], viewport[1], viewport[2], viewport[3])
                 main.use()
                 main.setSamplerTexIdUniform("uTex", inputTexId, 0)
-                main.setSamplerTexIdUniform("uStats", statsTex, 1)
-                main.setSamplerTexIdUniform("uState", stateTex[current], 2)
+                main.setSamplerTexIdUniform("uState", stateTex[current], 1)
                 main.setFloatUniform("uStrength", strength.coerceIn(0f, ColorEnhancement.STRENGTH_MAX))
                 main.bindAttributesAndUniforms()
                 drawQuad()

@@ -709,8 +709,9 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
                 if (group.type != C.TRACK_TYPE_VIDEO) continue
                 for (i in 0 until group.length) {
                     if (!group.isTrackSelected(i)) continue
-                    enhancement.hdrMetadata =
-                        ColorEnhancement.eglHdrMetadata(group.getTrackFormat(i).colorInfo?.hdrStaticInfo)
+                    val info = group.getTrackFormat(i).colorInfo?.hdrStaticInfo
+                    enhancement.hdrMetadata = ColorEnhancement.eglHdrMetadata(info)
+                    Log.w(TAG, "video hdrStaticInfo=${info?.size ?: "none"} usable=${enhancement.hdrMetadata != null}")
                 }
             }
             audioTracks.clear()

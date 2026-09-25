@@ -600,7 +600,6 @@ stays on the GPU, with no readback stall.
 |---|---|---|
 | Tone | contrast pivot follows the scene: 0.18 on typical keys, down to 0.06 on dark ones | the lift above, plus up to +14% for 1–30 nits on dark scenes and less lift on bright ones; toe ≤ +2.2% in every scene |
 | Colour | saturation weighted by skin hue (138°), shadow and vibrance | the same, with skin at 142° in CtCp |
-| Clarity | local contrast against the 1/32-scale mip, gated and capped | the same, on I |
 | Extra | deband + one-step dither | mastering metadata (SMPTE 2086 / CTA-861.3) set on the output EGL surface |
 | Strength | 0–150% slider, plus Subtle / Natural / Vivid presets in Quick Settings; live, no re-open | same |
 
@@ -624,8 +623,7 @@ the 3.00 they declare). The release APK builds.
    show `DISPLAY_P3` and `BT2020_PQ`.
 2. **The Boys at 45:23:** the dark scene opens up, and the probe has no zeros.
 3. **Skin:** faces don't go orange at 150%. Muted colours gain more than neon ones.
-4. **Clarity:** no halos at high-contrast edges at 150%; no blockiness in smooth gradients
-   (the blur comes from a box-filtered mip, smoothed with a tent filter).
+4. ~~Clarity~~ — removed, see below.
 5. **Scene changes:** no pumping within a shot; adapts at cuts; no flash after a seek.
 6. **SDR:** bands in skies and dark gradients are gone, and the dither isn't visible as a
    pattern. A bright typical scene looks as it did before.
@@ -633,6 +631,19 @@ the 3.00 they declare). The release APK builds.
 8. **Cost:** GPU busy % and thermals over 10 minutes of 4K HDR and 1080p SDR, against
    enhancement off. SDR now pays a full-resolution pass that the old matrix got free inside
    media3's final pass.
+
+**Clarity removed after a device test, 2026-09-25.** It put a visible shadow around people
+against bright backgrounds, strongest in Vivid (The Boys S05E04, 19:35): boosting a pixel
+against a blurred neighbourhood darkens the dark side of every strong edge for the width of
+the blur. Hair next to a window lost 14–21% while the pixels just inside it barely changed.
+With clarity removed (dark hair against a whiteboard at 19:37), the bright background within
+60 px of the hair changes by the same factor as background far from any edge: x0.958 both.
+There is no halo left. A halo-free version would need an edge-aware (guided) filter, and a
+test now fails if the main pass samples the luma pyramid.
+
+**Still open: an even ~4% dimming with enhancement on.** This file carries no static HDR
+metadata in the MKV (`hdrStaticInfo=none`), so the metadata fix cannot apply. Its HDR10+
+data is per-frame, inside the video stream, and media3's effects path drops it.
 
 ### Phase 3 — Surface, geometry, PiP, session
 
