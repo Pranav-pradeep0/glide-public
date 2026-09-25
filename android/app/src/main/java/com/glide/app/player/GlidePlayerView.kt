@@ -450,7 +450,12 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
      */
     private val enhancement = ColorEnhancementEffect()
 
-    /** Live: a uniform read per frame, so unlike the toggle it needs no re-open. */
+    /**
+     * Live: a uniform read per frame, so unlike the toggle it needs no re-open. While paused no
+     * frame is drawn, so the change shows on resume. Re-seeking in place does not help: it runs
+     * (BUFFERING -> READY) but media3's effects path does not redisplay a paused frame --
+     * measured, the capture stayed byte-identical.
+     */
     fun setVideoEnhancementStrength(strength: Float) {
         enhancement.strength = strength
     }
