@@ -34,6 +34,13 @@ const SLEEP_TIMER_OPTIONS = [
     { label: 'End', value: -1 },
 ];
 
+/** Strength presets; 1 is the tuned look, and the slider runs to 1.5. */
+const ENHANCEMENT_PRESETS = [
+    { label: 'Subtle', value: 0.5 },
+    { label: 'Natural', value: 1 },
+    { label: 'Vivid', value: 1.5 },
+];
+
 interface QuickSettingsPanelProps {
     onClose: () => void;
     playbackRate: number;
@@ -59,6 +66,10 @@ interface QuickSettingsPanelProps {
     shakeAction?: 'play_pause' | 'next' | 'previous' | 'seek_forward' | 'seek_backward';
     onSelectShakeAction?: (action: 'play_pause' | 'next' | 'previous' | 'seek_forward' | 'seek_backward') => void;
     seekDuration?: number;
+    videoEnhancement?: boolean;
+    onToggleVideoEnhancement?: () => void;
+    videoEnhancementStrength?: number;
+    onSetVideoEnhancementStrength?: (strength: number) => void;
 }
 
 export const QuickSettingsPanel: React.FC<QuickSettingsPanelProps> = memo((props) => {
@@ -187,6 +198,61 @@ export const QuickSettingsPanel: React.FC<QuickSettingsPanelProps> = memo((props
                                                 </Text>
                                             </Pressable>
                                         ))}
+                                    </View>
+                                </View>
+                            </View>
+                        )}
+
+                        {/* COLOR ENHANCEMENT */}
+                        {props.onToggleVideoEnhancement && (
+                            <View style={styles.section}>
+                                <View style={styles.sectionHeaderRow}>
+                                    <Text style={styles.sectionTitle}>COLOR ENHANCEMENT</Text>
+                                    <Pressable
+                                        style={[styles.switch, props.videoEnhancement && styles.switchActive]}
+                                        onPress={props.onToggleVideoEnhancement}
+                                        accessibilityRole="switch"
+                                        accessibilityLabel="Color enhancement"
+                                        accessibilityState={{ checked: !!props.videoEnhancement }}
+                                    >
+                                        <View style={[styles.switchThumb, props.videoEnhancement && styles.switchThumbActive]} />
+                                    </Pressable>
+                                </View>
+
+                                <View style={[styles.card, !props.videoEnhancement && styles.disabledOpacity]}>
+                                    <View style={styles.sliderRow}>
+                                        <Feather name="aperture" size={18} color="rgba(255,255,255,0.5)" style={{ marginRight: 12 }} />
+                                        <Slider
+                                            style={{ flex: 1, height: 40 }}
+                                            minimumValue={0}
+                                            maximumValue={1.5}
+                                            step={0.05}
+                                            value={props.videoEnhancementStrength ?? 1}
+                                            onValueChange={props.onSetVideoEnhancementStrength}
+                                            minimumTrackTintColor="#FFFFFF"
+                                            maximumTrackTintColor="rgba(255,255,255,0.2)"
+                                            thumbTintColor="#FFF"
+                                            disabled={!props.videoEnhancement}
+                                            accessibilityLabel="Color enhancement strength"
+                                        />
+                                        <Text style={styles.valueText}>
+                                            {Math.round((props.videoEnhancementStrength ?? 1) * 100)}%
+                                        </Text>
+                                    </View>
+                                    <View style={styles.presetsContainer}>
+                                        {ENHANCEMENT_PRESETS.map(({ label, value }) => {
+                                            const active = Math.abs((props.videoEnhancementStrength ?? 1) - value) < 0.01;
+                                            return (
+                                                <Pressable
+                                                    key={label}
+                                                    style={[styles.presetChip, active && styles.activeChip]}
+                                                    onPress={() => props.onSetVideoEnhancementStrength?.(value)}
+                                                    disabled={!props.videoEnhancement}
+                                                >
+                                                    <Text style={[styles.chipText, active && styles.activeChipText]}>{label}</Text>
+                                                </Pressable>
+                                            );
+                                        })}
                                     </View>
                                 </View>
                             </View>

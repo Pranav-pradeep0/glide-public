@@ -88,6 +88,10 @@ class GlidePlayerViewManager : SimpleViewManager<GlidePlayerView>() {
     fun setVideoEnhancement(view: GlidePlayerView, enabled: Boolean) =
         view.setVideoEnhancement(enabled)
 
+    @ReactProp(name = "videoEnhancementStrength", defaultFloat = 1f)
+    fun setVideoEnhancementStrength(view: GlidePlayerView, strength: Float) =
+        view.setVideoEnhancementStrength(strength)
+
     @ReactProp(name = "progressUpdateInterval", defaultFloat = 0f)
     fun setProgressUpdateInterval(view: GlidePlayerView, intervalMs: Float) =
         view.setProgressUpdateInterval(intervalMs.toLong())

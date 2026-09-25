@@ -80,6 +80,8 @@ export interface GlidePlayerProps extends ViewProps {
     artist?: string;
     audioEqualizer?: number[];
     videoEnhancement?: boolean;
+    /** 0..1.5, 1 = the tuned look. Live; only the toggle re-opens the media. */
+    videoEnhancementStrength?: number;
     style?: StyleProp<ViewStyle>;
 
     onLoad?: (event: any) => void;

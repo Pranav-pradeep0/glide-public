@@ -29,6 +29,7 @@ interface AnimatedVideoViewProps {
     // Source
     source: PlayerSource;
     videoEnhancement: boolean;
+    videoEnhancementStrength: number;
 
     // Playback state
     paused: boolean;
@@ -83,6 +84,7 @@ const AnimatedVideoView = forwardRef<GlidePlayerRef, AnimatedVideoViewProps>(
         const {
             source,
             videoEnhancement,
+            videoEnhancementStrength,
             paused,
             rate,
             muted,
@@ -156,6 +158,7 @@ const AnimatedVideoView = forwardRef<GlidePlayerRef, AnimatedVideoViewProps>(
                     artist={artist}
                     audioEqualizer={audioEqualizer}
                     videoEnhancement={videoEnhancement}
+                    videoEnhancementStrength={videoEnhancementStrength}
                     onLoad={onLoad}
                     onProgress={onProgress}
                     onEnd={onEnd}
@@ -186,6 +189,7 @@ function areEqual(prevProps: AnimatedVideoViewProps, nextProps: AnimatedVideoVie
     if (prevProps.repeat !== nextProps.repeat) {return false;}
     if (prevProps.resizeMode !== nextProps.resizeMode) {return false;}
     if (prevProps.videoEnhancement !== nextProps.videoEnhancement) {return false;}
+    if (prevProps.videoEnhancementStrength !== nextProps.videoEnhancementStrength) {return false;}
     if (prevProps.pipEnabled !== nextProps.pipEnabled) {return false;}
     if (prevProps.pipPresentationActive !== nextProps.pipPresentationActive) {return false;}
     if (prevProps.audioTrack !== nextProps.audioTrack) {return false;}

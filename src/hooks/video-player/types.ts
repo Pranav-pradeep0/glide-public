@@ -216,6 +216,8 @@ export interface PlayerSettings {
     skipDuration: 5 | 10 | 30; // seconds for skip forward/backward
     backgroundPlayEnabled: boolean; // Continue audio when app is backgrounded
     videoEnhancement: boolean;
+    /** 0..1.5; 1 is the tuned look. Applies live, unlike the toggle. */
+    videoEnhancementStrength: number;
 
     // Equalizer
     equalizerEnabled: boolean;
@@ -385,6 +387,7 @@ export interface UsePlayerSettingsReturn {
     clearSleepTimer: () => void;
     toggleBackgroundPlay: () => void;
     toggleVideoEnhancement: () => void;
+    setVideoEnhancementStrength: (strength: number) => void;
 
     // Equalizer Actions
     toggleEqualizer: () => void;

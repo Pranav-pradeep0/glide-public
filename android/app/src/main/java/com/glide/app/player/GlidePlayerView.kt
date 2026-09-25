@@ -21,9 +21,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.text.Cue
 import androidx.media3.common.VideoSize
 import androidx.media3.common.Effect
-import androidx.media3.common.util.GlUtil
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.effect.RgbMatrix
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
@@ -441,23 +439,20 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
         openMedia()
     }
 
-    // HDR effect first: media3 folds only *trailing* matrices into its final pass, which is
-    // where the SDR matrix has always run. Each one is a no-op in the other range.
     private fun buildEffects(): List<Effect> =
-        if (enhancementEnabled) listOf(HdrColorEnhancement, enhancementMatrix) else emptyList()
+        if (enhancementEnabled) listOf(enhancement) else emptyList()
 
     /**
-     * SDR colour enhancement: luminance-preserving saturation, then contrast about mid-grey.
-     * HDR is [HdrColorEnhancement], because a matrix cannot do HDR contrast without erasing
-     * the shadows -- see [ColorEnhancement].
-     *
-     * Media3's obvious choice -- `HslAdjustment` plus `Contrast`, which the migration plan
-     * proposed -- cannot be used at all: `HslShaderProgram` throws
-     * `IllegalArgumentException: HDR is not yet supported`, killing playback on exactly the
-     * content this migration exists to fix.
+     * One GL effect for SDR and HDR -- see [ColorEnhancement]. Media3's obvious choice,
+     * `HslAdjustment` plus `Contrast` as the migration plan proposed, cannot be used at all:
+     * `HslShaderProgram` throws `IllegalArgumentException: HDR is not yet supported`, killing
+     * playback on exactly the content this migration exists to fix.
      */
-    private val enhancementMatrix = RgbMatrix { _, useHdr ->
-        if (useHdr) GlUtil.create4x4IdentityMatrix() else ColorEnhancement.sdrMatrix()
+    private val enhancement = ColorEnhancementEffect()
+
+    /** Live: a uniform read per frame, so unlike the toggle it needs no re-open. */
+    fun setVideoEnhancementStrength(strength: Float) {
+        enhancement.strength = strength
     }
 
     /**
@@ -709,6 +704,15 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
         }
 
         override fun onTracksChanged(tracks: Tracks) {
+            // The effects path loses the decoder's HDR metadata; the effect re-applies it.
+            for (group in tracks.groups) {
+                if (group.type != C.TRACK_TYPE_VIDEO) continue
+                for (i in 0 until group.length) {
+                    if (!group.isTrackSelected(i)) continue
+                    enhancement.hdrMetadata =
+                        ColorEnhancement.eglHdrMetadata(group.getTrackFormat(i).colorInfo?.hdrStaticInfo)
+                }
+            }
             audioTracks.clear()
             for (group in tracks.groups) {
                 if (group.type != C.TRACK_TYPE_AUDIO) continue

@@ -33,6 +33,7 @@ const initialSettings: PlayerSettings = {
     skipDuration: 30,
     backgroundPlayEnabled: false,
     videoEnhancement: false,
+    videoEnhancementStrength: 1,
 
     // Equalizer defaults
     equalizerEnabled: false,
@@ -212,6 +213,10 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
         });
     }, [showToast]);
 
+    const setVideoEnhancementStrength = useCallback((strength: number) => {
+        setSettings(prev => ({ ...prev, videoEnhancementStrength: strength }));
+    }, []);
+
     // ========================================================================
     // EQUALIZER
     // ========================================================================
@@ -300,6 +305,7 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
         clearSleepTimer,
         toggleBackgroundPlay,
         toggleVideoEnhancement,
+        setVideoEnhancementStrength,
 
         // Equalizer
         toggleEqualizer,
@@ -316,7 +322,7 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
         toggleMute, toggleRepeat,
         setResizeMode, toggleResizeMode,
         setSleepTimer, clearSleepTimer,
-        toggleBackgroundPlay, toggleVideoEnhancement,
+        toggleBackgroundPlay, toggleVideoEnhancement, setVideoEnhancementStrength,
         toggleEqualizer, setEqualizerPreset, setCustomEqualizerBands, setSingleBand, audioEqualizer,
         setAudioDelay, setSubtitleDelay,
     ]);

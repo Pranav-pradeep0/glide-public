@@ -1228,6 +1228,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                         pipEnabled={pipEnabled}
                         pipPresentationActive={pipPresentationActive}
                         videoEnhancement={settingsHook.settings.videoEnhancement}
+                        videoEnhancementStrength={settingsHook.settings.videoEnhancementStrength}
                         audioTrack={tracksHook.selectedAudioTrackId}
                         textTrack={tracksHook.nativeTextTrackOrdinal}
                         onBitmapCues={tracksHook.handleBitmapCues}
@@ -1399,6 +1400,10 @@ export default function VideoPlayerScreen({ route }: Props) {
                     shakeAction={shakeAction}
                     onSelectShakeAction={setShakeAction}
                     seekDuration={settings.seekDuration}
+                    videoEnhancement={settingsHook.settings.videoEnhancement}
+                    onToggleVideoEnhancement={settingsHook.toggleVideoEnhancement}
+                    videoEnhancementStrength={settingsHook.settings.videoEnhancementStrength}
+                    onSetVideoEnhancementStrength={settingsHook.setVideoEnhancementStrength}
                 />
             )}
 
