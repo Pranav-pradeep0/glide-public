@@ -1,5 +1,5 @@
 import { SubtitleCue } from '../types';
-import { AI_PROXY_URL, RECAP_STT_AVAILABLE } from '../utils/constants';
+import { AI_PROXY_URL, RECAP_AVAILABLE } from '../utils/constants';
 import { fetchWithTimeout } from '../utils/network';
 import { SubtitleCueStore } from './SubtitleCueStore';
 import { SubtitleTrack } from '../utils/SubtitleExtractor';
@@ -148,7 +148,7 @@ export class RecapService {
             return null;
         }
 
-        if (!RECAP_STT_AVAILABLE) {
+        if (!RECAP_AVAILABLE) {
             if (__DEV__) { console.warn('[RecapService] Recap unavailable: no AI proxy URL configured.'); }
             return null;
         }

@@ -1,12 +1,10 @@
 //   BASE_URL=https://glide-ai-proxy.<account>.workers.dev node smoke.mjs
-//   SMOKE_AUDIO=1 BASE_URL=... node smoke.mjs   # also runs a real transcription (uses Groq quota)
 
 const base = process.env.BASE_URL?.replace(/\/$/, '');
 if (!base) {
     console.error('Set BASE_URL to the deployed Worker URL.');
     process.exit(1);
 }
-const runAudio = process.env.SMOKE_AUDIO === '1';
 
 let failures = 0;
 
@@ -32,31 +30,6 @@ async function readJson(res) {
         throw new Error('response was not a JSON object');
     }
     return body;
-}
-
-function silenceWav(seconds = 1) {
-    const sampleRate = 16000;
-    const samples = sampleRate * seconds;
-    const dataBytes = samples * 2;
-    const buf = new ArrayBuffer(44 + dataBytes);
-    const view = new DataView(buf);
-    const ascii = (offset, text) => {
-        for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
-    };
-    ascii(0, 'RIFF');
-    view.setUint32(4, 36 + dataBytes, true);
-    ascii(8, 'WAVE');
-    ascii(12, 'fmt ');
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true); // PCM
-    view.setUint16(22, 1, true); // mono
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate * 2, true);
-    view.setUint16(32, 2, true);
-    view.setUint16(34, 16, true);
-    ascii(36, 'data');
-    view.setUint32(40, dataBytes, true);
-    return new Blob([buf], { type: 'audio/wav' });
 }
 
 const dialogue =
@@ -126,27 +99,6 @@ await check('invalid JSON -> 400', async () => {
     });
     expectStatus(res, 400);
 });
-
-await check('transcribe without file -> 400', async () => {
-    const form = new FormData();
-    form.append('task', 'transcribe');
-    const res = await fetch(`${base}/v1/transcribe`, { method: 'POST', body: form });
-    expectStatus(res, 400);
-});
-
-if (runAudio) {
-    await check('transcribe silent wav -> 200 with text field', async () => {
-        const form = new FormData();
-        form.append('file', silenceWav(), 'audio.wav');
-        form.append('task', 'transcribe');
-        const res = await fetch(`${base}/v1/transcribe`, { method: 'POST', body: form });
-        expectStatus(res, 200);
-        const body = await readJson(res);
-        if (typeof body.text !== 'string') {
-            throw new Error('missing text field');
-        }
-    });
-}
 
 // Rate limit is 6/60s per IP per location, so run this last.
 await check('flood -> at least one 429 within limit window', async () => {

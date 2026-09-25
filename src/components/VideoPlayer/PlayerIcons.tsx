@@ -1,5 +1,5 @@
 import React from 'react';
-import Svg, { Rect, Path, Circle, G, Text, Line } from 'react-native-svg';
+import Svg, { Rect, Path, Circle, G } from 'react-native-svg';
 
 // ============================================================================
 // DISPLAY MODE ICONS
@@ -359,83 +359,6 @@ export const VisualEnhancementIcon = ({ size = 20, color = '#fff', active = fals
                 fill={active ? '#FFD60A' : color}
                 opacity={active ? 1 : 0.2}
             />
-        </Svg>
-    );
-};
-
-export const SmartSyncIcon = ({ size = 20, color = '#fff', active = false }: { size?: number, color?: string, active?: boolean }) => {
-    return (
-        <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-            <G opacity={active ? 1 : 0.6}>
-                <Path d="M3 12h2M7 8v8M11 5v14M15 9v6M19 11v2M22 12h-1" stroke={color} strokeWidth={1.8} strokeLinecap="round" />
-            </G>
-            <Path
-                d="M17 4l.5 1.5 1.5.5-1.5.5L17 8l-.5-1.5L15 6l1.5-.5L17 4z"
-                fill={color}
-                opacity={active ? 1 : 0.4}
-            />
-        </Svg>
-    );
-};
-
-export const AutoListenIcon = ({ size = 20, color = '#fff', active = false }: { size?: number, color?: string, active?: boolean }) => {
-    return (
-        <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-            {/* Subtitle text lines */}
-            <Rect
-                x="4"
-                y="18"
-                width="16"
-                height="1.5"
-                rx="1"
-                fill={active ? color : 'none'}
-                stroke={color}
-                strokeWidth={1.5}
-            />
-            <Rect
-                x="6"
-                y="22"
-                width="12"
-                height="1.5"
-                rx="1"
-                fill={active ? color : 'none'}
-                stroke={color}
-                strokeWidth={1.5}
-            />
-
-            {/* Audio waveform above subtitles */}
-            <G opacity={active ? 1 : 0.7} y={-1}>
-                <Line x1="6" y1="9" x2="6" y2="11" stroke={color} strokeWidth={1.5} strokeLinecap="round" />
-                <Line x1="9" y1="7" x2="9" y2="13" stroke={color} strokeWidth={1.5} strokeLinecap="round" />
-                <Line x1="12" y1="5" x2="12" y2="15" stroke={color} strokeWidth={1.5} strokeLinecap="round" />
-                <Line x1="15" y1="7" x2="15" y2="13" stroke={color} strokeWidth={1.5} strokeLinecap="round" />
-                <Line x1="18" y1="9" x2="18" y2="11" stroke={color} strokeWidth={1.5} strokeLinecap="round" />
-            </G>
-
-            {/* AI sparkle/stars indicator */}
-            <G fill={color}>
-                <Path d="M2 3l.4 1 1 .4-1 .4-.4 1-.4-1-1-.4 1-.4.4-1z" />
-                <Path d="M20 2l.3.7.7.3-.7.3-.3.7-.3-.7-.7-.3.7-.3.3-.7z" opacity={0.8} />
-            </G>
-
-            {/* Sync arrows when active */}
-            {active && (
-                <G opacity={0.7}>
-                    <Path
-                        d="M12 10.5L12 11.5"
-                        stroke={color}
-                        strokeWidth={1.2}
-                        strokeLinecap="round"
-                    />
-                    <Path
-                        d="M11 11L12 11.5L13 11"
-                        stroke={color}
-                        strokeWidth={1.2}
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                    />
-                </G>
-            )}
         </Svg>
     );
 };

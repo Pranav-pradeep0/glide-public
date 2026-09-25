@@ -38,7 +38,7 @@ import { useSubtitleAutoSync } from '@/hooks/video-player/useSubtitleAutoSync';
 import { RecapModal } from '@/components/VideoPlayer/RecapModal';
 import { ResumeModal } from '@/components/VideoPlayer/ResumeModal';
 import { RecapService } from '@/services/RecapService';
-import { RECAP_STT_AVAILABLE } from '@/utils/constants';
+import { RECAP_AVAILABLE } from '@/utils/constants';
 import { getResumablePosition } from '@/utils/playbackResume';
 
 // Hooks
@@ -901,7 +901,7 @@ export default function VideoPlayerScreen({ route }: Props) {
         let isActive = true;
 
         const evaluateRecapEligibility = async () => {
-            if (!RECAP_STT_AVAILABLE) {
+            if (!RECAP_AVAILABLE) {
                 if (isActive) {setIsRecapEligible(false);}
                 return;
             }
@@ -946,7 +946,7 @@ export default function VideoPlayerScreen({ route }: Props) {
     const handleRecapTrigger = useCallback(async () => {
         if (isNetworkStream) {return;}
 
-        if (!RECAP_STT_AVAILABLE) {
+        if (!RECAP_AVAILABLE) {
             bookmarksHook.showToastWithMessage('Recap is not available in this build');
             return;
         }
@@ -1273,8 +1273,6 @@ export default function VideoPlayerScreen({ route }: Props) {
                     onClose={() => setSyncPanelType(null)}
                     subtitleCues={tracksHook.subtitleCues}
                     currentTimeRef={player.currentTimeRef}
-                    videoPath={videoPath}
-                    subtitleLanguage={tracksHook.subtitleTracks.find(t => t.index === tracksHook.selectedSubtitleTrackIndex)?.language}
                     onAutoSync={syncPanelType === 'subtitle' && !isNetworkStream ? runAutoSync : undefined}
                     autoSyncRunning={autoSyncRunning}
                 />

@@ -17,20 +17,13 @@ export interface Env {
 }
 
 const GROQ_CHAT_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_TRANSCRIPTIONS_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
-const GROQ_TRANSLATIONS_URL = 'https://api.groq.com/openai/v1/audio/translations';
 
 const CHAT_MODEL = 'openai/gpt-oss-120b';
-const AUDIO_MODEL = 'whisper-large-v3';
 
 const MAX_DIALOGUE_CHARS = 5000;
 const MAX_TITLE_CHARS = 200;
 const MAX_RECAP_BODY_BYTES = 8 * 1024;
-const MAX_AUDIO_BYTES = 1024 * 1024; // 10s/16kHz/mono/16-bit is ~320KB
 const CHAT_TIMEOUT_MS = 15000;
-const AUDIO_TIMEOUT_MS = 30000;
-
-const LANGUAGE_RE = /^[a-z]{2}$/;
 
 const RECAP_SYSTEM_PROMPT = `You are a cinematic recap expert. Your task is to provide a "Previously on..." style recap based on provided dialogue.
 
@@ -163,73 +156,6 @@ async function handleRecap(request: Request, env: Env): Promise<Response> {
     return json({ recap });
 }
 
-async function handleTranscribe(request: Request, env: Env): Promise<Response> {
-    const declaredLength = Number(request.headers.get('content-length') ?? '0');
-    if (declaredLength > MAX_AUDIO_BYTES) {
-        logRoute('transcribe', 413);
-        return err(413, 'Audio clip too large.');
-    }
-
-    let form: FormData;
-    try {
-        form = await request.formData();
-    } catch {
-        logRoute('transcribe', 400);
-        return err(400, 'Expected multipart form data.');
-    }
-
-    const file = form.get('file');
-    if (!(file instanceof File)) {
-        logRoute('transcribe', 400);
-        return err(400, 'Missing audio file.');
-    }
-    if (file.size > MAX_AUDIO_BYTES) {
-        logRoute('transcribe', 413);
-        return err(413, 'Audio clip too large.');
-    }
-
-    const task = form.get('task');
-    if (task !== 'transcribe' && task !== 'translate') {
-        logRoute('transcribe', 400);
-        return err(400, "task must be 'transcribe' or 'translate'.");
-    }
-
-    let language: string | null = null;
-    const rawLanguage = form.get('language');
-    if (rawLanguage !== null) {
-        if (typeof rawLanguage !== 'string' || !LANGUAGE_RE.test(rawLanguage)) {
-            logRoute('transcribe', 400);
-            return err(400, 'language must be an ISO-639-1 code.');
-        }
-        language = rawLanguage;
-    }
-
-    const out = new FormData();
-    out.append('file', file, 'audio.wav');
-    out.append('model', AUDIO_MODEL);
-    out.append('response_format', 'json');
-    if (task === 'transcribe' && language !== null) {
-        out.append('language', language);
-    }
-
-    const url = task === 'translate' ? GROQ_TRANSLATIONS_URL : GROQ_TRANSCRIPTIONS_URL;
-    const upstream = await fetch(url, {
-        method: 'POST',
-        signal: AbortSignal.timeout(AUDIO_TIMEOUT_MS),
-        headers: { authorization: `Bearer ${env.GROQ_API_KEY}` },
-        body: out,
-    });
-
-    if (!upstream.ok) {
-        logUpstreamFailure('transcribe', upstream.status);
-        return err(502, 'Transcription service unavailable.');
-    }
-
-    const data = await upstream.json() as { text?: string };
-    logRoute('transcribe', 200);
-    return json({ text: (data.text ?? '').trim() });
-}
-
 // The app's update check. Unauthenticated GitHub allows 60 requests an hour per IP, and
 // users behind one carrier NAT share that budget; once it is spent they are silently never
 // offered updates. Here GitHub is called with a token, and answers are reused for a few
@@ -312,14 +238,10 @@ export default {
             return err(405, 'Method not allowed.', { allow: 'POST' });
         }
 
-        const route = url.pathname === '/v1/recap'
-            ? 'recap'
-            : url.pathname === '/v1/transcribe'
-                ? 'transcribe'
-                : null;
-        if (!route) {
+        if (url.pathname !== '/v1/recap') {
             return err(404, 'Not found.');
         }
+        const route = 'recap';
 
         if (!env.GROQ_API_KEY) {
             logRoute(route, 502);
@@ -333,7 +255,7 @@ export default {
         }
 
         try {
-            return await (route === 'recap' ? handleRecap(request, env) : handleTranscribe(request, env));
+            return await handleRecap(request, env);
         } catch (error) {
             const timedOut = error instanceof Error && error.name === 'TimeoutError';
             logRoute(route, timedOut ? 504 : 502);

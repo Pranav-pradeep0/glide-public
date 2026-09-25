@@ -38,7 +38,7 @@ export const OMDB_API_URL = process.env.OMDB_API_URL || Config.OMDB_API_URL || '
 
 const configuredAiProxyUrl = (process.env.AI_PROXY_URL || Config.AI_PROXY_URL || '').trim().replace(/\/+$/, '');
 export const AI_PROXY_URL = configuredAiProxyUrl.startsWith('https://') ? configuredAiProxyUrl : '';
-export const RECAP_STT_AVAILABLE = AI_PROXY_URL.length > 0;
+export const RECAP_AVAILABLE = AI_PROXY_URL.length > 0;
 
 // GitHub Releases (Update Check)
 export const GITHUB_OWNER = process.env.GITHUB_OWNER || Config.GITHUB_OWNER || '';

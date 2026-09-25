@@ -33,23 +33,19 @@ Key files:
 
 ## 2) Assisted Subtitle Sync (Smart Sync)
 
-Glide includes a floating sync panel with two ways to fix drift:
+Glide includes a floating sync panel with three ways to fix drift:
 
-- Manual adjustment in 50ms steps with immediate feedback.
-- Assisted sync that can either search nearby cues by typing what you heard, or auto-listen and transcribe a 10s audio window around the current time.
-
-Auto-listen details:
-- FFmpeg extracts a short mono 16kHz WAV clip.
-- A quick RMS check skips silent segments to avoid wasted API calls.
-- A Cloudflare Worker proxy sends the clip to Groq transcription without packaging a
-  provider credential in the app.
-- Matches are ranked by proximity and similarity, and then the offset is calculated and applied.
+- Manual adjustment in 0.5 s and 0.05 s steps, with the offset shown in plain words.
+- Auto sync, which matches the audio around the current time against the subtitle cues
+  on the device, with no network call.
+- Pick a line: type a few words you just heard, then choose the matching cue; the offset is
+  calculated from it and applied.
 
 Key files:
 - `C:\glide\src\components\FloatingSyncPanel.tsx`
 - `C:\glide\src\services\SubtitleSyncService.ts`
+- `C:\glide\src\services\SubtitleAutoSync.ts`
 - `C:\glide\src\utils\AudioExtractor.ts`
-- `C:\glide\src\services\SpeechToTextService.ts`
 
 ## 3) Subtitle Engine and Rendering
 
@@ -135,7 +131,7 @@ Key files:
 Compared to mainstream players, Glide focuses less on just playing video and more on extracting meaning and context from it.
 
 - The haptic layer turns SDH subtitles into a tactile track, which most players treat as plain text.
-- Assisted subtitle sync uses audio transcription to reduce manual trial-and-error.
+- Assisted subtitle sync matches the audio on the device to reduce manual trial-and-error.
 - Subtitles are treated as a full pipeline (extraction, formatting, SDH detection, gesture-driven adjustments) rather than a single menu toggle.
 - Gesture controls cover not only seeking but brightness, volume, speed, and zoom without interrupting playback.
 
@@ -146,7 +142,7 @@ Glide is not trying to replace any media player. Instead, it is pushing the play
 - React Native 0.78
 - Custom VLC bridge (`@glide/vlc-player`)
 - FFmpeg/FFprobe via `react-native-ffmpeg-kit`
-- Cloudflare Worker AI proxy for Groq transcription and recap
+- Cloudflare Worker AI proxy for Groq recap
 - Zustand + MMKV for state and persistence
 
 ## Environment Variables
