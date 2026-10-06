@@ -1,388 +1,182 @@
-import React, { useCallback, useMemo, useState } from 'react';
-import { View, Text, ActivityIndicator, StyleSheet, useWindowDimensions } from 'react-native';
+import React, { useCallback, useState } from 'react';
+import { View, Text, StyleSheet, useWindowDimensions } from 'react-native';
 import { Feather } from '@react-native-vector-icons/feather';
 import Animated, {
-    useDerivedValue,
+    FadeOut,
+    ReduceMotion,
     SharedValue,
     useAnimatedStyle,
     useAnimatedReaction,
+    useReducedMotion,
     runOnJS,
+    withSpring,
     withTiming,
 } from 'react-native-reanimated';
-import { DoubleTapRipple } from './DoubleTapRipple';
-import { getResizeModeIcon, AnimatedVolumeIconStandard, AnimatedBrightnessIcon } from './PlayerIcons';
+import { DoubleTapRipple, PlayPauseFlash } from './DoubleTapRipple';
+import { formatRate, getResizeModeIcon, getResizeModeLabel } from './PlayerIcons';
+import { haptic } from '@/native/HapticModule';
+import { metrics, motion, playerTheme, type } from '@/theme/theme';
+import { HUD_PILL } from '@/theme/colors';
 
-interface ReanimatedTextProps {
+const { colors } = playerTheme;
+
+/** Top bar height below the inset (padding + 48 dp row): the status slot stays clear of it. */
+const TOP_BAR = metrics.space.xs + metrics.touch;
+
+/** Mirrors a worklet-formatted shared value into React state, re-rendering only on change. */
+const useWorkletText = (value: SharedValue<number>, formatter: (val: number) => string) => {
+    const [text, setText] = useState('');
+    const update = useCallback((next: string) => setText(prev => prev === next ? prev : next), []);
+    useAnimatedReaction(
+        () => formatter(value.value),
+        (next, prev) => {
+            if (next !== prev) {runOnJS(update)(next);}
+        });
+    return text;
+};
+
+const percent = (val: number) => {
+    'worklet';
+    return `${Math.round(val * 100)}%`;
+};
+
+const volumeIcon = (val: number) => {
+    'worklet';
+    return val <= 0 ? 'volume-x' : val < 0.5 ? 'volume-1' : 'volume-2';
+};
+
+const sunIcon = () => {
+    'worklet';
+    return 'sun';
+};
+
+interface LevelProps {
     value: SharedValue<number>;
-    formatter?: (val: number) => string;
-    style?: any;
+    kind: 'volume' | 'brightness';
+    max: number;
 }
 
-const ReanimatedText: React.FC<ReanimatedTextProps> = ({ value, formatter, style }) => {
-    const [text, setText] = useState('0');
-    const updateText = useCallback((nextText: string) => {
-        setText(prev => prev === nextText ? prev : nextText);
-    }, []);
+/** [icon] [bar] [value]. One segment tick per edge reached. */
+const Level: React.FC<LevelProps> = React.memo(({ value, kind, max }) => {
+    const text = useWorkletText(value, percent);
+    const icon = useWorkletText(value, kind === 'volume' ? volumeIcon : sunIcon) as 'sun' | 'volume-x' | 'volume-1' | 'volume-2';
+
+    const fillStyle = useAnimatedStyle(() => ({
+        width: `${Math.min(1, value.value / max) * 100}%`,
+        // Only a boost past 100% gets a warning colour: it can distort audio.
+        backgroundColor: value.value > 1 ? colors.warning : colors.text,
+    }));
 
     useAnimatedReaction(
-        () => formatter ? formatter(value.value) : String(Math.round(value.value)),
-        (nextText, previousText) => {
-            if (nextText !== previousText) {
-                runOnJS(updateText)(nextText);
-            }
+        () => (value.value <= 0 ? -1 : value.value >= max ? 1 : 0),
+        (edge, prev) => {
+            if (prev !== null && edge !== 0 && edge !== prev) {runOnJS(haptic)('segmentTick');}
         });
 
     return (
-        <Text style={[styles.reanimatedText, style]}>{text}</Text>
-    );
-};
-
-interface VerticalHUDProps {
-    value: SharedValue<number>;
-    icon: any;
-    side: 'left' | 'right';
-    formatter: (val: number) => string;
-    maxVolume?: number; // Added to support scaling
-    isPortrait: boolean;
-}
-
-const VerticalHUD: React.FC<VerticalHUDProps> = React.memo(({ value, icon, side, formatter, maxVolume = 1.0, isPortrait }) => {
-
-    const trackHeight = isPortrait ? 100 : 120;
-    const trackWidth = isPortrait ? 4 : 6;
-    const iconSize = isPortrait ? 24 : 32; // Smaller icon container in portrait
-    const iconSvgSize = isPortrait ? 16 : 20;
-
-    // Animate height based on percentage of max volume
-    const animatedHeightStyle = useAnimatedStyle(() => {
-        const percentage = Math.min(1, value.value / maxVolume);
-        return {
-            height: `${percentage * 100}%`,
-            backgroundColor: value.value > 1.0 ? '#FF8C00' : '#fff',
-        };
-    });
-
-    return (
-        <View style={[
-            styles.hudSide,
-            side === 'left'
-                ? { left: isPortrait ? 5 : 22 }
-                : { right: isPortrait ? 5 : 22 },
-            {
-                // Dynamic vertical centering adjustment
-                // Portrait height: Text(20) + Gap(8) + Track(80) + Gap(8) + Icon(24) = 140 -> -70
-                // Landscape height: Text(20) + Gap(8) + Track(120) + Gap(8) + Icon(32) = 188 -> -94
-                marginTop: isPortrait ? -70 : -94,
-            },
-        ]} pointerEvents="none">
-            <ReanimatedText
-                value={value}
-                formatter={formatter}
-                style={[styles.verticalHudText, isPortrait ? { fontSize: 13, marginBottom: 2 } : {}]}
-            />
-            <View style={[styles.verticalTrack, { height: trackHeight, width: trackWidth }]}>
-                <Animated.View style={[styles.verticalFill, animatedHeightStyle]} />
+        <>
+            {!!icon && <Feather name={icon} size={18} color={colors.text} />}
+            <View style={styles.track}>
+                <View style={styles.trackBg} />
+                <Animated.View style={[styles.fill, fillStyle]} />
             </View>
-            <View style={[styles.verticalIcon, { width: iconSize, height: iconSize, borderRadius: iconSize / 2 }]}>
-                {icon === 'volume-2' ? (
-                    <AnimatedVolumeIconStandard size={iconSvgSize} color="#fff" progress={value} maxVolume={maxVolume} />
-                ) : (
-                    <AnimatedBrightnessIcon size={iconSvgSize} color="#fff" progress={value} />
-                )}
-            </View>
-        </View>
+            <Text style={styles.value}>{text}</Text>
+        </>
     );
 });
 
+/** The one status slot: spring in from 0.96, fade 120 in / 280 out. */
+const StatusPill: React.FC<{ top: number; children: React.ReactNode }> = ({ top, children }) => {
+    const reduceMotion = useReducedMotion();
+    const entering = useCallback(() => {
+        'worklet';
+        return {
+            initialValues: { opacity: 0, transform: [{ scale: reduceMotion ? 1 : 0.96 }] },
+            animations: {
+                opacity: withTiming(1, { duration: motion.fadeIn, reduceMotion: ReduceMotion.Never }),
+                transform: [{ scale: withSpring(1, motion.press) }],
+            },
+        };
+    }, [reduceMotion]);
+
+    return (
+        <View style={[styles.slot, { top }]} pointerEvents="none">
+            <Animated.View
+                style={styles.pill}
+                entering={entering}
+                exiting={FadeOut.duration(motion.fadeOut).reduceMotion(ReduceMotion.Never)}
+            >
+                {children}
+            </Animated.View>
+        </View>
+    );
+};
+
 interface VideoHUDProps {
-    showSeekHUD: boolean;
-    seekHUDTime: SharedValue<number>;
-    seekStartTime: number;  // Start time for difference calculation
-    seekDirection: 'forward' | 'backward' | null;
-    seekSide: 'left' | 'right' | null;  // For opposite-side positioning on double-tap
     showBrightnessHUD: boolean;
     brightnessHUD: SharedValue<number>;
     showVolumeHUD: boolean;
     volumeHUD: SharedValue<number>;
+    maxVolume?: number;
     showSpeedHUD: boolean;
     playbackRate: number;
-    // Resize HUD Props
     showResizeHUD: boolean;
     resizeMode: string;
-    // Zoom HUD Props
     zoomActive: boolean;
     zoomHUDScale: number;
-    shouldShowBuffer: boolean;
-    formatTime: (seconds: number) => string;
-    // Ripple props
-    showRipple: boolean;
-    rippleX: number;
-    rippleY: number;
-    rippleSide: 'left' | 'right';
-    onRippleComplete?: () => void;
-    maxVolume?: number;
+    /** Small spinner; the seek bar carries the loading line when controls are up. */
+    ripple: { show: boolean; side: 'left' | 'right'; seconds: number; x: number; y: number; at: number };
+    paused: boolean;
+    controlsVisible: boolean;
+    topInset: number;
 }
 
-// Helper to format time difference
-const formatTimeDiff = (seconds: number): string => {
-    'worklet';
-    const absSeconds = Math.abs(Math.round(seconds));
-    const sign = seconds >= 0 ? '+' : '-';
-
-    // For values less than 10 minutes, show simple seconds (e.g., +60s, +90s)
-    // This is preferred for jump buttons and quick seeks
-    if (absSeconds < 60) {
-        return `${sign}${absSeconds}s`;
-    }
-
-    // For larger values (long drags), show m:ss or h:mm:ss
-    const m = Math.floor(absSeconds / 60);
-    const s = absSeconds % 60;
-    const ss = s < 10 ? `0${s}` : `${s}`;
-
-    if (m >= 60) {
-        const h = Math.floor(m / 60);
-        const mm = (m % 60) < 10 ? `0${m % 60}` : `${m % 60}`;
-        return `${sign}${h}:${mm}:${ss}`;
-    }
-
-    return `${sign}${m}:${ss}`;
-};
-
 export const VideoHUD: React.FC<VideoHUDProps> = React.memo(({
-    showSeekHUD,
-    seekHUDTime,
-    seekStartTime,
-    seekDirection,
-    seekSide,
-    showBrightnessHUD,
-    brightnessHUD,
-    showVolumeHUD,
-    volumeHUD,
-    showSpeedHUD,
-    playbackRate,
-    showResizeHUD,
-    resizeMode,
-    zoomActive,
-    zoomHUDScale,
-    shouldShowBuffer,
-    formatTime,
-    showRipple,
-    rippleX,
-    rippleY,
-    rippleSide,
-    onRippleComplete,
-    maxVolume = 1.0, // Default to 1.0 (100%) if not provided
+    showBrightnessHUD, brightnessHUD, showVolumeHUD, volumeHUD, maxVolume = 1,
+    showSpeedHUD, playbackRate, showResizeHUD, resizeMode, zoomActive, zoomHUDScale,
+    ripple, paused, controlsVisible, topInset,
 }) => {
-    const { width: screenWidth, height: screenHeight } = useWindowDimensions();
-    const isPortrait = screenHeight > screenWidth;
-
-    // Formatters for worklet
-    const percentageFormatter = (val: number) => {
-        'worklet';
-        return `${Math.round(val * 100)}%`;
-    };
-
-    const timeFormatter = (val: number) => {
-        'worklet';
-        const seconds = Math.floor(val);
-        const m = Math.floor(seconds / 60);
-        const s = seconds % 60;
-        const mm = m < 10 ? `0${m}` : `${m}`;
-        const ss = s < 10 ? `0${s}` : `${s}`;
-        const h = Math.floor(m / 60);
-        if (h > 0) {
-            const hh = h;
-            const mmRem = m % 60;
-            const mmStr = mmRem < 10 ? `0${mmRem}` : `${mmRem}`;
-            return `${hh}:${mmStr}:${ss}`;
-        }
-        return `${mm}:${ss}`;
-    };
-
-    // Calculate time difference for display
-    const timeDiff = useMemo(() => {
-        if (!showSeekHUD || seekStartTime === 0) {return null;}
-        // We'll use the animated value's current snapshot for initial display
-        // Actual updates are driven by the shared value
-        return null; // Will be calculated in the animated text
-    }, [showSeekHUD, seekStartTime]);
-
-    // Time difference formatter that uses startTime
-    const timeDiffFormatter = useMemo(() => {
-        return (val: number) => {
-            'worklet';
-            if (seekStartTime === 0) {return '';}
-            const diff = val - seekStartTime;
-            return formatTimeDiff(diff);
-        };
-    }, [seekStartTime]);
-
-    // Determine seek HUD position based on tap side
-    // If tapped left, show on right side (and vice versa)
-    // Use responsive percentages instead of fixed pixels
-    // Adjust for portrait mode to ensure it's not too close to the edge
-    const getSeekHUDPosition = () => {
-        const sideOffset = isPortrait ? '10%' : '15%';
-
-        if (seekSide === 'left') {
-            return { right: sideOffset, left: undefined } as any;
-        } else if (seekSide === 'right') {
-            return { left: sideOffset, right: undefined } as any;
-        }
-        return {}; // Center (default for swipe/drag)
-    };
-
-    const seekHUDPositionStyle = useMemo(() => {
-        if (seekSide) {
-            return getSeekHUDPosition();
-        }
-        return {}; // Use default center positioning
-    }, [seekSide]);
-
-    // Get the appropriate icon for current resize mode
+    const { height } = useWindowDimensions();
+    // ~12% down, but never under the top bar (portrait is short on top room).
+    const slotTop = Math.max(height * 0.12, topInset + TOP_BAR + metrics.space.sm);
     const ResizeModeIcon = getResizeModeIcon(resizeMode);
+    const showSpeed = showSpeedHUD && Math.abs(playbackRate - 1) > 0.01;
 
-    // Human-readable labels for display modes
-    const resizeModeText = useMemo(() => {
-        switch (resizeMode) {
-            case 'best-fit':
-                return 'Best Fit';
-            case 'scale-down':
-                return 'Scale Down';
-            case 'fill':
-                return 'Fill';
-            case 'stretch':
-                return 'Stretch';
-            case 'cover':
-                return 'Cover';
-            case 'none':
-            case 'center':
-                return 'None';
-            case 'contain':
-            default:
-                return 'Contain';
-        }
-    }, [resizeMode]);
+    // One slot, most hands-on first: brightness and volume never show together (usePlayerHUD).
+    let status: React.ReactNode = null;
+    if (showBrightnessHUD) {
+        status = <Level value={brightnessHUD} kind="brightness" max={1} />;
+    } else if (showVolumeHUD) {
+        status = <Level value={volumeHUD} kind="volume" max={maxVolume} />;
+    } else if (showSpeed) {
+        status = (
+            <>
+                <Feather name={playbackRate > 1 ? 'fast-forward' : 'clock'} size={18} color={colors.text} />
+                <Text style={styles.value}>{formatRate(playbackRate)}</Text>
+            </>
+        );
+    } else if (zoomActive && zoomHUDScale > 1) {
+        status = (
+            <>
+                <Feather name="maximize" size={18} color={colors.text} />
+                <Text style={styles.value}>{formatRate(zoomHUDScale)}</Text>
+            </>
+        );
+    } else if (showResizeHUD) {
+        status = (
+            <>
+                <ResizeModeIcon size={18} color={colors.text} />
+                <Text style={styles.label}>{getResizeModeLabel(resizeMode)}</Text>
+            </>
+        );
+    }
 
     return (
         <>
-            {/* Water Ripple Effect */}
-            <DoubleTapRipple
-                show={showRipple}
-                x={rippleX}
-                y={rippleY}
-                side={rippleSide}
-                onAnimationComplete={onRippleComplete}
-            />
+            <DoubleTapRipple {...ripple} />
+            <PlayPauseFlash paused={paused} controlsVisible={controlsVisible} />
 
-            {/* Buffering Indicator */}
-            {shouldShowBuffer && (
-                <View style={styles.bufferOverlay} pointerEvents="none">
-                    <ActivityIndicator size="large" color="#fff" />
-                    {/* <Text style={styles.bufferText}>Buffering...</Text> */}
-                </View>
-            )}
-
-            {/* Enhanced Seek HUD with time difference */}
-            {showSeekHUD && (
-                <View
-                    style={[
-                        seekSide ? styles.seekHUDSide : styles.hudCenter,
-                        // Landscape needs to be higher (45%) due to tall bottom controls
-                        // Portrait remains perfectly centered (50%)
-                        { top: isPortrait ? '50%' : '45%' },
-                        seekHUDPositionStyle,
-                    ]}
-                    pointerEvents="none"
-                >
-                    <View style={styles.seekHUDPill}>
-                        {/* Direction Icon */}
-                        <Feather
-                            name={seekDirection === 'backward' ? 'rewind' : 'fast-forward'}
-                            size={18}
-                            color="#fff"
-                        />
-
-                        {/* Time Difference (prominent) */}
-                        {seekStartTime > 0 && (
-                            <ReanimatedText
-                                value={seekHUDTime}
-                                formatter={timeDiffFormatter}
-                                style={styles.timeDiffText}
-                            />
-                        )}
-
-                        {/* Current Target Time */}
-                        <ReanimatedText
-                            value={seekHUDTime}
-                            formatter={timeFormatter}
-                            style={seekStartTime > 0 ? styles.targetTimeText : styles.hudText}
-                        />
-                    </View>
-                </View>
-            )}
-
-            {/* Brightness HUD - Right side */}
-            {showBrightnessHUD && (
-                <VerticalHUD
-                    value={brightnessHUD}
-                    icon="sun"
-                    side="right"
-                    formatter={percentageFormatter}
-                    isPortrait={isPortrait}
-                />
-            )}
-
-            {/* Volume HUD - Left side */}
-            {showVolumeHUD && (
-                <VerticalHUD
-                    value={volumeHUD}
-                    icon="volume-2"
-                    side="left"
-                    formatter={percentageFormatter}
-                    maxVolume={maxVolume}
-                    isPortrait={isPortrait}
-                />
-            )}
-
-            {/* Speed HUD */}
-            {showSpeedHUD && Math.abs(playbackRate - 1.0) > 0.01 && (
-                <View style={styles.speedHudTop} pointerEvents="none">
-                    <View style={styles.speedHudPill}>
-                        <Feather name="zap" size={14} color="#fff" />
-                        <Text style={styles.speedHudText}>{playbackRate.toFixed(2)}x</Text>
-                        <Text style={styles.speedHudSubtext}>
-                            {playbackRate < 1.0
-                                ? '← Slower'
-                                : playbackRate > 1.0
-                                    ? 'Faster →'
-                                    : 'Normal'}
-                        </Text>
-                    </View>
-                </View>
-            )}
-
-            {/* Resize Mode HUD (NEW) */}
-            {showResizeHUD && (
-                <View style={styles.hudCenter} pointerEvents="none">
-                    <View style={styles.hudPill}>
-                        <ResizeModeIcon size={20} color="#fff" />
-                        <Text style={styles.hudText}>{resizeModeText}</Text>
-                    </View>
-                </View>
-            )}
-
-            {/* Zoom HUD */}
-            {zoomActive && zoomHUDScale > 1 && (
-                <View style={styles.zoomHudCenter} pointerEvents="none">
-                    <View style={styles.hudPill}>
-                        <Feather name="maximize" size={18} color="#fff" />
-                        <Text style={styles.hudText}>{zoomHUDScale.toFixed(2)}x</Text>
-                        <Text style={styles.hudSubtext}>Pan to view</Text>
-                    </View>
-                </View>
-            )}
+            {status && <StatusPill top={slotTop}>{status}</StatusPill>}
         </>
     );
 });
@@ -390,170 +184,25 @@ export const VideoHUD: React.FC<VideoHUDProps> = React.memo(({
 VideoHUD.displayName = 'VideoHUD';
 
 const styles = StyleSheet.create({
-    bufferOverlay: {
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        top: 0,
-        bottom: 0,
+    center: {
+        ...StyleSheet.absoluteFill,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: 'transparent',
-        zIndex: 5,
-    },
-    bufferText: {
-        color: '#fff',
-        marginTop: 12,
-        fontSize: 14,
-        fontWeight: '500',
-    },
-    hudCenter: {
-        position: 'absolute',
-        top: '50%',
-        left: 0,
-        right: 0,
-        alignItems: 'center',
-        zIndex: 8,
-        transform: [{ translateY: -20 }], // Half of typical HUD height (40px)
-    },
-    seekHUDSide: {
-        position: 'absolute',
-        top: '50%',
-        zIndex: 8,
-        transform: [{ translateY: -20 }], // Half of typical HUD height
-    },
-    zoomHudCenter: {
-        position: 'absolute',
-        bottom: '20%',
-        left: 0,
-        right: 0,
-        alignItems: 'center',
         zIndex: 8,
     },
-    hudSide: {
-        position: 'absolute',
-        top: '50%',
-        zIndex: 8,
-        alignItems: 'center',
-        gap: 8,
-        width: 60, // Fixed width to prevent layout shift
-        marginTop: -94, // Half of total height (Text 20 + Gap 8 + Track 120 + Gap 8 + Icon 32 = 188 / 2 = 94)
-    },
-    hudPill: {
+    slot: { position: 'absolute', left: 0, right: 0, alignItems: 'center', zIndex: 11 },
+    pill: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-        backgroundColor: 'rgba(0,0,0,0.6)',
-        paddingHorizontal: 16,
-        paddingVertical: 10,
-        borderRadius: 24,
+        gap: metrics.space.md,
+        height: 40,
+        paddingHorizontal: metrics.space.lg,
+        borderRadius: metrics.radius.lg,
+        backgroundColor: HUD_PILL,
     },
-    seekHUDPill: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 6,
-        backgroundColor: 'rgba(0,0,0,0.45)',
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        borderRadius: 20,
-    },
-    hudText: {
-        color: '#fff',
-        fontSize: 14,
-        fontWeight: '600',
-        padding: 0,
-    },
-    timeDiffText: {
-        color: '#fff',
-        fontSize: 16,
-        fontWeight: '600',
-        padding: 0,
-        includeFontPadding: false,
-    },
-    targetTimeText: {
-        color: 'rgba(255,255,255,0.6)',
-        fontSize: 11,
-        fontWeight: '500',
-        padding: 0,
-        includeFontPadding: false,
-    },
-    reanimatedText: {
-        color: '#fff',
-        fontSize: 14,
-        fontWeight: '600',
-        padding: 0,
-        includeFontPadding: false,
-    },
-    hudSubtext: {
-        color: 'rgba(255,255,255,0.7)',
-        fontSize: 12,
-        fontWeight: '400',
-        marginLeft: 4,
-    },
-    // Vertical HUD Styles
-    verticalTrack: {
-        width: 6,
-        height: 120,
-        backgroundColor: 'rgba(255,255,255,0.2)',
-        borderRadius: 3,
-        overflow: 'hidden',
-        justifyContent: 'flex-end',
-    },
-    verticalFill: {
-        width: '100%',
-        backgroundColor: '#fff',
-        borderRadius: 3,
-    },
-    verticalIcon: {
-        width: 32,
-        height: 32,
-        borderRadius: 16,
-        backgroundColor: 'rgba(0,0,0,0.5)',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    verticalHudText: {
-        color: '#fff',
-        fontSize: 14,
-        fontWeight: 'bold',
-        textShadowColor: 'rgba(0,0,0,0.5)',
-        textShadowOffset: { width: 0, height: 1 },
-        textShadowRadius: 2,
-        marginBottom: 4,
-        textAlign: 'center',
-        padding: 0,
-        includeFontPadding: false,
-    },
-    // Speed HUD Specific Styles
-    speedHudTop: {
-        position: 'absolute',
-        top: '15%',
-        left: 0,
-        right: 0,
-        alignItems: 'center',
-        zIndex: 8,
-    },
-    speedHudPill: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        backgroundColor: 'rgba(0,0,0,0.6)',
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        borderRadius: 20,
-    },
-    speedHudText: {
-        color: '#fff',
-        fontSize: 13,
-        fontWeight: '600',
-        padding: 0,
-        includeFontPadding: false,
-    },
-    speedHudSubtext: {
-        color: 'rgba(255,255,255,0.8)',
-        fontSize: 11,
-        fontWeight: '500',
-        marginLeft: 2,
-    },
+    track: { width: 120, height: 4, borderRadius: 2, overflow: 'hidden' },
+    trackBg: { ...StyleSheet.absoluteFill, backgroundColor: colors.text, opacity: 0.25 },
+    fill: { height: '100%', borderRadius: 2 },
+    value: { ...type.label, color: colors.text, fontVariant: ['tabular-nums'], minWidth: 40, textAlign: 'right' },
+    label: { ...type.label, color: colors.text },
 });

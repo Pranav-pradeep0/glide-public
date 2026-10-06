@@ -1,14 +1,8 @@
 import React, { FC, useCallback, useEffect, useState } from 'react';
-import { View, Text, Pressable, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import { Feather } from '@react-native-vector-icons/feather';
 import { EdgeInsets } from 'react-native-safe-area-context';
 import LinearGradient from 'react-native-linear-gradient';
-import {
-    PipIcon, AudioIcon, SubtitleIcon, BookmarkListIcon,
-    OrientationLockIcon, BackgroundPlayIcon, NightModeIcon,
-    HapticsIcon, VisualEnhancementIcon,
-    getResizeModeIcon,
-} from './PlayerIcons';
 import Animated, {
     useSharedValue,
     useAnimatedStyle,
@@ -17,182 +11,319 @@ import Animated, {
     useDerivedValue,
     useAnimatedReaction,
     withTiming,
+    withSpring,
+    withRepeat,
+    withSequence,
+    Easing,
+    cancelAnimation,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import {
+    PipIcon, AudioIcon, SubtitleIcon, BookmarkListIcon, VisualEnhancementIcon, OrientationLockIcon, NightModeIcon, SkipRingIcon, getResizeModeIcon, getResizeModeLabel, formatRate,
+} from './PlayerIcons';
+import { Button, IconButton, Touchable } from '@/components/ui';
+import { haptic } from '@/native/HapticModule';
+import { metrics, motion, playerTheme, type } from '@/theme/theme';
+import { HUD_PILL } from '@/theme/colors';
+
+const { colors } = playerTheme;
+
+const TOP_SCRIM = ['rgba(0,0,0,0.62)', 'rgba(0,0,0,0)'];
+const BOTTOM_SCRIM = ['rgba(0,0,0,0)', 'rgba(0,0,0,0.72)'];
+const BUBBLE_WIDTH = 96;
+
+/** "1:02:03" / "02:03"; -1 is the "no duration yet" sentinel. */
+const formatClock = (val: number) => {
+    'worklet';
+    if (val < 0) {return '--:--';}
+    const seconds = Math.floor(val);
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    const ss = s < 10 ? `0${s}` : `${s}`;
+    const h = Math.floor(m / 60);
+    if (h > 0) {
+        const mm = m % 60;
+        return `${h}:${mm < 10 ? `0${mm}` : mm}:${ss}`;
+    }
+    return `${m < 10 ? `0${m}` : m}:${ss}`;
+};
+
+/** "+7:27" / "-0:45". */
+const formatDelta = (val: number) => {
+    'worklet';
+    const abs = Math.round(Math.abs(val));
+    const s = abs % 60;
+    return `${val < 0 ? '-' : '+'}${Math.floor(abs / 60)}:${s < 10 ? `0${s}` : s}`;
+};
 
 // ============================================================================
-// REANIMATED TEXT (High Performance Strings)
+// REANIMATED TEXT
 // ============================================================================
 
 interface ReanimatedTextProps {
     value: SharedValue<number>;
-    formatter?: (val: number) => string;
+    formatter: (val: number) => string;
     style?: any;
     fallbackText?: string;
 }
 
 const ReanimatedText: React.FC<ReanimatedTextProps> = ({ value, formatter, style, fallbackText }) => {
-    const [text, setText] = useState(fallbackText ?? '0');
-    const updateText = useCallback((nextText: string) => {
-        setText(prev => prev === nextText ? prev : nextText);
-    }, []);
+    const [text, setText] = useState(fallbackText ?? '');
+    const updateText = useCallback((next: string) => setText(prev => prev === next ? prev : next), []);
 
     useEffect(() => {
-        if (fallbackText !== undefined) {
-            updateText(fallbackText);
-        }
+        if (fallbackText !== undefined) {updateText(fallbackText);}
     }, [fallbackText, updateText]);
 
     useAnimatedReaction(
-        () => {
-            return formatter ? formatter(value.value) : String(Math.round(value.value));
-        },
-        (nextText, previousText) => {
-            if (nextText !== previousText) {
-                runOnJS(updateText)(nextText);
-            }
+        () => formatter(value.value),
+        (next, prev) => {
+            if (next !== prev) {runOnJS(updateText)(next);}
         });
 
-    return (
-        <Text style={[styles.reanimatedText, style]}>{text}</Text>
-    );
+    return <Text style={[styles.time, style]}>{text}</Text>;
 };
 
 // ============================================================================
-// SCRUBBER (Custom slider for video)
+// SEEK BAR
 // ============================================================================
 
-interface ScrubberProps {
+interface SeekBarProps {
     currentTime: SharedValue<number>;
     duration: SharedValue<number>;
     isScrubbing: SharedValue<boolean>;
     seekPreviewTime: SharedValue<number>;
+    /** 0 → 1 while the user drags this bar or swipe-seeks on the video. */
+    grow: SharedValue<number>;
+    dragging: SharedValue<boolean>;
+    swipeSeeking: SharedValue<boolean>;
+    swipeSeekStart: SharedValue<number>;
+    /** TalkBack: expose the bar as an adjustable with a spoken position. */
+    screenReader: boolean;
+    onStepBackward: () => void;
+    onStepForward: () => void;
+    bookmarks: number[];
+    durationSeconds: number;
+    buffering: boolean;
     onSeekStart: () => void;
     onSeek: (val: number) => void;
     onSeekComplete: (val: number) => void;
 }
 
-const Scrubber: React.FC<ScrubberProps> = ({
-    currentTime,
-    duration,
-    isScrubbing,
-    seekPreviewTime,
-    onSeekStart,
-    onSeek,
-    onSeekComplete,
+const SeekBar: React.FC<SeekBarProps> = ({
+    currentTime, duration, isScrubbing, seekPreviewTime, grow, dragging, swipeSeeking, swipeSeekStart,
+    screenReader, onStepBackward, onStepForward,
+    bookmarks, durationSeconds, buffering, onSeekStart, onSeek, onSeekComplete,
 }) => {
     const trackWidth = useSharedValue(0);
-    const scrubGestureStarted = useSharedValue(false);
+    const scrubStart = useSharedValue(0);
     const lastSeekDispatchAt = useSharedValue(0);
+    const loading = useSharedValue(0);
+
+    useEffect(() => {
+        if (!buffering) {
+            cancelAnimation(loading);
+            loading.value = 0;
+            return;
+        }
+        // ponytail: indeterminate loop needs a period; linear 1 s, not a motion token.
+        loading.value = withRepeat(withTiming(1, { duration: 1000, easing: Easing.linear }), -1);
+    }, [buffering, loading]);
 
     const progress = useDerivedValue(() => {
-        const d = duration.value || 1;
-        // Check for 0 duration to avoid NaN
+        const d = duration.value;
         if (d <= 0) {return 0;}
-        // Use shared preview time during any seek (gesture or slider), currentTime otherwise
         const time = isScrubbing.value ? seekPreviewTime.value : currentTime.value;
         return Math.max(0, Math.min(1, time / d));
     });
 
-    const trackHeight = useDerivedValue(() => {
-        return withTiming(isScrubbing.value ? 4 : 2, { duration: 200 });
+    const trackStyle = useAnimatedStyle(() => {
+        const h = 4 + 4 * grow.value;
+        return { height: h, borderRadius: h / 2 };
     });
-
-    const trackRadius = useDerivedValue(() => {
-        return withTiming(isScrubbing.value ? 5 : 2, { duration: 150 });
-    });
-
-    const trackTop = useDerivedValue(() => {
-        return (40 - trackHeight.value) / 2;
-    });
-
-    const progressStyle = useAnimatedStyle(() => {
+    const fillStyle = useAnimatedStyle(() => ({
+        transform: [{ translateX: (progress.value - 1) * trackWidth.value }],
+    }));
+    const thumbStyle = useAnimatedStyle(() => {
+        const size = 14 + 6 * grow.value;
         return {
-            // Optimize: Use translateX (GPU) instead of width (Layout) for butter smooth animation
-            // Slide in from left (-100% to 0%)
-            transform: [
-                { translateX: (progress.value - 1) * trackWidth.value },
-            ],
-            // Full width to match container
-            width: trackWidth.value,
-            height: trackHeight.value,
-            borderRadius: trackRadius.value,
-            top: trackTop.value,
+            width: size,
+            height: size,
+            borderRadius: size / 2,
+            transform: [{ translateX: progress.value * trackWidth.value - size / 2 }],
         };
     });
+    const bubbleStyle = useAnimatedStyle(() => ({
+        opacity: grow.value,
+        transform: [{
+            translateX: Math.max(0, Math.min(trackWidth.value - BUBBLE_WIDTH,
+                progress.value * trackWidth.value - BUBBLE_WIDTH / 2)),
+        }],
+    }));
+    const loadingStyle = useAnimatedStyle(() => ({
+        opacity: buffering ? 1 : 0,
+        transform: [{ translateX: (loading.value * 1.3 - 0.3) * trackWidth.value }],
+    }));
+    const readinessStyle = useAnimatedStyle(() => ({
+        // Dimmed, not hidden, until a duration exists: the bar can't seek yet.
+        opacity: withTiming(duration.value > 0 ? 1 : 0.35, { duration: motion.fadeIn }),
+    }));
 
-    const backgroundStyle = useAnimatedStyle(() => {
-        return {
-            height: trackHeight.value,
-            borderRadius: trackRadius.value,
-            top: trackTop.value,
-        };
-    });
+    const delta = useDerivedValue(() => seekPreviewTime.value - scrubStart.value);
 
-    const panGesture = Gesture.Pan()
+    // A swipe on the video scrubs through this same bar; take its origin for the delta.
+    useAnimatedReaction(
+        () => swipeSeeking.value,
+        (on, was) => {
+            if (on && !was) {scrubStart.value = swipeSeekStart.value;}
+        });
+
+    // "12:04 of 45:00", only computed while a screen reader is on (re-renders every second).
+    const [a11yValue, setA11yValue] = useState('');
+    useAnimatedReaction(
+        () => (screenReader && duration.value > 0
+            ? `${formatClock(isScrubbing.value ? seekPreviewTime.value : currentTime.value)} of ${formatClock(duration.value)}`
+            : ''),
+        (next, prev) => {
+            if (next !== prev) {runOnJS(setA11yValue)(next);}
+        }, [screenReader]);
+
+    const toTime = (x: number) => {
+        'worklet';
+        return Math.max(0, Math.min(1, x / trackWidth.value)) * duration.value;
+    };
+
+    const crossesBookmark = (from: number, to: number) => {
+        'worklet';
+        const lo = Math.min(from, to);
+        const hi = Math.max(from, to);
+        for (let i = 0; i < bookmarks.length; i++) {
+            if (bookmarks[i] > lo && bookmarks[i] <= hi) {return true;}
+        }
+        return false;
+    };
+
+    const pan = Gesture.Pan()
+        .minDistance(0)
         .onBegin((e) => {
             'worklet';
             if (trackWidth.value <= 0 || duration.value <= 0) {return;}
-
+            dragging.value = true;
             isScrubbing.value = true;
-            scrubGestureStarted.value = true;
-            const newProgress = Math.max(0, Math.min(1, e.x / trackWidth.value));
-            const targetTime = newProgress * duration.value;
-            seekPreviewTime.value = targetTime;
+            scrubStart.value = currentTime.value;
+            seekPreviewTime.value = toTime(e.x);
             lastSeekDispatchAt.value = Date.now();
             runOnJS(onSeekStart)();
-            // Ensure HUD and other listeners are updated immediately
-            runOnJS(onSeek)(targetTime);
+            runOnJS(onSeek)(seekPreviewTime.value);
         })
         .onUpdate((e) => {
             'worklet';
-            if (!scrubGestureStarted.value || trackWidth.value <= 0) {return;}
-
-            const newProgress = Math.max(0, Math.min(1, e.x / trackWidth.value));
-            const targetTime = newProgress * (duration.value || 0);
-            seekPreviewTime.value = targetTime;
+            if (!dragging.value) {return;}
+            const prev = seekPreviewTime.value;
+            const next = toTime(e.x);
+            seekPreviewTime.value = next;
+            if (crossesBookmark(prev, next)) {runOnJS(haptic)('segmentTick');}
             const now = Date.now();
             if (now - lastSeekDispatchAt.value >= 33) {
                 lastSeekDispatchAt.value = now;
-                runOnJS(onSeek)(targetTime);
+                runOnJS(onSeek)(next);
             }
         })
         .onFinalize(() => {
             'worklet';
-            if (!scrubGestureStarted.value) {return;}
-            scrubGestureStarted.value = false;
-            const finalTime = seekPreviewTime.value;
-            // Keep scrubbing flag true until seek completes to prevent snapback
-            runOnJS(onSeekComplete)(finalTime);
+            if (!dragging.value) {return;}
+            dragging.value = false;
+            // isScrubbing stays true until the seek lands, so the bar does not snap back.
+            runOnJS(onSeekComplete)(seekPreviewTime.value);
         });
 
-    // Until a duration is known the bar cannot represent anything, and the pan gesture
-    // above already refuses to start. Showing it at full strength made an inert control
-    // look usable: a tap in the ~430 ms before onLoad arrives did nothing while the labels
-    // read 00:00 / 00:00. Dimmed rather than hidden so the row does not move on load.
-    const readinessStyle = useAnimatedStyle(() => ({
-        opacity: withTiming(duration.value > 0 ? 1 : 0.35, { duration: 150 }),
-    }));
-
     return (
-        <GestureDetector gesture={panGesture}>
+        <GestureDetector gesture={pan}>
             <Animated.View
-                style={[styles.scrubberContainer, readinessStyle]}
+                style={[styles.seekBar, readinessStyle]}
                 onLayout={(e) => { trackWidth.value = e.nativeEvent.layout.width; }}
-                hitSlop={{ top: 20, bottom: 20 }}
+                hitSlop={{ top: 16, bottom: 16 }}
+                accessible
+                accessibilityRole="adjustable"
+                accessibilityLabel="Seek"
+                accessibilityValue={{ text: a11yValue }}
+                accessibilityActions={SEEK_ACTIONS}
+                onAccessibilityAction={(e) => {
+                    if (e.nativeEvent.actionName === 'increment') {onStepForward();}
+                    if (e.nativeEvent.actionName === 'decrement') {onStepBackward();}
+                }}
             >
-                <Animated.View style={[styles.trackBackground, backgroundStyle]} />
-                <Animated.View style={[styles.trackFill, progressStyle]} />
+                <Animated.View style={[styles.bubble, bubbleStyle]} pointerEvents="none">
+                    <ReanimatedText value={seekPreviewTime} formatter={formatClock} style={styles.bubbleTime} />
+                    <ReanimatedText value={delta} formatter={formatDelta} style={styles.bubbleDelta} />
+                </Animated.View>
+                <Animated.View style={[styles.track, trackStyle]}>
+                    <Animated.View style={[styles.fill, fillStyle]} />
+                    {buffering && <Animated.View style={[styles.loading, loadingStyle]} />}
+                </Animated.View>
+                {durationSeconds > 0 && bookmarks.map(t => (
+                    <View
+                        key={t}
+                        pointerEvents="none"
+                        style={[styles.dot, { left: `${(t / durationSeconds) * 100}%` }]}
+                    />
+                ))}
+                <Animated.View style={[styles.thumb, thumbStyle]} pointerEvents="none" />
             </Animated.View>
         </GestureDetector>
     );
 };
 
 // ============================================================================
-// DISPLAY MODE ICONS
+// GLYPH BUTTON (custom SVG icons; IconButton only takes Feather names)
 // ============================================================================
 
+/**
+ * ±N seconds. The ring kicks a quarter-turn-ish the way time moves and springs back, so each
+ * tap is felt as motion in the direction of the seek; the number stays still and readable.
+ */
+const SkipButton: FC<{ seconds: number; forward?: boolean; onPress: () => void }> = ({ seconds, forward = false, onPress }) => {
+    const spin = useSharedValue(0);
+    const ringStyle = useAnimatedStyle(() => ({ transform: [{ rotate: `${spin.value}deg` }] }));
+    return (
+        <Touchable
+            onPress={() => {
+                spin.value = withSequence(withSpring(forward ? 28 : -28, motion.press), withSpring(0, motion.spatial));
+                onPress();
+            }}
+            onPlayer
+            scaleTo={0.92}
+            style={styles.jump}
+            accessibilityRole="button"
+            accessibilityLabel={`${forward ? 'Forward' : 'Back'} ${seconds} seconds`}
+        >
+            <Animated.View style={ringStyle}>
+                <SkipRingIcon size={32} forward={forward} />
+            </Animated.View>
+            <Text style={styles.jumpText}>{seconds}</Text>
+        </Touchable>
+    );
+};
 
+const GlyphButton: FC<{
+    onPress: () => void;
+    label: string;
+    active?: boolean;
+    children: (color: string) => React.ReactNode;
+}> = ({ onPress, label, active, children }) => (
+    <Touchable
+        onPress={onPress}
+        onPlayer
+        hitSlop={4}
+        scaleTo={0.9}
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        accessibilityState={{ selected: !!active }}
+        style={[styles.glyph, active && styles.glyphActive]}
+    >
+        {children(active ? colors.primary : colors.text)}
+    </Touchable>
+);
 
 // ============================================================================
 // MAIN COMPONENT
@@ -201,10 +332,16 @@ const Scrubber: React.FC<ScrubberProps> = ({
 interface PlayerControlsProps {
     showControls: boolean;
     title: string;
+    /** Episode or folder line under the title. */
+    subtitle?: string;
     onBack: () => void;
-    onToggleAudio: () => void;
-    onToggleSubtitle: () => void;
+    onOpenSubtitles: () => void;
+    /** Audio tracks: switched about as often as subtitles, so it sits next to them. */
+    onOpenAudio: () => void;
     onAddBookmark?: () => void;
+    /** Speed chip and ⋮ both open the Playback panel. */
+    onOpenPlayback: () => void;
+    playbackRate: number;
     paused: boolean;
     onTogglePlayPause: () => void;
     currentTime: SharedValue<number>;
@@ -213,484 +350,402 @@ interface PlayerControlsProps {
     durationSeconds?: number;
     seekPreviewTime: SharedValue<number>;
     isScrubbingShared: SharedValue<boolean>;
+    /** Horizontal swipe-seek on the video: shows this bar in its scrubbing state. */
+    swipeSeeking: SharedValue<boolean>;
+    swipeSeekStart: SharedValue<number>;
+    screenReaderEnabled?: boolean;
     onSeekStart: () => void;
     onSeek: (val: number) => void;
     onSeekComplete: (val: number) => void;
+    bookmarks?: number[];
+    buffering?: boolean;
     errorText: string | null;
     isLandscape: boolean;
     insets: EdgeInsets;
-    audioTrackSelected: boolean;
-    subtitleTrackSelected: boolean;
-    formatTime?: (seconds: number) => string;
-    onToggleBookmarkPanel?: () => void;
-    onTogglePlaylist?: () => void;
-    onToggleQuickSettings?: () => void;
+    onOpenBookmarks?: () => void;
+    onOpenPlaylist?: () => void;
     onNext?: () => void;
-    onPrev?: () => void;
     onJumpBackward: () => void;
     onJumpForward: () => void;
-    onToggleLock: () => void;
-    isLocked: boolean;
+    onLockScreen: () => void;
+    /** Night mode and mute lead the bottom row; the lock has the left edge to itself. */
+    nightModeActive?: boolean;
+    onToggleNightMode?: () => void;
+    muted?: boolean;
+    onToggleMute?: () => void;
+    orientationLocked: boolean;
+    onToggleOrientationLock: () => void;
     onToggleResizeMode: () => void;
     resizeMode: string;
-    onToggleNightMode: () => void;
-    nightModeActive: boolean;
-    playMode?: string;
-    playbackRate: number;
-    onToggleSpeed: () => void;
-    onToggleHaptics: () => void;
-    hapticsEnabled: boolean;
-    onToggleBackgroundPlay?: () => void;
-    backgroundPlayEnabled?: boolean;
     onEnterPip?: () => void;
-    videoEnhancement?: boolean;
-    onToggleVideoEnhancement?: () => void;
-    // Seek button customization
     showSeekButtons?: boolean;
     seekDuration?: number;
+    /** Colour enhancement: used every session, so it lives on the bar. */
+    videoEnhancement?: boolean;
+    onToggleVideoEnhancement?: () => void;
 }
 
+const NO_BOOKMARKS: number[] = [];
+const SEEK_ACTIONS = [{ name: 'increment' }, { name: 'decrement' }];
+
 export const PlayerControls: FC<PlayerControlsProps> = React.memo(({
-    showControls, title, onBack, onToggleAudio, onToggleSubtitle,
-    onAddBookmark, paused, onTogglePlayPause, currentTime, duration,
-    currentTimeSeconds = 0, durationSeconds = 0, seekPreviewTime,
-    onSeekStart, onSeek, onSeekComplete, errorText, isLandscape, insets,
-    audioTrackSelected: _audioTrackSelected, subtitleTrackSelected: _subtitleTrackSelected, isScrubbingShared,
-    onToggleBookmarkPanel, onTogglePlaylist, onToggleQuickSettings,
-    onNext, onPrev, onJumpBackward, onJumpForward,
-    onToggleLock, isLocked, onToggleResizeMode, resizeMode,
-    onToggleNightMode, nightModeActive, playMode, playbackRate, onToggleSpeed, onToggleHaptics, hapticsEnabled,
-    onToggleBackgroundPlay, backgroundPlayEnabled, onEnterPip,
-    videoEnhancement, onToggleVideoEnhancement,
-    showSeekButtons = false, seekDuration = 30,
+    showControls, title, subtitle, onBack, onOpenSubtitles, onOpenAudio, onAddBookmark, onOpenPlayback, playbackRate,
+    paused, onTogglePlayPause, currentTime, duration, currentTimeSeconds = 0, durationSeconds = 0,
+    seekPreviewTime, isScrubbingShared, swipeSeeking, swipeSeekStart, screenReaderEnabled = false,
+    onSeekStart, onSeek, onSeekComplete, bookmarks = NO_BOOKMARKS, buffering = false, errorText, isLandscape, insets,
+    onOpenBookmarks, onOpenPlaylist, onNext, onJumpBackward, onJumpForward,
+    onLockScreen, nightModeActive = false, onToggleNightMode, muted = false, onToggleMute, orientationLocked, onToggleOrientationLock, onToggleResizeMode, resizeMode, onEnterPip,
+    showSeekButtons = false, seekDuration = 10, videoEnhancement = false, onToggleVideoEnhancement,
 }) => {
-    // Worklet-safe time formatter
-    const timeFormatter = (val: number) => {
-        'worklet';
-        // Sentinel for "no duration yet" — see the derived values below.
-        if (val < 0) {return '--:--';}
-        const seconds = Math.floor(val);
-        const m = Math.floor(seconds / 60);
-        const s = seconds % 60;
-        const mm = m < 10 ? `0${m}` : `${m}`;
-        const ss = s < 10 ? `0${s}` : `${s}`;
-        const h = Math.floor(m / 60);
 
-        if (h > 0) {
-            const hh = h;
-            const mmRem = m % 60;
-            const mmStr = mmRem < 10 ? `0${mmRem}` : `${mmRem}`;
-            return `${hh}:${mmStr}:${ss}`;
-        }
-        return `${mm}:${ss}`;
-    };
+    const dragging = useSharedValue(false);
+    const grow = useDerivedValue<number>(() => withSpring(dragging.value || swipeSeeking.value ? 1 : 0, motion.spatial));
+    // Everything except the bar steps aside while scrubbing.
+    const othersStyle = useAnimatedStyle(() => ({ opacity: 1 - grow.value }));
 
-    // Every displayed time reports -1 until a duration exists, so the labels read --:--
-    // instead of a confident 00:00 / 00:00 for a player that has not loaded yet.
-    const remainingTimeValue = useDerivedValue(() => {
-        if (duration.value <= 0) {return -1;}
-        return Math.max(0, duration.value - currentTime.value);
-    });
+    // A swipe-seek brings the bar up even with controls hidden, and takes it away again after.
+    const overlayStyle = useAnimatedStyle(() => {
+        const visible = showControls || swipeSeeking.value;
+        return { opacity: withTiming(visible ? 1 : 0, { duration: visible ? motion.fadeIn : motion.fadeOut }) };
+    }, [showControls]);
 
-    // Derived display time: shows scrub position while dragging, current time otherwise
-    // This allows immediate visual feedback on the text without waiting for VLC
-    const displayTime = useDerivedValue(() => {
+    const playing = useDerivedValue(() => withTiming(paused ? 0 : 1, { duration: motion.fadeIn }), [paused]);
+    const playGlyphStyle = useAnimatedStyle(() => ({ opacity: 1 - playing.value }));
+    const pauseGlyphStyle = useAnimatedStyle(() => ({ opacity: playing.value }));
+
+    // -1 until a duration exists, so the labels read --:-- rather than a confident 00:00.
+    const elapsed = useDerivedValue(() => {
         if (duration.value <= 0) {return -1;}
         return isScrubbingShared.value ? seekPreviewTime.value : currentTime.value;
     });
-
-    const durationDisplay = useDerivedValue(() => (duration.value > 0 ? duration.value : -1));
-
-    // The minus sign belongs inside the formatter so the placeholder is --:-- rather than
-    // the ---:-- that a bare prefix would produce.
-    const remainingFormatter = (val: number) => {
+    const remaining = useDerivedValue(() => {
+        if (duration.value <= 0) {return -1;}
+        return Math.max(0, duration.value - elapsed.value);
+    });
+    const remainingFormatter = useCallback((val: number) => {
         'worklet';
-        return val < 0 ? '--:--' : `-${timeFormatter(val)}`;
-    };
+        return val < 0 ? formatClock(val) : `-${formatClock(val)}`;
+    }, []);
 
     const hasDuration = durationSeconds > 0;
-    const fallbackDisplayText = hasDuration ? timeFormatter(currentTimeSeconds) : '--:--';
-    const fallbackRemainingText = hasDuration
-        ? `-${timeFormatter(Math.max(0, durationSeconds - currentTimeSeconds))}`
-        : '--:--';
-    const fallbackDurationText = hasDuration ? timeFormatter(durationSeconds) : '--:--';
+    const fallbackElapsed = hasDuration ? formatClock(currentTimeSeconds) : '--:--';
+    const fallbackRemaining = hasDuration ? `-${formatClock(Math.max(0, durationSeconds - currentTimeSeconds))}` : '--:--';
+    // The total never changes during playback, so it is plain text beside the live elapsed time.
+    const totalText = hasDuration ? formatClock(durationSeconds) : '--:--';
 
-    // Sync scrubPosition with currentTime when not scrubbing (optional, but good for safety)
-    // Actually not needed as we switch source based on flag
-
-    // Get the appropriate icon for current resize mode
     const ResizeModeIcon = getResizeModeIcon(resizeMode);
+    const bottomPad = Math.max(insets.bottom, metrics.space.sm);
 
     return (
-        <View
-            style={[styles.controlsOverlay, !showControls && styles.controlsOverlayHidden]}
+        <Animated.View
+            style={[StyleSheet.absoluteFill, styles.overlay, overlayStyle]}
             pointerEvents={showControls ? 'box-none' : 'none'}
         >
-            {/* Header */}
-            <LinearGradient
-                colors={['rgba(0,0,0,0.8)', 'rgba(0,0,0,0.4)', 'transparent']}
-                style={[
-                    styles.header,
-                    isLandscape && styles.headerLandscape,
-                    { paddingTop: Math.max(insets.top, 16) },
-                ]}
+            <Animated.View style={[styles.topScrim, othersStyle]} pointerEvents="none">
+                <LinearGradient colors={TOP_SCRIM} style={{ height: 96 + insets.top }} />
+            </Animated.View>
+            <LinearGradient colors={BOTTOM_SCRIM} style={[styles.bottomScrim, { height: 130 + bottomPad }]} pointerEvents="none" />
+
+            {/* Top bar */}
+            <Animated.View
+                style={[styles.topBar, { paddingTop: insets.top + metrics.space.xs, paddingHorizontal: metrics.space.sm }, othersStyle]}
             >
-                <Pressable onPress={onBack} style={styles.backButton} hitSlop={10}>
-                    <Feather name="arrow-left" size={24} color="#fff" />
-                </Pressable>
-                <Text numberOfLines={1} style={styles.title}>{title || 'Video'}</Text>
-
-                {/* Header Icons (Right) */}
-                <View style={styles.headerIcons}>
-                    {onToggleVideoEnhancement && isLandscape && (
-                        <Pressable onPress={onToggleVideoEnhancement} style={styles.iconButton} hitSlop={10}>
-                            <VisualEnhancementIcon size={22} color="#fff" active={videoEnhancement} />
-                        </Pressable>
-                    )}
-                    <Pressable onPress={onToggleAudio} style={styles.iconButton} hitSlop={10}>
-                        <AudioIcon size={23} color="#fff" />
-                    </Pressable>
-                    <Pressable onPress={onToggleSubtitle} style={styles.iconButton} hitSlop={10}>
-                        <SubtitleIcon size={23} color="#fff" />
-                    </Pressable>
-                    {onAddBookmark && (
-                        <Pressable onPress={onAddBookmark} style={styles.iconButton} hitSlop={10}>
-                            <Feather name="bookmark" size={23} color="#fff" />
-                        </Pressable>
-                    )}
-
-                    {onToggleBookmarkPanel && (
-                        <Pressable onPress={onToggleBookmarkPanel} style={styles.iconButton} hitSlop={10}>
-                            <BookmarkListIcon size={23} color="#fff" />
-                        </Pressable>
-                    )}
-                    {onTogglePlaylist && (
-                        <Pressable onPress={onTogglePlaylist} style={styles.iconButton} hitSlop={10}>
-                            <Feather name="list" size={23} color="#fff" />
-                        </Pressable>
-                    )}
-                    {/* Quick Settings */}
-                    <Pressable
-                        onPress={onToggleQuickSettings}
-                        style={styles.iconButton}
-                        hitSlop={10}
-                    >
-                        <Feather name="more-vertical" size={23} color="#fff" />
-                    </Pressable>
+                <IconButton icon="arrow-left" onPress={onBack} accessibilityLabel="Back" onPlayer />
+                <View style={styles.titleBlock}>
+                    <Text numberOfLines={1} style={styles.title}>{title || 'Video'}</Text>
+                    {!!subtitle && <Text numberOfLines={1} style={styles.subtitle}>{subtitle}</Text>}
                 </View>
-            </LinearGradient>
+                {/* Portrait keeps the title room; enhancement is in the Playback panel too. */}
+                {onToggleVideoEnhancement && (
+                    <GlyphButton onPress={onToggleVideoEnhancement} label="Colour enhancement" active={videoEnhancement}>
+                        {c => <VisualEnhancementIcon size={22} color={c} active={videoEnhancement} />}
+                    </GlyphButton>
+                )}
+                <GlyphButton onPress={onOpenAudio} label="Audio track">
+                    {c => <AudioIcon size={22} color={c} />}
+                </GlyphButton>
+                <GlyphButton onPress={onOpenSubtitles} label="Subtitles">
+                    {c => <SubtitleIcon size={22} color={c} />}
+                </GlyphButton>
+                {onAddBookmark && isLandscape && (
+                    <IconButton icon="bookmark" onPress={onAddBookmark} accessibilityLabel="Add bookmark" onPlayer />
+                )}
+                {/* Portrait: ⋮ opens the same panel, and the title needs the room. */}
+                {isLandscape && (
+                    <Touchable
+                        onPress={onOpenPlayback}
+                        onPlayer
+                        hitSlop={8}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Playback speed ${formatRate(playbackRate)}`}
+                        style={styles.speedChip}
+                    >
+                        <Text style={styles.speedText}>{formatRate(playbackRate)}</Text>
+                    </Touchable>
+                )}
+                <IconButton icon="more-vertical" onPress={onOpenPlayback} accessibilityLabel="Playback settings" onPlayer />
+            </Animated.View>
 
-            {/* ERROR BAR */}
             {!!errorText && (
-                <LinearGradient
-                    colors={['rgba(220,38,38,0.9)', 'rgba(185,28,28,0.85)']}
-                    style={[styles.errorBar, { top: 70 + insets.top }]}
-                >
+                <View style={[styles.error, { top: insets.top + 64 }]}>
                     <Text style={styles.errorText} numberOfLines={2}>{errorText}</Text>
-                </LinearGradient>
+                </View>
             )}
 
-            {/* CONTROLS CONTAINER (Bottom 33%) */}
-            {/* Visual Gradient (Pointer Events None) */}
-            <LinearGradient
-                colors={['transparent', 'rgba(0,0,0,0.6)', 'rgba(0,0,0,0.9)']}
-                style={[
-                    styles.bottomGradient,
-                    { paddingBottom: Math.max(insets.bottom, 16) },
-                ]}
-                pointerEvents="none"
-            />
+            {/* Lock, alone on the left edge, vertically centred where the thumb rests */}
+            <Animated.View style={[styles.rail, othersStyle]} pointerEvents="box-none">
+                {/* Small and bare, as it always was: an 18 px glyph about 20 dp from the edge. */}
+                <IconButton icon="lock" iconSize={18} onPress={onLockScreen} accessibilityLabel="Lock screen" onPlayer />
+            </Animated.View>
 
-            {/* Interactive Controls (Pointer Events Box-None) */}
+            {/* Centre transport */}
+            <Animated.View style={[styles.center, othersStyle]} pointerEvents="box-none">
+                {showSeekButtons && (
+                    <SkipButton seconds={seekDuration} onPress={onJumpBackward} />
+                )}
+                <Touchable onPress={onTogglePlayPause} onPlayer scaleTo={0.9} style={styles.play} accessibilityRole="button" accessibilityLabel={paused ? 'Play' : 'Pause'}>
+                    <Animated.View style={[styles.glyphLayer, playGlyphStyle]}>
+                        <Feather name="play" size={46} color={colors.text} />
+                    </Animated.View>
+                    <Animated.View style={[styles.glyphLayer, pauseGlyphStyle]}>
+                        <Feather name="pause" size={46} color={colors.text} />
+                    </Animated.View>
+                </Touchable>
+                {showSeekButtons && (
+                    <SkipButton forward seconds={seekDuration} onPress={onJumpForward} />
+                )}
+            </Animated.View>
+
+            {/* Bottom */}
             <View
-                style={[
-                    styles.bottomControlsContainer,
-                    { paddingBottom: Math.max(insets.bottom, 16) },
-                ]}
+                style={[styles.bottom, { paddingBottom: bottomPad, paddingHorizontal: 20 }]}
                 pointerEvents="box-none"
             >
-                {/* 1. SCRUBBER ROW (Full Width) */}
-                <View style={styles.scrubberRow}>
-                    <Scrubber
-                        currentTime={currentTime}
-                        duration={duration}
-                        isScrubbing={isScrubbingShared}
-                        seekPreviewTime={seekPreviewTime}
-                        onSeekStart={onSeekStart}
-                        onSeek={onSeek}
-                        onSeekComplete={onSeekComplete}
-                    />
-                </View>
-
-                {/* 2. TIME ROW (Between Scrubber and Buttons) */}
-                <View style={styles.timeRow}>
-                    <ReanimatedText
-                        value={displayTime}
-                        formatter={timeFormatter}
-                        fallbackText={fallbackDisplayText}
-                        style={styles.timeText}
-                    />
-                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                        <ReanimatedText
-                            value={remainingTimeValue}
-                            formatter={remainingFormatter}
-                            fallbackText={fallbackRemainingText}
-                            style={[styles.timeText, { color: '#ccc' }]}
-                        />
-                        <Text style={[styles.timeText, { color: '#ccc' }]}> / </Text>
-                        <ReanimatedText
-                            value={durationDisplay}
-                            formatter={timeFormatter}
-                            fallbackText={fallbackDurationText}
-                            style={[styles.timeText, { color: '#fff' }]}
-                        />
+                <Animated.View style={[styles.timeRow, othersStyle]}>
+                    {/* Elapsed on the left; time left / total on the right: all three, no tap to find them. */}
+                    <ReanimatedText value={elapsed} formatter={formatClock} fallbackText={fallbackElapsed} />
+                    <View style={styles.endGroup}>
+                        <ReanimatedText value={remaining} formatter={remainingFormatter} fallbackText={fallbackRemaining} style={styles.timeMuted} />
+                        <Text style={styles.time}> / {totalText}</Text>
                     </View>
-                </View>
+                </Animated.View>
 
-                {/* 3. BUTTONS ROW */}
-                <View style={styles.buttonsRow}>
+                <SeekBar
+                    currentTime={currentTime}
+                    duration={duration}
+                    isScrubbing={isScrubbingShared}
+                    seekPreviewTime={seekPreviewTime}
+                    grow={grow}
+                    dragging={dragging}
+                    swipeSeeking={swipeSeeking}
+                    swipeSeekStart={swipeSeekStart}
+                    screenReader={screenReaderEnabled}
+                    onStepBackward={onJumpBackward}
+                    onStepForward={onJumpForward}
+                    bookmarks={bookmarks}
+                    durationSeconds={durationSeconds}
+                    buffering={buffering}
+                    onSeekStart={onSeekStart}
+                    onSeek={onSeek}
+                    onSeekComplete={onSeekComplete}
+                />
 
-                    {/* Orientation Lock Button */}
-                    <Pressable onPress={onToggleLock} style={styles.controlBtnSmall}>
-                        <OrientationLockIcon size={20} color={isLocked ? '#FBBF24' : '#fff'} locked={isLocked} />
-                    </Pressable>
-
-                    {isLandscape && onToggleBackgroundPlay && (
-                        <Pressable
-                            onPress={onToggleBackgroundPlay}
-                            style={styles.controlBtnSmall}
-                            hitSlop={10}
-                            accessibilityRole="switch"
-                            accessibilityState={{ checked: Boolean(backgroundPlayEnabled) }}
-                            accessibilityLabel="Background play, experimental"
-                        >
-                            <BackgroundPlayIcon size={20} color={backgroundPlayEnabled ? '#FBBF24' : '#fff'} />
-                        </Pressable>
+                <Animated.View style={[styles.tools, othersStyle]}>
+                    {onToggleNightMode && (
+                        <GlyphButton onPress={onToggleNightMode} label="Night mode" active={nightModeActive}>
+                            {c => <NightModeIcon size={20} color={c} active={nightModeActive} />}
+                        </GlyphButton>
                     )}
-
-                    {/* Contextual: Haptics/Speed (Hidden in Portrait) */}
-                    {isLandscape && (
-                        playMode === 'with-haptics' ? (
-                            <Pressable onPress={onToggleHaptics} style={styles.controlBtnSmall}>
-                                <HapticsIcon size={20} color={hapticsEnabled ? '#fff' : '#a0a0a0ff'} active={hapticsEnabled} />
-                            </Pressable>
-                        ) : (
-                            <Pressable onPress={onToggleSpeed} style={styles.controlBtnSmall}>
-                                <Text style={styles.speedText}>{playbackRate}x</Text>
-                            </Pressable>
-                        )
+                    {onToggleMute && (
+                        <IconButton
+                            icon={muted ? 'volume-x' : 'volume-2'}
+                            active={muted}
+                            onPress={onToggleMute}
+                            accessibilityLabel={muted ? 'Unmute' : 'Mute'}
+                            onPlayer
+                        />
                     )}
-
-                    {/* Jump Back */}
-                    {showSeekButtons && (
-                        <Pressable onPress={onJumpBackward} style={styles.controlBtnKey}>
-                            <Feather name="rotate-ccw" size={22} color="#fff" />
-                            <Text style={styles.jumpText}>{seekDuration}</Text>
-                        </Pressable>
+                    {onOpenPlaylist && (
+                        <IconButton icon="list" onPress={onOpenPlaylist} accessibilityLabel="Playlist" onPlayer />
                     )}
-
-                    {/* Prev */}
-                    <Pressable
-                        onPress={onPrev}
-                        style={[styles.controlBtnKey, !onPrev && { opacity: 0.3 }]}
-                        disabled={!onPrev}
+                    {onOpenBookmarks && isLandscape && (
+                        <GlyphButton onPress={onOpenBookmarks} label="Bookmarks">
+                            {c => <BookmarkListIcon size={22} color={c} />}
+                        </GlyphButton>
+                    )}
+                    <View style={styles.flex} />
+                    <GlyphButton onPress={onToggleOrientationLock} label="Lock rotation" active={orientationLocked}>
+                        {c => <OrientationLockIcon size={20} color={c} locked={orientationLocked} />}
+                    </GlyphButton>
+                    {/* Icon and name, like Next: the current mode is readable without cycling through them. */}
+                    <Touchable
+                        onPress={onToggleResizeMode}
+                        onPlayer
+                        scaleTo={0.94}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Display mode: ${getResizeModeLabel(resizeMode)}. Tap to change`}
+                        style={styles.modePill}
                     >
-                        <Feather name="skip-back" size={28} color="#fff" />
-                    </Pressable>
-
-                    {/* PLAY/PAUSE (Main) */}
-                    <Pressable onPress={onTogglePlayPause} style={styles.playPauseBtnParams}>
-                        <Feather name={paused ? 'play' : 'pause'} size={isLandscape ? 40 : 32} color="#fff" />
-                    </Pressable>
-
-                    {/* Next */}
-                    <Pressable
-                        onPress={onNext}
-                        style={[styles.controlBtnKey, !onNext && { opacity: 0.3 }]}
-                        disabled={!onNext}
-                    >
-                        <Feather name="skip-forward" size={28} color="#fff" />
-                    </Pressable>
-
-                    {/* Jump Fwd */}
-                    {showSeekButtons && (
-                        <Pressable onPress={onJumpForward} style={styles.controlBtnKey}>
-                            <Feather name="rotate-cw" size={22} color="#fff" />
-                            <Text style={styles.jumpText}>{seekDuration}</Text>
-                        </Pressable>
+                        <ResizeModeIcon size={18} color={colors.text} />
+                        <Text style={styles.modeText}>{getResizeModeLabel(resizeMode)}</Text>
+                    </Touchable>
+                    {onEnterPip && (
+                        <GlyphButton onPress={onEnterPip} label="Picture in picture">
+                            {c => <PipIcon size={20} color={c} />}
+                        </GlyphButton>
                     )}
-
-                    {/* Resize Mode - Now with dynamic icons */}
-                    {isLandscape && (
-                        <Pressable onPress={onToggleResizeMode} style={styles.controlBtnSmall}>
-                            <ResizeModeIcon size={20} color="#fff" />
-                        </Pressable>
+                    {onNext && !isLandscape && (
+                        <IconButton icon="skip-forward" onPress={onNext} accessibilityLabel="Next video" onPlayer />
                     )}
-
-                    {onEnterPip && isLandscape && (
-                        <Pressable onPress={onEnterPip} style={styles.controlBtnSmall} hitSlop={10}>
-                            <PipIcon size={20} color="#fff" />
-                        </Pressable>
+                    {onNext && isLandscape && (
+                        <Button
+                            label="Next"
+                            icon="skip-forward"
+                            variant="secondary"
+                            onPress={onNext}
+                            onPlayer
+                            style={styles.next}
+                        />
                     )}
-
-                    {/* Night Mode */}
-                    <Pressable onPress={onToggleNightMode} style={styles.controlBtnSmall}>
-                        <NightModeIcon size={20} color={nightModeActive ? '#FBBF24' : '#fff'} active={nightModeActive} />
-                    </Pressable>
-                </View>
+                </Animated.View>
             </View>
-        </View>
+        </Animated.View>
     );
-}, (prev, next) => {
-    return (
-        prev.showControls === next.showControls &&
-        prev.paused === next.paused &&
-        prev.title === next.title &&
-        prev.errorText === next.errorText &&
-        prev.isLandscape === next.isLandscape &&
-        prev.insets === next.insets &&
-        prev.audioTrackSelected === next.audioTrackSelected &&
-        prev.subtitleTrackSelected === next.subtitleTrackSelected &&
-        prev.isLocked === next.isLocked &&
-        prev.resizeMode === next.resizeMode &&
-        prev.nightModeActive === next.nightModeActive &&
-        prev.playbackRate === next.playbackRate &&
-        prev.onNext === next.onNext &&
-        prev.onPrev === next.onPrev &&
-        prev.hapticsEnabled === next.hapticsEnabled &&
-        prev.backgroundPlayEnabled === next.backgroundPlayEnabled &&
-        prev.videoEnhancement === next.videoEnhancement
-    );
-});
+}, (prev, next) => (
+    prev.showControls === next.showControls &&
+    prev.paused === next.paused &&
+    prev.title === next.title &&
+    prev.subtitle === next.subtitle &&
+    prev.errorText === next.errorText &&
+    prev.isLandscape === next.isLandscape &&
+    prev.insets === next.insets &&
+    prev.orientationLocked === next.orientationLocked &&
+    prev.resizeMode === next.resizeMode &&
+    prev.playbackRate === next.playbackRate &&
+    prev.onNext === next.onNext &&
+    prev.onAddBookmark === next.onAddBookmark &&
+    prev.bookmarks === next.bookmarks &&
+    prev.buffering === next.buffering &&
+    prev.durationSeconds === next.durationSeconds &&
+    prev.showSeekButtons === next.showSeekButtons &&
+    prev.seekDuration === next.seekDuration &&
+    prev.videoEnhancement === next.videoEnhancement &&
+    prev.nightModeActive === next.nightModeActive &&
+    prev.muted === next.muted &&
+    prev.screenReaderEnabled === next.screenReaderEnabled
+));
 
 PlayerControls.displayName = 'PlayerControls';
 
 const styles = StyleSheet.create({
-    controlsOverlay: {
-        position: 'absolute',
-        top: 0, bottom: 0, left: 0, right: 0,
-        justifyContent: 'space-between',
-        zIndex: 10,
-    },
-    controlsOverlayHidden: {
-        opacity: 0,
-    },
-    header: {
+    overlay: { zIndex: 10 },
+    flex: { flex: 1 },
+    topScrim: { position: 'absolute', top: 0, left: 0, right: 0 },
+    bottomScrim: { position: 'absolute', bottom: 0, left: 0, right: 0 },
+    topBar: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 12,
-        paddingHorizontal: 16,
-        paddingBottom: 24,
+        gap: metrics.space.xs,
     },
-    headerLandscape: {
-        paddingTop: 16,
-    },
-    backButton: { padding: 8 },
-    title: {
-        color: '#fff',
-        fontSize: 16,
-        fontWeight: '600',
-        flex: 1,
-        textShadowColor: 'rgba(0,0,0,0.5)',
-        textShadowOffset: { width: 0, height: 1 },
-        textShadowRadius: 3,
-    },
-    headerIcons: {
-        flexDirection: 'row',
+    titleBlock: { flex: 1, marginHorizontal: metrics.space.xs },
+    title: { ...type.row, color: colors.text },
+    subtitle: { fontSize: 11.5, lineHeight: 15, color: colors.textSecondary },
+    speedChip: {
+        height: 28,
+        minWidth: 40,
+        paddingHorizontal: metrics.space.sm,
+        borderRadius: metrics.radius.pill,
+        borderWidth: 1.5,
+        borderColor: colors.text,
         alignItems: 'center',
-        gap: 4,
-    },
-    iconButton: {
-        padding: 8,
-    },
-    iconBadge: {
-        position: 'absolute',
-        bottom: 4, right: 4,
-        backgroundColor: '#fff',
-        borderRadius: 6,
-        width: 12, height: 12,
-        justifyContent: 'center', alignItems: 'center',
-    },
-    // BOTTOM CONTROLS
-    bottomGradient: {
-        position: 'absolute',
-        bottom: 0, left: 0, right: 0,
-        height: 200,
-        justifyContent: 'flex-end',
-        paddingTop: 40,
-    },
-    bottomControlsContainer: {
-        position: 'absolute',
-        bottom: 0, left: 0, right: 0,
-        paddingHorizontal: 20,
-        justifyContent: 'flex-end',
-    },
-    scrubberRow: {
-        height: 44,
         justifyContent: 'center',
-        marginBottom: -8,
+        marginHorizontal: metrics.space.xs,
     },
-    timeRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        paddingHorizontal: 4,
-    },
-    buttonsRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        marginBottom: 10,
-        minHeight: 48,
-    },
-    // Button Styles
-    controlBtnKey: {
-        padding: 10,
+    speedText: { ...type.label, color: colors.text, fontVariant: ['tabular-nums'] },
+    glyph: {
+        width: 40,
+        height: 40,
+        borderRadius: metrics.radius.pill,
         alignItems: 'center',
         justifyContent: 'center',
     },
-    controlBtnSmall: {
-        padding: 10,
-        opacity: 0.9,
+    glyphActive: { backgroundColor: colors.primaryContainer },
+    error: {
+        position: 'absolute',
+        left: metrics.gutter,
+        right: metrics.gutter,
+        padding: metrics.space.md,
+        borderRadius: metrics.radius.md,
+        backgroundColor: colors.error,
     },
-    playPauseBtnParams: {
-        width: 56, height: 56,
-        borderRadius: 28,
+    errorText: { ...type.body, color: colors.text, fontWeight: '500' },
+    rail: { position: 'absolute', top: 0, bottom: 0, left: metrics.space.sm, justifyContent: 'center' },
+    center: {
+        ...StyleSheet.absoluteFill,
+        flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        marginHorizontal: 8,
-        elevation: 5,
-        shadowColor: '#000',
-        shadowOpacity: 0.3,
-        shadowRadius: 4,
-        shadowOffset: { width: 0, height: 2 },
+        gap: metrics.space.xxl,
     },
+    jump: { width: 56, height: 56, alignItems: 'center', justifyContent: 'center' },
     jumpText: {
         position: 'absolute',
-        fontSize: 8,
-        fontWeight: 'bold',
-        color: '#fff',
-        marginTop: 1,
-    },
-    speedText: {
-        color: '#fff',
-        fontWeight: 'bold',
-        fontSize: 13,
-    },
-    timeText: {
-        color: '#fff',
-        fontSize: 13,
-        fontWeight: '500',
+        // The ring's centre sits slightly below the box's middle.
+        marginTop: 2,
+        fontSize: 10.5,
+        fontWeight: '700',
+        letterSpacing: -0.3,
+        color: colors.text,
         fontVariant: ['tabular-nums'],
+        includeFontPadding: false,
     },
-    // Existing Styles (kept for compatibility if needed)
-    centerControls: { display: 'none' },
-    bottomBar: { display: 'none' },
-    bottomBarLandscape: {},
-    sliderContainer: {},
-    scrubberContainer: { height: 40, justifyContent: 'center', overflow: 'hidden' },
-    trackBackground: { backgroundColor: 'rgba(255,255,255,0.2)', width: '100%', position: 'absolute' },
-    trackFill: { backgroundColor: '#fff', position: 'absolute', left: 0 },
-    reanimatedText: { color: '#fff', fontSize: 13, includeFontPadding: false },
-    errorBar: { position: 'absolute', left: 16, right: 16, padding: 12, borderRadius: 8, zIndex: 99 },
-    errorText: { color: '#fff', fontWeight: 'bold' },
+    play: { width: 72, height: 72, alignItems: 'center', justifyContent: 'center' },
+    glyphLayer: { position: 'absolute' },
+    bottom: { position: 'absolute', left: 0, right: 0, bottom: 0 },
+    timeRow: { flexDirection: 'row', justifyContent: 'space-between' },
+    time: { ...type.caption, color: colors.text, fontVariant: ['tabular-nums'], includeFontPadding: false },
+    timeMuted: { color: colors.textSecondary },
+    endGroup: { flexDirection: 'row' },
+    seekBar: { height: 28, justifyContent: 'center' },
+    track: { backgroundColor: 'rgba(255,255,255,0.28)', overflow: 'hidden' },
+    fill: { ...StyleSheet.absoluteFill, backgroundColor: colors.primary },
+    loading: { position: 'absolute', top: 0, bottom: 0, width: '30%', backgroundColor: colors.primary },
+    // A tick taller than the track, outlined so it reads on both the played and unplayed parts.
+    dot: {
+        position: 'absolute',
+        top: 8,
+        width: 3,
+        height: 12,
+        marginLeft: -1.5,
+        borderRadius: 1.5,
+        backgroundColor: colors.text,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: HUD_PILL,
+    },
+    thumb: { position: 'absolute', left: 0, backgroundColor: colors.primary },
+    bubble: {
+        position: 'absolute',
+        left: 0,
+        bottom: 36,
+        width: BUBBLE_WIDTH,
+        paddingVertical: metrics.space.sm,
+        borderRadius: metrics.radius.md,
+        backgroundColor: colors.cardElevated,
+        alignItems: 'center',
+    },
+    bubbleTime: { ...type.row, color: colors.text },
+    bubbleDelta: { ...type.caption, color: colors.textSecondary },
+    tools: { flexDirection: 'row', alignItems: 'center', minHeight: metrics.touch },
+    next: { marginLeft: metrics.space.sm },
+    modePill: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: metrics.space.sm,
+        height: 40,
+        paddingHorizontal: 14,
+        borderRadius: 20,
+        backgroundColor: colors.fill,
+        marginHorizontal: metrics.space.xs,
+    },
+    modeText: { ...type.label, color: colors.text },
 });

@@ -1,18 +1,21 @@
 import React from 'react';
 import Svg, { Rect, Path, Circle, G } from 'react-native-svg';
+import { playerTheme } from '@/theme/theme';
+
+const DEFAULT_COLOR = playerTheme.colors.text;
 
 // ============================================================================
 // DISPLAY MODE ICONS
 // ============================================================================
 
-export const ContainIcon = ({ size = 20, color = '#fff' }: { size?: number, color?: string }) => (
+export const ContainIcon = ({ size = 20, color = DEFAULT_COLOR }: { size?: number, color?: string }) => (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         <Rect x="2" y="3" width="20" height="18" rx="2" strokeOpacity={0.6} />
         <Rect x="6" y="7" width="12" height="10" rx="1" fill={color} stroke="none" />
     </Svg>
 );
 
-export const CoverIcon = ({ size = 20, color = '#fff' }: { size?: number, color?: string }) => (
+export const CoverIcon = ({ size = 20, color = DEFAULT_COLOR }: { size?: number, color?: string }) => (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         <Rect x="2" y="3" width="20" height="18" rx="2" strokeOpacity={0.6} />
         <Rect x="4" y="5" width="16" height="14" rx="1" fill={color} fillOpacity={0.9} stroke="none" />
@@ -20,7 +23,7 @@ export const CoverIcon = ({ size = 20, color = '#fff' }: { size?: number, color?
     </Svg>
 );
 
-export const StretchIcon = ({ size = 20, color = '#fff' }: { size?: number, color?: string }) => (
+export const StretchIcon = ({ size = 20, color = DEFAULT_COLOR }: { size?: number, color?: string }) => (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         <Rect x="2" y="3" width="20" height="18" rx="2" strokeOpacity={0.6} />
         <Path d="M7 12H17M7 12L9 10M7 12L9 14M17 12L15 10M17 12L15 14" stroke={color} strokeWidth={2} />
@@ -28,21 +31,14 @@ export const StretchIcon = ({ size = 20, color = '#fff' }: { size?: number, colo
     </Svg>
 );
 
-export const FillIcon = ({ size = 20, color = '#fff' }: { size?: number, color?: string }) => (
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-        <Rect x="2" y="3" width="20" height="18" rx="2" strokeOpacity={0.6} />
-        <Rect x="4" y="5" width="16" height="14" rx="1" fill={color} stroke="none" />
-    </Svg>
-);
-
-export const NoneIcon = ({ size = 20, color = '#fff' }: { size?: number, color?: string }) => (
+export const NoneIcon = ({ size = 20, color = DEFAULT_COLOR }: { size?: number, color?: string }) => (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         <Rect x="2" y="3" width="20" height="18" rx="2" strokeOpacity={0.6} />
         <Rect x="8" y="8" width="8" height="8" rx="1" fill={color} fillOpacity={0.85} stroke="none" />
     </Svg>
 );
 
-export const ScaleDownIcon = ({ size = 20, color = '#fff' }: { size?: number, color?: string }) => (
+export const ScaleDownIcon = ({ size = 20, color = DEFAULT_COLOR }: { size?: number, color?: string }) => (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         <Rect x="2" y="3" width="20" height="18" rx="2" strokeOpacity={0.6} />
         <Rect x="7" y="8" width="10" height="8" rx="1" fill={color} fillOpacity={0.7} stroke="none" />
@@ -50,11 +46,10 @@ export const ScaleDownIcon = ({ size = 20, color = '#fff' }: { size?: number, co
     </Svg>
 );
 
-export const BestFitIcon = ({ size = 20, color = '#fff' }: { size?: number, color?: string }) => (
+export const BestFitIcon = ({ size = 20, color = DEFAULT_COLOR }: { size?: number, color?: string }) => (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         <Rect x="2" y="3" width="20" height="18" rx="2" strokeOpacity={0.6} />
         <Rect x="5" y="6" width="14" height="12" rx="1" fill={color} fillOpacity={0.85} stroke="none" />
-        <Path d="M20 4l.3.8.8.3-.8.3-.3.8-.3-.8-.8-.3.8-.3.3-.8z" fill={color} stroke="none" />
     </Svg>
 );
 
@@ -62,7 +57,7 @@ export const BestFitIcon = ({ size = 20, color = '#fff' }: { size?: number, colo
 // OTHER ICONS
 // ============================================================================
 
-export const PipIcon = ({ size = 20, color = '#fff' }: { size?: number, color?: string }) => {
+export const PipIcon = ({ size = 20, color = DEFAULT_COLOR }: { size?: number, color?: string }) => {
     return (
         <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
             <Rect x="2" y="4" width="20" height="16" rx="2" strokeOpacity={1} />
@@ -71,7 +66,7 @@ export const PipIcon = ({ size = 20, color = '#fff' }: { size?: number, color?: 
     );
 };
 
-export const AudioIcon = ({ size = 20, color = '#fff' }: { size?: number, color?: string }) => (
+export const AudioIcon = ({ size = 20, color = DEFAULT_COLOR }: { size?: number, color?: string }) => (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         <Path d="M11 5L6 9H2V15H6L11 19V5Z" strokeOpacity={1} />
         <Path d="M15.54 8.46C16.4774 9.39764 17.0039 10.6692 17.0039 11.995C17.0039 13.3208 16.4774 14.5924 15.54 15.53" stroke={color} strokeWidth={2.5} />
@@ -79,7 +74,7 @@ export const AudioIcon = ({ size = 20, color = '#fff' }: { size?: number, color?
     </Svg>
 );
 
-export const SubtitleIcon = ({ size = 20, color = '#fff' }: { size?: number, color?: string }) => (
+export const SubtitleIcon = ({ size = 20, color = DEFAULT_COLOR }: { size?: number, color?: string }) => (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         <Rect x="2" y="4" width="20" height="16" rx="2" strokeOpacity={1} />
         <Rect x="6" y="10" width="12" height="2" rx="1" fill={color} stroke="none" />
@@ -87,15 +82,7 @@ export const SubtitleIcon = ({ size = 20, color = '#fff' }: { size?: number, col
     </Svg>
 );
 
-export const BookmarkListIcon = ({ size = 20, color = '#fff' }: { size?: number, color?: string }) => (
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-        <Path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" strokeOpacity={1} />
-        <Rect x="8" y="7" width="8" height="2" rx="1" fill={color} stroke="none" />
-        <Rect x="8" y="11" width="5" height="2" rx="1" fill={color} stroke="none" />
-    </Svg>
-);
-
-export const OrientationLockIcon = ({ size = 20, color = '#fff', locked = false }: { size?: number, color?: string, locked?: boolean }) => (
+export const OrientationLockIcon = ({ size = 20, color = DEFAULT_COLOR, locked = false }: { size?: number, color?: string, locked?: boolean }) => (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         <Rect x="5" y="2" width="14" height="20" rx="3" strokeOpacity={0.6} />
         {locked ? (
@@ -109,7 +96,7 @@ export const OrientationLockIcon = ({ size = 20, color = '#fff', locked = false 
     </Svg>
 );
 
-export const BackgroundPlayIcon = ({ size = 20, color = '#fff' }: { size?: number, color?: string }) => (
+export const BackgroundPlayIcon = ({ size = 20, color = DEFAULT_COLOR }: { size?: number, color?: string }) => (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         <Path d="M4 12V9a8 8 0 0 1 16 0v3" strokeOpacity={1} />
         <Rect x="2" y="12" width="6" height="10" rx="3" fill={color} stroke="none" />
@@ -117,7 +104,7 @@ export const BackgroundPlayIcon = ({ size = 20, color = '#fff' }: { size?: numbe
     </Svg>
 );
 
-export const NightModeIcon = ({ size = 20, color = '#fff', active = false }: { size?: number, color?: string, active?: boolean }) => (
+export const NightModeIcon = ({ size = 20, color = DEFAULT_COLOR, active = false }: { size?: number, color?: string, active?: boolean }) => (
     active ? (
         <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
             <Path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" fill={color} stroke="none" />
@@ -130,6 +117,34 @@ export const NightModeIcon = ({ size = 20, color = '#fff', active = false }: { s
     )
 );
 
+/**
+ * The display modes offered to the user, in plain words. `stretch` is omitted because it
+ * renders exactly like `fill`; a stored `stretch` still plays and reads as "Stretch".
+ */
+/**
+ * The modes the player offers, in cycle order. Every one maps to its own branch of the native
+ * computeGeometry (GlidePlayerView.kt), and each looks different on a typical video.
+ * 'scale-down' is left out: it matches Fit for anything at least screen size and Original
+ * for anything smaller, so cycling through it looked like nothing happened.
+ */
+export const DISPLAY_MODES = [
+    { mode: 'best-fit', label: 'Auto' },
+    { mode: 'contain', label: 'Fit' },
+    { mode: 'cover', label: 'Crop' },
+    { mode: 'fill', label: 'Stretch' },
+    { mode: 'none', label: 'Original size' },
+] as const;
+
+/** Playback speed or zoom as the user reads it: 1.5 -> "1.5×", 2 -> "2×". */
+export const formatRate = (rate: number) => `${Number(rate.toFixed(2))}×`;
+
+export const getResizeModeLabel =(resizeMode: string): string => {
+    if (resizeMode === 'stretch') {return 'Stretch';}
+    if (resizeMode === 'center') {return 'Original size';}
+    if (resizeMode === 'scale-down') {return 'Shrink only';}
+    return DISPLAY_MODES.find(m => m.mode === resizeMode)?.label ?? 'Fit';
+};
+
 // Helper to get icon by mode name
 export const getResizeModeIcon = (resizeMode: string) => {
     switch (resizeMode) {
@@ -140,9 +155,8 @@ export const getResizeModeIcon = (resizeMode: string) => {
         case 'cover':
             return CoverIcon;
         case 'stretch':
-            return StretchIcon;
         case 'fill':
-            return FillIcon;
+            return StretchIcon;
         case 'none':
         case 'center':
             return NoneIcon;
@@ -153,7 +167,7 @@ export const getResizeModeIcon = (resizeMode: string) => {
     }
 };
 
-export const HapticsIcon = ({ size = 20, color = '#fff', active = true }: { size?: number, color?: string, active?: boolean }) => (
+export const HapticsIcon = ({ size = 20, color = DEFAULT_COLOR, active = true }: { size?: number, color?: string, active?: boolean }) => (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         {/* Central element */}
         <Rect x="6" y="6" width="12" height="12" rx="2" fill={active ? color : 'none'} stroke={color} />
@@ -207,7 +221,7 @@ interface AnimatedIconProps {
 }
 
 // Improved Volume Icon with standard paths but animated opacities
-export const AnimatedVolumeIconStandard = ({ size = 20, color = '#fff', progress, maxVolume = 1.0 }: AnimatedIconProps) => {
+export const AnimatedVolumeIconStandard = ({ size = 20, color = DEFAULT_COLOR, progress, maxVolume = 1.0 }: AnimatedIconProps) => {
     // Speaker Base
     const baseProps = useAnimatedProps(() => ({
         fillOpacity: progress.value > 0 ? 1 : 0.5,
@@ -248,7 +262,7 @@ const useRayOpacity = (progress: SharedValue<number>, threshold: number) => {
     });
 };
 
-export const AnimatedBrightnessIcon = ({ size = 20, color = '#fff', progress }: AnimatedIconProps) => {
+export const AnimatedBrightnessIcon = ({ size = 20, color = DEFAULT_COLOR, progress }: AnimatedIconProps) => {
     // Rays light up clockwise from top (12 o'clock)
     // 8 rays -> steps of 1/8 = 0.125
 
@@ -293,7 +307,37 @@ export const AnimatedBrightnessIcon = ({ size = 20, color = '#fff', progress }: 
     );
 };
 
-export const VisualEnhancementIcon = ({ size = 20, color = '#fff', active = false }: { size?: number, color?: string, active?: boolean }) => {
+export const RecapIcon = ({ size = 20, color = DEFAULT_COLOR, active = false }: { size?: number, color?: string, active?: boolean }) => {
+    return (
+        <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+            {/* Film frame/play hybrid */}
+            <Path
+                d="M10 9l5 3-5 3V9z"
+                fill={active ? color : 'none'}
+                stroke={color}
+                strokeWidth={1.5}
+                strokeLinejoin="round"
+            />
+            <Path
+                d="M21 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3"
+                stroke={color}
+                strokeWidth={1.5}
+                strokeLinecap="round"
+                strokeOpacity={active ? 1 : 0.6}
+            />
+        </Svg>
+    );
+};
+
+export const BookmarkListIcon = ({ size = 20, color = DEFAULT_COLOR }: { size?: number, color?: string }) => (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+        <Path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" strokeOpacity={1} />
+        <Rect x="8" y="7" width="8" height="2" rx="1" fill={color} stroke="none" />
+        <Rect x="8" y="11" width="5" height="2" rx="1" fill={color} stroke="none" />
+    </Svg>
+);
+
+export const VisualEnhancementIcon = ({ size = 20, color = DEFAULT_COLOR, active = false }: { size?: number, color?: string, active?: boolean }) => {
     return (
         <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
             {/* Frame/screen outline */}
@@ -363,29 +407,23 @@ export const VisualEnhancementIcon = ({ size = 20, color = '#fff', active = fals
     );
 };
 
-export const RecapIcon = ({ size = 20, color = '#fff', active = false }: { size?: number, color?: string, active?: boolean }) => {
-    return (
-        <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-            {/* Film frame/play hybrid */}
+
+/**
+ * Skip glyph in the replay_10 / gobackward.10 style: a ring nearly closed at the top with the
+ * arrowhead there, pointing the way time moves. The number is drawn by the caller as text so
+ * it stays crisp at any size. Ring centre is (16, 17) of the 32 box, a touch below middle.
+ */
+export const SkipRingIcon = ({ size = 36, color = DEFAULT_COLOR, forward = false }: { size?: number; color?: string; forward?: boolean }) => (
+    <Svg width={size} height={size} viewBox="0 0 32 32" fill="none">
+        <G transform={forward ? 'translate(32 0) scale(-1 1)' : undefined}>
             <Path
-                d="M10 9l5 3-5 3V9z"
-                fill={active ? color : 'none'}
+                d="M13 6H16A11 11 0 1 1 8.22 9.22"
                 stroke={color}
-                strokeWidth={1.5}
+                strokeWidth={2.2}
+                strokeLinecap="round"
                 strokeLinejoin="round"
             />
-            <Path
-                d="M21 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3"
-                stroke={color}
-                strokeWidth={1.5}
-                strokeLinecap="round"
-                strokeOpacity={active ? 1 : 0.6}
-            />
-            {/* AI Sparkles */}
-            <G fill={color}>
-                <Path d="M19 2l.3.7.7.3-.7.3-.3.7-.3-.7-.7-.3.7-.3.3-.7z" />
-                <Path d="M22 6l.2.5.5.2-.5.2-.2.5-.2-.5-.5-.2.5-.2.2-.5z" opacity={0.8} />
-            </G>
-        </Svg>
-    );
-};
+            <Path d="M16.6 2.4L13 6L16.6 9.6" stroke={color} strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" />
+        </G>
+    </Svg>
+);

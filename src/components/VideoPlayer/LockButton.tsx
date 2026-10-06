@@ -1,72 +1,54 @@
-import React, { FC, useEffect, useRef } from 'react';
-import { View, Pressable, StyleSheet, Animated } from 'react-native';
+import React, { FC } from 'react';
+import { StyleSheet, Text } from 'react-native';
 import { Feather } from '@react-native-vector-icons/feather';
+import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
+import { Touchable } from '@/components/ui';
+import { metrics, motion, playerTheme, type } from '@/theme/theme';
+import { HUD_PILL } from '@/theme/colors';
+
+const { colors } = playerTheme;
 
 interface LockButtonProps {
-    isLocked: boolean;
-    showLockIcon: boolean;
-    onToggleLock: () => void;
+    visible: boolean;
+    onUnlock: () => void;
+    top: number;
+    left: number;
 }
 
-export const LockButton: FC<LockButtonProps> = ({ isLocked, showLockIcon, onToggleLock }) => {
-    const fadeAnim = useRef(new Animated.Value(0)).current;
-
-    useEffect(() => {
-        if (showLockIcon) {
-            Animated.timing(fadeAnim, {
-                toValue: 1,
-                duration: 200,
-                useNativeDriver: true,
-            }).start();
-        } else {
-            Animated.timing(fadeAnim, {
-                toValue: 0,
-                duration: 200,
-                useNativeDriver: true,
-            }).start();
-        }
-    }, [showLockIcon, fadeAnim]);
-
-    if (!showLockIcon) {return null;}
+/** While the screen is locked, a tap on the video shows this chip for 2 s; only tapping the chip unlocks. */
+export const LockButton: FC<LockButtonProps> = ({ visible, onUnlock, top, left }) => {
+    if (!visible) {return null;}
 
     return (
-        <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
-            <Pressable
-                onPress={onToggleLock}
-                style={styles.lockButton}
-                hitSlop={20}
+        <Animated.View
+            style={[styles.container, { top, left }]}
+            entering={FadeIn.duration(motion.fadeIn)}
+            exiting={FadeOut.duration(motion.fadeOut)}
+        >
+            <Touchable
+                onPress={onUnlock}
+                onPlayer
+                accessibilityRole="button"
+                accessibilityLabel="Unlock screen"
+                style={styles.chip}
             >
-                <View style={styles.iconContainer}>
-                    <Feather
-                        name={isLocked ? 'lock' : 'unlock'}
-                        size={18}
-                        color="#fff"
-                    />
-                </View>
-            </Pressable>
+                <Feather name="lock" size={16} color={colors.text} />
+                <Text style={styles.text}>Tap to unlock</Text>
+            </Touchable>
         </Animated.View>
     );
 };
 
 const styles = StyleSheet.create({
-    container: {
-        position: 'absolute',
-        left: 20,
-        top: '50%',
-        marginTop: -28,
-        zIndex: 100,
+    container: { position: 'absolute', zIndex: 100 },
+    chip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: metrics.space.sm,
+        minHeight: metrics.touch,
+        paddingHorizontal: metrics.space.lg,
+        borderRadius: metrics.radius.lg,
+        backgroundColor: HUD_PILL,
     },
-    lockButton: {
-        padding: 8,
-    },
-    iconContainer: {
-        // backgroundColor: 'rgba(0,0,0,0.5)',
-        // borderRadius: 28,
-        // width: 56,
-        // height: 56,
-        // justifyContent: 'center',
-        // alignItems: 'center',
-        // borderWidth: 2,
-        // borderColor: 'rgba(255,255,255,0.3)',
-    },
+    text: { ...type.label, color: colors.text },
 });

@@ -9,7 +9,7 @@
  * Changes here can break the entire gesture system.
  */
 
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useWindowDimensions, NativeModules } from 'react-native';
 import { Gesture } from 'react-native-gesture-handler';
 import {
@@ -19,10 +19,11 @@ import {
     runOnJS,
 } from 'react-native-reanimated';
 import type { PlayerResizeMode } from '@/components/VideoPlayer/GlidePlayer';
+import { haptic } from '@/native/HapticModule';
 
 const { AudioControlModule } = NativeModules;
 
-import { UsePlayerCoreReturn, UsePlayerUIReturn, UsePlayerHUDReturn } from './types';
+import { UsePlayerCoreReturn, UsePlayerUIReturn, UsePlayerHUDReturn, PLAYER_CONSTANTS } from './types';
 import { useSeekGesture } from './useSeekGesture';
 import { useBrightnessGesture } from './useBrightnessGesture';
 import { useVolumeGesture } from './useVolumeGesture';
@@ -64,6 +65,10 @@ interface UsePlayerGesturesReturn {
         currentBrightness: SharedValue<number>;
         currentVolume: SharedValue<number>;
         seekTime: SharedValue<number>;
+        /** A horizontal swipe-seek is in progress: the seek bar shows its scrubbing state. */
+        swipeSeeking: SharedValue<boolean>;
+        /** Where that swipe started, for the bubble's delta. */
+        swipeSeekStart: SharedValue<number>;
     };
 
     // Current volume max (100 or 200)
@@ -110,7 +115,7 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
     // Narrow to stable members rather than depending on `player`. Playback position no
     // longer lives in player state, so its identity is stable during playback, but
     // depending on the whole object would re-tie the gesture tree to unrelated state.
-    const { setIsSeeking, previewSeek, commitSeek, currentTimeRef } = player;
+    const { setIsSeeking, previewSeek, commitSeek, currentTimeRef, togglePlayPause } = player;
     // resetZoom must not depend on the whole hud object: it calls updateZoom, which
     // changes hud.state, which would change resetZoom, which re-runs the effect below
     // that calls resetZoom. updateZoom itself is stable.
@@ -168,9 +173,8 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
     // SCREEN ZONES
     // ========================================================================
 
-    const ZONE_RATIO = 0.15;
-    const leftZoneWidth = width * ZONE_RATIO;
-    const rightZoneWidth = width * ZONE_RATIO;
+    // Vertical swipes: left half brightness, right half volume (VLC/MX convention).
+    const halfWidth = width / 2;
     const allowVideoTransform = resizeMode === 'contain' && !isInPipMode;
 
 
@@ -221,7 +225,7 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
                     const deviceBrightness = await AudioControlModule.getBrightness();
                     currentBrightness.value = Math.max(0, Math.min(1, typeof deviceBrightness === 'number' ? deviceBrightness : 0.5));
                 }
-            } catch (err) {
+            } catch {
                 if (initialBrightness === undefined) {
                     currentBrightness.value = 0.5;
                 }
@@ -253,30 +257,22 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
     // GESTURE CALLBACKS
     // ========================================================================
 
-    // Seek
+    // Seek. The seek bar's scrubbing state is the readout (driven by swipeSeeking on
+    // the UI thread); controls hidden before the swipe stay hidden after it.
     const handleSeekStart = useCallback(() => {
         setIsSeeking(true);
-        // Capture initial time when seek begins (for difference display)
-        hud.setSeekStartTime(currentTimeRef.current);
-        // Sync shared value
-        seekTimeShared.value = currentTimeRef.current;
-        // Show seeker immediately with current time, gesture active = true
-        hud.showSeekHUD(currentTimeRef.current, null, null, true);
-    }, [hud, setIsSeeking, currentTimeRef, seekTimeShared]);
+    }, [setIsSeeking]);
 
     const handleSeekUpdate = useCallback((time: number) => {
         previewSeek(time);
-        hud.showSeekHUD(time, null, null, true);
         onSeekUpdate?.(time, true);
-    }, [previewSeek, hud, onSeekUpdate]);
+    }, [previewSeek, onSeekUpdate]);
 
+    const { scheduleAutoHide } = ui;
     const handleSeekComplete = useCallback((time: number) => {
         commitSeek(time);
-        // Show final time with auto-hide (isGestureActive=false)
-        hud.showSeekHUD(time, null, null, false);
-        ui.showControls();
-        ui.scheduleAutoHide();
-    }, [commitSeek, hud, ui]);
+        scheduleAutoHide();
+    }, [commitSeek, scheduleAutoHide]);
 
     // Lock tap
     const handleLockTap = useCallback(() => {
@@ -307,12 +303,22 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
     }, [hud, currentVolume, audioController]);
 
     // Speed
+    const speedHoldRef = useRef(false);
+
     const handleSpeedChange = useCallback((rate: number, isGestureActive?: boolean) => {
+        if (isGestureActive && !speedHoldRef.current) {
+            speedHoldRef.current = true;
+            haptic('longPress');
+        }
         onTemporarySpeedChange?.(rate);
         hud.showSpeedHUD(rate, isGestureActive);
     }, [hud, onTemporarySpeedChange]);
 
     const handleSpeedReset = useCallback(() => {
+        if (speedHoldRef.current) {
+            speedHoldRef.current = false;
+            haptic('gestureEnd');
+        }
         onTemporarySpeedChange?.(null);
         hud.showSpeedHUD(basePlaybackRate, false);
     }, [basePlaybackRate, hud, onTemporarySpeedChange]);
@@ -327,37 +333,69 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
     }, [hud]);
 
     // Tap
-    const handleSingleTap = useCallback(() => {
-        if (ui.state.locked) {
-            ui.showLockIconTemporarily();
-        } else {
-            // toggleControls now automatically schedules auto-hide when showing
-            ui.toggleControls();
-        }
-    }, [ui]);
+    // A double tap starts a run; every further tap on that side within 800 ms adds
+    // another step. Each tap is measured from the previous one, so the run lasts as
+    // long as the tapping does.
+    const seekRunRef = useRef<{ side: 'left' | 'right'; base: number; seconds: number; lastAt: number } | null>(null);
+    const { durationShared } = player;
+    const { showRipple } = hud;
+    const { hideControls } = ui;
 
-    const handleDoubleTapSeek = useCallback((newTime: number, side: 'left' | 'right', x: number, y: number) => {
-        // For double tap, set start time to CURRENT time (before seek) for proper diff display
-        // Use forceNewStart=false so rapid taps accumulate (+10 -> +20 -> +30, etc.)
-        hud.setSeekStartTime(currentTimeRef.current, false);
+    const runSeek = useCallback((side: 'left' | 'right', taps: number, tapAt: number, x: number, y: number) => {
+        const step = PLAYER_CONSTANTS.DOUBLE_TAP_SEEK_SECONDS;
+        const prev = seekRunRef.current;
+        const continuing = !!prev && prev.side === side && tapAt - prev.lastAt < PLAYER_CONSTANTS.RIPPLE_DURATION_MS;
+        const run = prev && continuing
+            ? { ...prev, seconds: prev.seconds + step * taps, lastAt: tapAt }
+            : { side, base: currentTimeRef.current, seconds: step, lastAt: tapAt };
+
+        const target = run.base + (side === 'left' ? -run.seconds : run.seconds);
+        const newTime = Math.max(0, Math.min(durationShared.value || 0, target));
 
         // Nothing is announced until the seek is accepted. A double tap in the ~430 ms
-        // before the duration is known is dropped by the player, and showing the HUD
-        // anyway is what made an early skip read as a jump to 00:00.
+        // before the duration is known is dropped by the player.
         if (!commitSeek(newTime)) {
+            seekRunRef.current = null;
             return;
         }
+        seekRunRef.current = run;
+        if (!continuing) {
+            haptic('tick');
+            // The side readout sits where the jump buttons are; get them out of the way.
+            hideControls();
+        }
+        showRipple(side, run.seconds, x, y);
+    }, [commitSeek, currentTimeRef, durationShared, showRipple, hideControls]);
 
-        // Update the shared value used by VideoHUD for instant feedback
-        seekTimeShared.value = newTime;
+    // Double-tap zones: outer 40% each side seeks, the middle 20% plays/pauses.
+    const zoneAt = useCallback((x: number) => (
+        x < width * 0.4 ? 'left' : x > width * 0.6 ? 'right' : 'center'
+    ), [width]);
 
-        // Show seek HUD with direction and side for opposite-side positioning
-        const direction = side === 'left' ? 'backward' : 'forward';
-        hud.showSeekHUD(newTime, direction, side, false); // false = not gesture active, will auto-hide
+    const handleDoubleTap = useCallback((x: number, y: number) => {
+        const zone = zoneAt(x);
+        if (zone === 'center') {
+            // Controls stay as they are; VideoHUD flashes the new state if they're hidden.
+            togglePlayPause();
+            return;
+        }
+        runSeek(zone, 2, Date.now(), x, y);
+    }, [zoneAt, runSeek, togglePlayPause]);
 
-        // Trigger ripple effect at tap location
-        hud.showRipple(x, y, side);
-    }, [commitSeek, currentTimeRef, hud, seekTimeShared]);
+    const handleSingleTap = useCallback((x: number, y: number, tapAt: number) => {
+        if (ui.state.locked) {
+            // Taps never unlock: only the chip does (kids, pockets).
+            ui.showLockIconTemporarily();
+            return;
+        }
+        const zone = zoneAt(x);
+        const run = seekRunRef.current;
+        if (run && run.side === zone && tapAt - run.lastAt < PLAYER_CONSTANTS.RIPPLE_DURATION_MS) {
+            runSeek(zone, 1, tapAt, x, y);
+            return;
+        }
+        ui.toggleControls();
+    }, [ui, zoneAt, runSeek]);
 
     // ========================================================================
     // CREATE INDIVIDUAL GESTURES
@@ -379,7 +417,7 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
 
     const brightnessGesture = useBrightnessGesture({
         screenWidth: width,
-        leftZoneWidth,
+        leftZoneWidth: halfWidth,
         isLockedShared: ui.isLockedShared,
         currentBrightness,
         brightnessStart,
@@ -392,7 +430,7 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
 
     const volumeGesture = useVolumeGesture({
         screenWidth: width,
-        rightZoneWidth,
+        rightZoneWidth: halfWidth,
         isLockedShared: ui.isLockedShared,
         currentVolume: audioController.currentVolumeShared,
         volumeStart,
@@ -435,12 +473,9 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
     });
 
     const tapGestures = useTapGestures({
-        screenWidth: width,
-        currentTimeShared: player.currentTimeShared,
-        durationShared: player.durationShared,
         isLockedShared: ui.isLockedShared,
         onSingleTap: handleSingleTap,
-        onDoubleTapSeek: handleDoubleTapSeek,
+        onDoubleTap: handleDoubleTap,
         onLockTap: handleLockTap,
     });
 
@@ -506,12 +541,14 @@ export function usePlayerGestures(options: UsePlayerGesturesOptions): UsePlayerG
             currentBrightness,
             currentVolume,
             seekTime: seekTimeShared,
+            swipeSeeking: gestureActive,
+            swipeSeekStart: seekStartTime,
         },
         maxVolume: audioController.maxVolume,
         resetZoom,
     }), [
         composedGesture, videoAnimatedStyle,
-        zoomActive, pinchScale, currentBrightness, currentVolume, seekTimeShared,
+        zoomActive, pinchScale, currentBrightness, currentVolume, seekTimeShared, gestureActive, seekStartTime,
         audioController.maxVolume, resetZoom,
     ]);
 }

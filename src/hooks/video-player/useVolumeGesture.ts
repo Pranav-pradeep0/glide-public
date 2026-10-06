@@ -1,7 +1,7 @@
 /**
  * useVolumeGesture Hook
  *
- * Implements vertical pan gesture on the RIGHT side of screen to adjust volume.
+ * Implements vertical pan gesture on the RIGHT half of the screen to adjust volume.
  * Swipe up increases, swipe down decreases.
  */
 
@@ -41,7 +41,7 @@ interface UseVolumeGestureOptions {
 
 /**
  * Creates a vertical pan gesture for volume control.
- * Active only on the right ~15% of the screen.
+ * Active on the right half, minus the system-gesture strips at the top and bottom.
  */
 export function useVolumeGesture(options: UseVolumeGestureOptions) {
     const {
@@ -68,12 +68,12 @@ export function useVolumeGesture(options: UseVolumeGestureOptions) {
             .activeOffsetY([-25, 25])
             // Fail if horizontal swipe
             .failOffsetX([-15, 15])
-            // Only active on right side of screen
+            // Right half; the top/bottom strips belong to the notification shade and home gesture.
             .hitSlop({
                 left: -(screenWidth - rightZoneWidth),
                 right: 0,
-                top: 0,
-                bottom: 0,
+                top: -PLAYER_CONSTANTS.SYSTEM_EDGE_DP,
+                bottom: -PLAYER_CONSTANTS.SYSTEM_EDGE_DP,
             })
             .onStart((event) => {
                 'worklet';

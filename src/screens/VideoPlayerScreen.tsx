@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import { joinMeta, prettyTitle } from '@/components/VideoRow';
 import {
     StyleSheet,
     View,
@@ -26,13 +27,12 @@ import AnimatedVideoView from '@/components/VideoPlayer/AnimatedVideoView';
 import { VideoHUD } from '@/components/VideoPlayer/VideoHUD';
 import { PlayerControls } from '@/components/VideoPlayer/PlayerControls';
 import { LockButton } from '@/components/VideoPlayer/LockButton';
-import { BookmarkToast } from '@/components/BookmarkToast';
+import { SnackbarHost } from '@/components/ui';
 import { BookmarkPanel } from '@/components/VideoPlayer/BookmarkPanel';
 import { QuickSettingsPanel } from '@/components/VideoPlayer/QuickSettingsPanel';
 import { PlaylistPanel } from '@/components/VideoPlayer/PlaylistPanel';
 import { SubtitleOverlay, SubtitleSettings } from '@/components/SubtitleOverlay';
 import { TrackSelector } from '@/components/TrackSelector';
-import { EqualizerModal } from '@/components/EqualizerModal';
 import { FloatingSyncPanel } from '@/components/FloatingSyncPanel';
 import { useSubtitleAutoSync } from '@/hooks/video-player/useSubtitleAutoSync';
 import { RecapModal } from '@/components/VideoPlayer/RecapModal';
@@ -60,7 +60,6 @@ import { useAlbumVideos } from '@/hooks/useMediaService';
 
 // Services and stores
 import { VideoOrientationService } from '@/services/VideoOrientationService';
-import { HapticEngineService } from '@/services/HapticEngineService';
 import { NavigationService } from '@/services/NavigationService';
 import { useVideoHistoryStore } from '@/store/videoHistoryStore';
 import { useAppStore } from '@/store/appStore';
@@ -106,6 +105,9 @@ export default function VideoPlayerScreen({ route }: Props) {
         imdbId,
         cleanTitle,
     } = route.params;
+
+    // "The.Boys.S05E04.1080p" → "The Boys" + "S5 E4", as in the library.
+    const displayTitle = useMemo(() => prettyTitle(videoName), [videoName]);
 
     // Derive album name from parent folder if not provided
     const albumName = useMemo(() => {
@@ -205,9 +207,10 @@ export default function VideoPlayerScreen({ route }: Props) {
     // ORIENTATION LOCK STATE
     // ========================================================================
 
-    const [equalizerVisible, setEqualizerVisible] = React.useState(false);
-
     const [orientationLocked, setOrientationLocked] = React.useState(false);
+    const [scrubbing, setScrubbing] = React.useState(false);
+    /** Audio/Subtitles/Playlist/Bookmarks opened from the Playback panel get a back arrow to it. */
+    const [openedFromPlayback, setOpenedFromPlayback] = React.useState(false);
     const [syncPanelType, setSyncPanelType] = React.useState<'audio' | 'subtitle' | null>(null);
     const [basePlaybackRate, setBasePlaybackRate] = React.useState(1.0);
     const [temporaryHoldRate, setTemporaryHoldRate] = React.useState<number | null>(null);
@@ -220,6 +223,9 @@ export default function VideoPlayerScreen({ route }: Props) {
     const [isGeneratingRecap, setIsGeneratingRecap] = React.useState(false);
     const [recapLoadingMessage, setRecapLoadingMessage] = React.useState<string | undefined>(undefined);
     const [isRecapEligible, setIsRecapEligible] = React.useState(false);
+    // False while the answer is still coming (subtitle tracks load a few seconds in), so the
+    // resume prompt can offer Recap straight away with a spinner instead of popping it in late.
+    const [recapChecked, setRecapChecked] = React.useState(false);
 
     const handleToggleOrientationLock = useCallback(() => {
         if (orientationLocked) {
@@ -319,9 +325,12 @@ export default function VideoPlayerScreen({ route }: Props) {
             formattedTime: formatTime(resumePosition),
             remainingTime: savedDuration ? remaining : undefined,
             finishByTime: finishBy,
-            showRecap: !isNetworkStream && resumePosition > 120 && (!!imdbId || !!albumName) && isRecapEligible,
+            // Offered while still checking; withdrawn only on a definite no.
+            showRecap: RECAP_AVAILABLE && !isNetworkStream && resumePosition > 120 && (!!imdbId || !!albumName)
+                && (isRecapEligible || !recapChecked),
+            recapChecking: !recapChecked,
         };
-    }, [resumePosition, savedDuration, imdbId, albumName, isNetworkStream, isRecapEligible]);
+    }, [resumePosition, savedDuration, imdbId, albumName, isNetworkStream, isRecapEligible, recapChecked]);
 
     // ========================================================================
     // PLAYER HOOKS (ORDER MATTERS - dependencies flow down)
@@ -527,11 +536,12 @@ export default function VideoPlayerScreen({ route }: Props) {
 
         return {
             top: safeMargin,
-            bottom: 20, // Bottom usually needs less clearance (gesture bar is small)
+            // Portrait: the real gesture/nav bar inset. Landscape: the bar is at the side.
+            bottom: isLandscape ? 20 : Math.max(insets.bottom, 8),
             left: safeMargin,
             right: safeMargin,
         };
-    }, []);
+    }, [isLandscape, insets.bottom]);
 
     const subtitleSettings = useMemo<SubtitleSettings>(() => {
         let fontFamily = settings.subtitleFontFamily || Platform.select({ android: 'Roboto', ios: 'System', default: 'System' });
@@ -632,18 +642,8 @@ export default function VideoPlayerScreen({ route }: Props) {
         ui.scheduleAutoHide();
     }, [settingsHook, hud, ui]);
 
-    const handleToggleHaptics = useCallback(() => {
-        setHapticsEnabled(prev => {
-            const next = !prev;
-            bookmarksHook.showToastWithMessage(`Haptics ${next ? 'Enabled' : 'Disabled'}`);
-            if (next) {
-                HapticEngineService.getInstance().triggerUIFeedback('light');
-            }
-            return next;
-        });
-        ui.showControls();
-        ui.scheduleAutoHide();
-    }, [bookmarksHook, ui]);
+    // The panel's switch carries the feedback.
+    const handleToggleHaptics = useCallback(() => setHapticsEnabled(prev => !prev), []);
 
     const handleEnterPip = useCallback(() => {
         ui.closeAllPanels();
@@ -658,24 +658,21 @@ export default function VideoPlayerScreen({ route }: Props) {
     }, [player, ui]);
 
     const handleSlidingStart = useCallback(() => {
-        ui.cancelAutoHide();
+        setScrubbing(true);
         player.setIsSeeking(true);
-        // Capture start time for difference display
-        hud.setSeekStartTime(player.currentTimeRef.current);
-    }, [ui, hud, player]);
+    }, [player]);
 
+    // The seek bar's own preview bubble is the readout; no centre pill while scrubbing it.
     const handleSliderChange = useCallback((val: number) => {
-        // Update shared value for smooth HUD display
         gestures.sharedValues.seekTime.value = val;
         player.previewSeek(val);
-        hud.showSeekHUD(val, null, null, true); // isGestureActive=true
-    }, [player, hud, gestures]);
+    }, [player, gestures]);
 
     const handleSliderChangeComplete = useCallback((val: number) => {
         player.commitSeek(val);
-        hud.showSeekHUD(val, null, null, false); // isGestureActive=false, will auto-hide
+        hud.hideSeekHUD();
+        setScrubbing(false);
         ui.showControls();
-        ui.scheduleAutoHide();
     }, [player, hud, ui]);
 
     // Jump handlers
@@ -732,60 +729,52 @@ export default function VideoPlayerScreen({ route }: Props) {
     // ========================================================================
 
     const handleQSClose = useCallback(() => ui.closePanel('quickSettings'), [ui]);
-    const handleQSOpenPlaylist = useCallback(() => {
-        ui.closePanel('quickSettings');
-        ui.openPanel('playlist');
+    // openPanel closes the Playback panel; these remember where to go back to.
+    const openFromPlayback = useCallback((panel: 'playlist' | 'audioSelector' | 'subtitleSelector' | 'bookmarkPanel') => {
+        setOpenedFromPlayback(true);
+        ui.openPanel(panel);
     }, [ui]);
-    const handleQSOpenAudio = useCallback(() => {
-        ui.closePanel('quickSettings');
-        ui.openPanel('audioSelector');
-    }, [ui]);
-    const handleQSOpenSubtitle = useCallback(() => {
-        ui.closePanel('quickSettings');
-        ui.openPanel('subtitleSelector');
-    }, [ui]);
-    const handleQSOpenBookmarkPanel = useCallback(() => {
-        ui.closePanel('quickSettings');
-        ui.openPanel('bookmarkPanel'); // Assuming 'bookmarkPanel' is the key
-    }, [ui]);
+    const handleQSOpenPlaylist = useCallback(() => openFromPlayback('playlist'), [openFromPlayback]);
+    const handleQSOpenAudio = useCallback(() => openFromPlayback('audioSelector'), [openFromPlayback]);
+    const handleQSOpenSubtitle = useCallback(() => openFromPlayback('subtitleSelector'), [openFromPlayback]);
+    const handleQSOpenBookmarkPanel = useCallback(() => openFromPlayback('bookmarkPanel'), [openFromPlayback]);
 
     // ========================================================================
     // MEMOIZED CONTROL HANDLERS (Optimization)
     // ========================================================================
 
-    const handleToggleAudio = useCallback(() => ui.openPanel('audioSelector'), [ui]);
-    const handleToggleSubtitle = useCallback(() => ui.openPanel('subtitleSelector'), [ui]);
+    const handleToggleAudio = useCallback(() => {
+        setOpenedFromPlayback(false);
+        ui.openPanel('audioSelector');
+    }, [ui]);
+
+    const handleToggleSubtitle = useCallback(() => {
+        setOpenedFromPlayback(false);
+        ui.openPanel('subtitleSelector');
+    }, [ui]);
 
     const handleAddBookmark = useCallback(() => {
         bookmarksHook.addBookmark();
         ui.scheduleAutoHide();
     }, [bookmarksHook, ui]);
 
+    const handleToggleBookmarkPanel = useCallback(() => {
+        setOpenedFromPlayback(false);
+        ui.openPanel('bookmarkPanel');
+    }, [ui]);
+    const handleTogglePlaylist = useCallback(() => {
+        setOpenedFromPlayback(false);
+        ui.openPanel('playlist');
+    }, [ui]);
+
     const handleToggleQuickSettings = useCallback(() => ui.openPanel('quickSettings'), [ui]);
-    const handleToggleBookmarkPanel = useCallback(() => ui.openPanel('bookmarkPanel'), [ui]);
-    const handleTogglePlaylist = useCallback(() => ui.openPanel('playlist'), [ui]);
+    const handleBackToPlayback = useCallback(() => ui.openPanel('quickSettings'), [ui]);
 
-    const handleToggleSpeed = useCallback(() => {
-        // Cycle speed: 1.0 -> 1.5 -> 2.0 -> 2.5 -> 3.0 -> 0.5 -> 1.0
-        const rates = [1.0, 1.5, 2.0, 2.5, 3.0, 0.5];
-        const currentRate = basePlaybackRate;
-        const currentIndex = rates.indexOf(currentRate);
-        const nextIndex = ((currentIndex >= 0 ? currentIndex : 0) + 1) % rates.length;
-        const nextRate = rates[nextIndex];
-        setTemporaryHoldRate(null);
-        setBasePlaybackRate(nextRate);
-        hud.showSpeedHUD(nextRate, false);
-        ui.showControls();
-        ui.scheduleAutoHide();
-    }, [basePlaybackRate, hud, ui]);
-
+    // The panel shows the value; the hold chip is for the hold gesture.
     const handlePlaybackRateChange = useCallback((rate: number) => {
         setTemporaryHoldRate(null);
         setBasePlaybackRate(rate);
-        hud.showSpeedHUD(rate, false);
-        ui.showControls();
-        ui.scheduleAutoHide();
-    }, [hud, ui]);
+    }, []);
 
     const handleToggleBackgroundPlay = useCallback(() => {
         settingsHook.toggleBackgroundPlay();
@@ -902,7 +891,7 @@ export default function VideoPlayerScreen({ route }: Props) {
 
         const evaluateRecapEligibility = async () => {
             if (!RECAP_AVAILABLE) {
-                if (isActive) {setIsRecapEligible(false);}
+                if (isActive) {setIsRecapEligible(false); setRecapChecked(true);}
                 return;
             }
 
@@ -912,7 +901,13 @@ export default function VideoPlayerScreen({ route }: Props) {
                 resumePosition <= 120 ||
                 (!imdbId && !albumName)
             ) {
-                if (isActive) {setIsRecapEligible(false);}
+                if (isActive) {setIsRecapEligible(false); setRecapChecked(true);}
+                return;
+            }
+
+            // An empty track list before discovery finishes means "not yet", not "none".
+            if (!tracksHook.subtitleTracksReady) {
+                if (isActive) {setRecapChecked(false);}
                 return;
             }
 
@@ -925,6 +920,7 @@ export default function VideoPlayerScreen({ route }: Props) {
 
             if (isActive) {
                 setIsRecapEligible(result.eligible);
+                setRecapChecked(true);
             }
         };
 
@@ -937,6 +933,7 @@ export default function VideoPlayerScreen({ route }: Props) {
         videoPath,
         resumePosition,
         isNetworkStream,
+        tracksHook.subtitleTracksReady,
         imdbId,
         albumName,
         tracksHook.subtitleTracks,
@@ -1209,6 +1206,16 @@ export default function VideoPlayerScreen({ route }: Props) {
         return unsubscribe;
     }, [navigation, forceSave, player]);
 
+    // Controls only auto-hide while playing and not scrubbing.
+    const displayPaused = player.state.paused || resumeModalVisible || recapVisible;
+    const controlsShown = ui.state.controlsVisible && !ui.state.locked;
+    const { setAutoHideBlocked } = ui;
+    useEffect(() => {
+        setAutoHideBlocked(displayPaused || scrubbing);
+    }, [displayPaused, scrubbing, setAutoHideBlocked]);
+
+    const bookmarkTimes = useMemo(() => bookmarksHook.bookmarks.map(b => b.timestamp), [bookmarksHook.bookmarks]);
+
     // System bars
     useEffect(() => {
         SystemBars.setHidden(!ui.state.controlsVisible);
@@ -1227,7 +1234,7 @@ export default function VideoPlayerScreen({ route }: Props) {
         <View style={styles.container}>
             {/* Video with gestures */}
             <GestureDetector gesture={gestures.composedGesture}>
-                <View style={[StyleSheet.absoluteFill, { zIndex: 0 }]}>
+                <View style={styles.video}>
                     <AnimatedVideoView
                         ref={player.videoRef}
                         source={source}
@@ -1284,10 +1291,7 @@ export default function VideoPlayerScreen({ route }: Props) {
             {/* Night Mode Overlay - Sits between video and controls/HUD */}
             {!pipPresentationActive && nightMode && (
                 <View
-                    style={[
-                        StyleSheet.absoluteFill,
-                        { backgroundColor: 'black', opacity: 0.5, zIndex: 1 },
-                    ]}
+                    style={styles.nightMode}
                     pointerEvents="none"
                 />
             )}
@@ -1295,42 +1299,39 @@ export default function VideoPlayerScreen({ route }: Props) {
             {/* HUD indicators */}
             {!pipPresentationActive && (
                 <VideoHUD
-                    showSeekHUD={hud.state.seek.show}
-                    seekHUDTime={gestures.sharedValues.seekTime}
-                    seekStartTime={hud.state.seek.startTime}
-                    seekDirection={hud.state.seek.direction}
-                    seekSide={hud.state.seek.side}
                     showBrightnessHUD={hud.state.brightness.show}
                     brightnessHUD={gestures.sharedValues.currentBrightness}
                     showVolumeHUD={hud.state.volume.show}
                     volumeHUD={gestures.sharedValues.currentVolume}
+                    maxVolume={gestures.maxVolume}
                     showSpeedHUD={hud.state.speed.show}
                     playbackRate={effectivePlaybackRate}
                     zoomActive={hud.state.zoom.scale > 1}
                     zoomHUDScale={hud.state.zoom.scale}
-                    shouldShowBuffer={shouldShowBuffer}
-                    formatTime={formatTime}
-                    showRipple={hud.state.ripple.show}
-                    rippleX={hud.state.ripple.x}
-                    rippleY={hud.state.ripple.y}
-                    rippleSide={hud.state.ripple.side}
+                    ripple={hud.state.ripple}
                     showResizeHUD={hud.state.resize.show}
                     resizeMode={hud.state.resize.mode}
-                    maxVolume={gestures.maxVolume}
+                    paused={player.state.paused}
+                    controlsVisible={controlsShown}
+                    topInset={effectiveInsets.top}
                 />
             )}
 
-
-            {/* Controls - hide in PIP mode */}
-            {ui.state.controlsVisible && !ui.state.locked && !pipPresentationActive && (
+            {/* Controls - hide in PIP mode. Mounted while hidden so they can fade out. */}
+            {!pipPresentationActive && (
                 <PlayerControls
-                    showControls={ui.state.controlsVisible && !ui.state.locked}
-                    title={videoName}
+                    showControls={controlsShown}
+                    title={displayTitle.title}
+                    subtitle={joinMeta(displayTitle.detail, albumName) || undefined}
+                    videoEnhancement={settingsHook.settings.videoEnhancement}
+                    onToggleVideoEnhancement={settingsHook.toggleVideoEnhancement}
                     onBack={handleGoBack}
-                    onToggleAudio={handleToggleAudio}
-                    onToggleSubtitle={handleToggleSubtitle}
+                    onOpenSubtitles={handleToggleSubtitle}
+                    onOpenAudio={handleToggleAudio}
                     onAddBookmark={isNetworkStream ? undefined : handleAddBookmark}
-                    paused={player.state.paused || resumeModalVisible || recapVisible}
+                    onOpenPlayback={handleToggleQuickSettings}
+                    playbackRate={basePlaybackRate}
+                    paused={displayPaused}
                     onTogglePlayPause={handleTogglePlayPause}
                     currentTime={player.currentTimeShared}
                     duration={player.durationShared}
@@ -1338,52 +1339,46 @@ export default function VideoPlayerScreen({ route }: Props) {
                     durationSeconds={player.state.duration}
                     seekPreviewTime={gestures.sharedValues.seekTime}
                     isScrubbingShared={player.isScrubbingShared}
+                    swipeSeeking={gestures.sharedValues.swipeSeeking}
+                    swipeSeekStart={gestures.sharedValues.swipeSeekStart}
+                    screenReaderEnabled={ui.screenReaderEnabled}
                     onSeekStart={handleSlidingStart}
                     onSeek={handleSliderChange}
                     onSeekComplete={handleSliderChangeComplete}
+                    bookmarks={isNetworkStream ? undefined : bookmarkTimes}
+                    buffering={shouldShowBuffer}
                     errorText={player.state.errorText}
                     isLandscape={isLandscape}
                     insets={effectiveInsets}
-                    audioTrackSelected={tracksHook.selectedAudioTrackId !== undefined}
-                    subtitleTrackSelected={tracksHook.selectedSubtitleTrackIndex !== null}
-                    formatTime={formatTime}
-                    onToggleQuickSettings={handleToggleQuickSettings}
-                    onToggleBookmarkPanel={isNetworkStream ? undefined : handleToggleBookmarkPanel}
-                    onTogglePlaylist={isNetworkStream ? undefined : handleTogglePlaylist}
-                    // New Props for Redesign
+                    onOpenBookmarks={isNetworkStream ? undefined : handleToggleBookmarkPanel}
+                    onOpenPlaylist={isNetworkStream ? undefined : handleTogglePlaylist}
                     onNext={!isNetworkStream && hasNext ? handleNext : undefined}
-                    onPrev={!isNetworkStream && hasPrevious ? handlePrevious : undefined}
                     onJumpBackward={handleJumpBackward}
                     onJumpForward={handleJumpForward}
-                    onToggleLock={handleToggleOrientationLock}
-                    isLocked={orientationLocked}
+                    onLockScreen={ui.lock}
+                    nightModeActive={nightMode}
+                    onToggleNightMode={toggleNightMode}
+                    muted={settingsHook.settings.muted}
+                    onToggleMute={settingsHook.toggleMute}
+                    orientationLocked={orientationLocked}
+                    onToggleOrientationLock={handleToggleOrientationLock}
                     onToggleResizeMode={handleToggleResizeMode}
                     resizeMode={settingsHook.settings.resizeMode}
-                    onToggleNightMode={toggleNightMode}
-                    nightModeActive={nightMode}
-                    playMode={playMode}
-                    playbackRate={basePlaybackRate}
-                    onToggleSpeed={handleToggleSpeed}
-                    onToggleHaptics={handleToggleHaptics}
-                    hapticsEnabled={hapticsEnabled}
-                    onToggleBackgroundPlay={handleToggleBackgroundPlay}
-                    backgroundPlayEnabled={settingsHook.settings.backgroundPlayEnabled}
                     onEnterPip={handleEnterPip}
-                    videoEnhancement={settingsHook.settings.videoEnhancement}
-                    onToggleVideoEnhancement={settingsHook.toggleVideoEnhancement}
                     showSeekButtons={settings.showSeekButtons}
                     seekDuration={settings.seekDuration}
                 />
             )}
 
-            {/* Lock button - hide in PIP mode */}
-            {!pipPresentationActive && ((ui.state.controlsVisible && !ui.state.locked) || (ui.state.locked && ui.state.lockIconVisible)) ? (
+            {/* Locked: a tap on the video shows this chip; only the chip unlocks */}
+            {!pipPresentationActive && (
                 <LockButton
-                    isLocked={ui.state.locked}
-                    showLockIcon={true}
-                    onToggleLock={ui.toggleLock}
+                    visible={ui.state.locked && ui.state.lockIconVisible}
+                    onUnlock={ui.unlock}
+                    top={effectiveInsets.top + 12}
+                    left={effectiveInsets.left + 16}
                 />
-            ) : null}
+            )}
 
             {/* Quick settings panel */}
             {!pipPresentationActive && ui.state.quickSettingsOpen && (
@@ -1415,7 +1410,15 @@ export default function VideoPlayerScreen({ route }: Props) {
                     videoEnhancement={settingsHook.settings.videoEnhancement}
                     onToggleVideoEnhancement={settingsHook.toggleVideoEnhancement}
                     videoEnhancementStrength={settingsHook.settings.videoEnhancementStrength}
+                    nightModeActive={nightMode}
+                    onToggleNightMode={toggleNightMode}
+                    backgroundPlayEnabled={settingsHook.settings.backgroundPlayEnabled}
+                    onToggleBackgroundPlay={handleToggleBackgroundPlay}
+                    hapticsEnabled={playMode === 'with-haptics' ? hapticsEnabled : undefined}
+                    onToggleHaptics={playMode === 'with-haptics' ? handleToggleHaptics : undefined}
                     onSetVideoEnhancementStrength={settingsHook.setVideoEnhancementStrength}
+                    audioValue={tracksHook.audioTracksForSelector.find(t => t.index === tracksHook.selectedAudioTrackId)?.title}
+                    subtitleValue={tracksHook.subtitleTracksForSelector.find(t => t.index === tracksHook.selectedSubtitleTrackIndex)?.title ?? 'Off'}
                 />
             )}
 
@@ -1424,6 +1427,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                 <PlaylistPanel
                     visible={ui.state.playlistOpen}
                     onClose={() => ui.closePanel('playlist')}
+                    onBack={openedFromPlayback ? handleBackToPlayback : undefined}
                     currentVideoPath={videoPath}
                     onPlayVideo={handlePlayVideo}
                     isLandscape={isLandscape}
@@ -1437,6 +1441,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                     <TrackSelector
                         visible={ui.state.audioSelectorOpen}
                         onClose={() => ui.closePanel('audioSelector')}
+                        onBack={openedFromPlayback ? handleBackToPlayback : undefined}
                         tracks={tracksHook.audioTracksForSelector}
                         selectedTrackIndex={tracksHook.selectedAudioTrackId}
                         onSelectTrack={tracksHook.selectAudioTrack}
@@ -1445,7 +1450,12 @@ export default function VideoPlayerScreen({ route }: Props) {
                         equalizerPreset={settingsHook.settings.equalizerPreset}
                         onToggleEqualizer={settingsHook.toggleEqualizer}
                         onSelectPreset={settingsHook.setEqualizerPreset}
-                        onOpenEqualizerModal={() => setEqualizerVisible(true)}
+                        equalizerBands={settingsHook.settings.customEqualizerBands}
+                        onSetEqualizerBand={settingsHook.setSingleBand}
+                        onResetEqualizer={() => {
+                            settingsHook.setEqualizerPreset('flat');
+                            settingsHook.setCustomEqualizerBands([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+                        }}
                         onOpenSyncPanel={(type) => {
                             setSyncPanelType(type);
                             ui.closeAllPanels();
@@ -1456,6 +1466,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                     <TrackSelector
                         visible={ui.state.subtitleSelectorOpen}
                         onClose={() => ui.closePanel('subtitleSelector')}
+                        onBack={openedFromPlayback ? handleBackToPlayback : undefined}
                         tracks={tracksHook.subtitleTracksForSelector}
                         selectedTrackIndex={tracksHook.selectedSubtitleTrackIndex}
                         onSelectTrack={tracksHook.selectSubtitleTrack}
@@ -1475,24 +1486,6 @@ export default function VideoPlayerScreen({ route }: Props) {
                 )}
             </View>
 
-            {/* Equalizer modal - rendered LAST so it appears on top of TrackSelector */}
-            <View style={styles.modalPortalWrapper} pointerEvents="box-none">
-                <EqualizerModal
-                    visible={!pipPresentationActive && equalizerVisible}
-                    onClose={() => setEqualizerVisible(false)}
-                    activePresetId={settingsHook.settings.equalizerPreset}
-                    customBands={settingsHook.settings.customEqualizerBands}
-                    onSelectPreset={settingsHook.setEqualizerPreset}
-                    onSetBandValue={settingsHook.setSingleBand}
-                    onReset={() => {
-                        settingsHook.setEqualizerPreset('flat');
-                        settingsHook.setCustomEqualizerBands([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-                    }}
-                    enabled={settingsHook.settings.equalizerEnabled}
-                    onToggleEnabled={settingsHook.toggleEqualizer}
-                />
-            </View>
-
             {/* Subtitle overlay */}
             {!pipPresentationActive && (
                 <SubtitleOverlay
@@ -1503,19 +1496,6 @@ export default function VideoPlayerScreen({ route }: Props) {
                 />
             )}
 
-            {/* Bookmark toast */}
-            {
-                !isNetworkStream && bookmarksHook.showToast && !pipPresentationActive && (
-                    <BookmarkToast
-                        key={bookmarksHook.toastKey}
-                        visible={bookmarksHook.showToast}
-                        message={bookmarksHook.toastMessage}
-                        duration={PLAYER_CONSTANTS.BOOKMARK_TOAST_DURATION_MS}
-                        onHide={bookmarksHook.hideToast}
-                    />
-                )
-            }
-
             {/* Bookmark panel */}
             {!pipPresentationActive && !isNetworkStream && (
                 <BookmarkPanel
@@ -1523,6 +1503,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                     bookmarks={bookmarksHook.bookmarks}
                     currentTime={player.currentTimeShared}
                     onClose={() => ui.closePanel('bookmarkPanel')}
+                    onBack={openedFromPlayback ? handleBackToPlayback : undefined}
                     onSelectBookmark={bookmarksHook.jumpToBookmark}
                     onDeleteBookmark={bookmarksHook.deleteBookmark}
                     formatTime={formatTime}
@@ -1553,13 +1534,12 @@ export default function VideoPlayerScreen({ route }: Props) {
                 <View style={styles.modalPortalWrapper} pointerEvents="box-none">
                     <ResumeModal
                         visible={resumeModalVisible}
-                        videoName={videoName}
-                        resumeTime={resumePosition || 0}
                         formattedResumeTime={resumeModalData?.formattedTime || ''}
                         remainingTime={resumeModalData?.remainingTime}
                         finishByTime={resumeModalData?.finishByTime}
                         showRecapOption={!!resumeModalData?.showRecap}
                         isGeneratingRecap={isGeneratingRecap}
+                        recapChecking={!!resumeModalData?.recapChecking}
                         onResume={() => handleResumeModalAction('resume')}
                         onRestart={() => handleResumeModalAction('restart')}
                         onRecap={() => handleResumeModalAction('recap')}
@@ -1567,7 +1547,10 @@ export default function VideoPlayerScreen({ route }: Props) {
                     />
                 </View>
             )}
-        </View >
+
+            {/* Above everything, clear of the seek bar and tools row when they show */}
+            {!pipPresentationActive && <SnackbarHost bottomOffset={controlsShown ? 96 : 0} />}
+        </View>
     );
 }
 
@@ -1578,14 +1561,18 @@ export default function VideoPlayerScreen({ route }: Props) {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#000',
+        backgroundColor: 'black',
     },
+    video: { ...StyleSheet.absoluteFill, zIndex: 0 },
+    nightMode: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1 },
     modalPortalWrapper: {
         position: 'absolute',
         top: 0,
         left: 0,
         right: 0,
         bottom: 0,
+        // Above PlayerControls (10): zIndex only orders siblings, so the wrapper itself needs it.
+        zIndex: 50,
         elevation: 10,
     },
 });

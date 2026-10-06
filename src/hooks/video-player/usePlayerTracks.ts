@@ -69,6 +69,7 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
 
     // Subtitles
     const [subtitleTracks, setSubtitleTracks] = useState<SubtitleTrack[]>([]);
+    const [subtitleTracksReady, setSubtitleTracksReady] = useState(false);
     const [selectedSubtitleTrackIndex, setSelectedSubtitleTrackIndex] = useState<number | null>(initialSubtitleTrackIndex ?? null);
 
     // Sync initial subtitle track when it becomes available (hydration)
@@ -168,6 +169,7 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
     // Load embedded subtitle tracks on mount
     useEffect(() => {
         let mounted = true;
+        setSubtitleTracksReady(false);
 
         const loadSubtitleTracks = async () => {
             try {
@@ -182,6 +184,8 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
                 if (__DEV__) {
                     console.error('[usePlayerTracks] Failed to load subtitle tracks:', error);
                 }
+            } finally {
+                if (mounted) {setSubtitleTracksReady(true);}
             }
         };
 
@@ -371,6 +375,7 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
 
         // Subtitles
         subtitleTracks,
+        subtitleTracksReady,
         selectedSubtitleTrackIndex,
         subtitleCues,
         currentSubtitleCue,
@@ -398,7 +403,7 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
         setSubtitleCues,
     }), [
         audioTracks, selectedAudioTrackId, selectAudioTrack,
-        subtitleTracks, selectedSubtitleTrackIndex, subtitleCues, currentSubtitleCue, selectSubtitleTrack,
+        subtitleTracks, subtitleTracksReady, selectedSubtitleTrackIndex, subtitleCues, currentSubtitleCue, selectSubtitleTrack,
         externalSubtitles, currentExternalName, loadExternalCues, loadSDHForHaptics,
         hapticCues,
         audioTracksForSelector, subtitleTracksForSelector,

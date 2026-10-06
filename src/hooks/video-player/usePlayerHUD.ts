@@ -6,6 +6,7 @@
  */
 
 import { useReducer, useCallback, useRef, useMemo, useEffect } from 'react';
+import { AccessibilityInfo } from 'react-native';
 import {
     HUDState,
     HUDAction,
@@ -24,7 +25,7 @@ export const initialHUDState: HUDState = {
     speed: { show: false, rate: 1.0 },
     resize: { show: false, mode: 'contain' },
     zoom: { scale: 1 },
-    ripple: { show: false, x: 0, y: 0, side: 'right' },
+    ripple: { show: false, side: 'right', seconds: 0, x: 0, y: 0, at: 0 },
 };
 
 // ============================================================================
@@ -124,7 +125,7 @@ export function hudReducer(state: HUDState, action: HUDAction): HUDState {
         case 'SHOW_RIPPLE':
             return {
                 ...state,
-                ripple: { show: true, x: action.x, y: action.y, side: action.side },
+                ripple: { show: true, side: action.side, seconds: action.seconds, x: action.x, y: action.y, at: action.at },
             };
         case 'HIDE_RIPPLE':
             return {
@@ -364,11 +365,13 @@ export function usePlayerHUD(): UsePlayerHUDReturn {
     // RIPPLE HUD
     // ========================================================================
 
-    const showRipple = useCallback((x: number, y: number, side: 'left' | 'right') => {
-        dispatch({ type: 'SHOW_RIPPLE', x, y, side });
+    const showRipple = useCallback((side: 'left' | 'right', seconds: number, x: number, y: number) => {
+        dispatch({ type: 'SHOW_RIPPLE', side, seconds, x, y, at: Date.now() });
         clearTimer('ripple');
+        // The run ends when this fires: announce the total once rather than every tap.
         timerRefs.current.ripple = setTimeout(() => {
             dispatch({ type: 'HIDE_RIPPLE' });
+            AccessibilityInfo.announceForAccessibility(`${side === 'left' ? 'Back' : 'Forward'} ${seconds} seconds`);
         }, PLAYER_CONSTANTS.RIPPLE_DURATION_MS);
     }, [clearTimer]);
 

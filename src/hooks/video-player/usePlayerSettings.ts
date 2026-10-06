@@ -5,6 +5,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
+import { DISPLAY_MODES } from '@/components/VideoPlayer/PlayerIcons';
 import type { PlayerResizeMode } from '@/components/VideoPlayer/GlidePlayer';
 import { PlayerSettings, UsePlayerSettingsReturn } from './types';
 import { EQUALIZER_PRESETS } from '@/config/equalizerPresets';
@@ -134,9 +135,9 @@ export function usePlayerSettings(options: UsePlayerSettingsOptions = {}): UsePl
 
     const toggleResizeMode = useCallback(() => {
         setSettings(prev => {
-            const modes = ['best-fit', 'contain', 'cover', 'fill', 'scale-down', 'none'] as PlayerResizeMode[];
-            const nextIndex = (modes.indexOf(prev.resizeMode) + 1) % modes.length;
-            return { ...prev, resizeMode: modes[nextIndex] };
+            // Same list as the Display page, so the button and the panel always agree.
+            const nextIndex = (DISPLAY_MODES.findIndex(m => m.mode === prev.resizeMode) + 1) % DISPLAY_MODES.length;
+            return { ...prev, resizeMode: DISPLAY_MODES[nextIndex].mode };
         });
     }, []);
 

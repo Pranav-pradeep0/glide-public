@@ -14,12 +14,11 @@ import { SubtitleCue, VideoBookmark } from '@/types';
 export const PLAYER_CONSTANTS = {
     BUFFER_EPS: 0.25,
     HUD_HIDE_MS: 800,
-    RIPPLE_DURATION_MS: 600,
+    RIPPLE_DURATION_MS: 800,
     SPEED_HUD_HIDE_MS: 1500,
     CONTROLS_AUTO_HIDE_MS: 3000,
     BUFFERING_TIMEOUT_MS: 300,
     PROGRESS_SAVE_INTERVAL_MS: 2000,
-    BOOKMARK_TOAST_DURATION_MS: 3000,
     RESUME_DELAY_MS: 100,
     // Gesture thresholds
     SEEK_SENSITIVITY: 0.10,
@@ -29,6 +28,8 @@ export const PLAYER_CONSTANTS = {
     ZOOM_MIN: 1,
     ZOOM_MAX: 3,
     DOUBLE_TAP_SEEK_SECONDS: 10,
+    /** Top/bottom strips left to the notification shade and home gesture. */
+    SYSTEM_EDGE_DP: 48,
 } as const;
 
 // ============================================================================
@@ -128,9 +129,14 @@ export interface ResizeModeHUDState {
 
 export interface RippleHUDState {
     show: boolean;
+    side: 'left' | 'right';
+    /** Accumulated double-tap seek, shown as "20s". */
+    seconds: number;
+    /** Where the latest tap of the run landed (window coordinates), for the touch pulse. */
     x: number;
     y: number;
-    side: 'left' | 'right';
+    /** Latest tap time: changes on every tap, retriggering the pulse. */
+    at: number;
 }
 
 export interface HUDState {
@@ -158,7 +164,7 @@ export type HUDAction =
     | { type: 'SHOW_RESIZE'; mode: string }
     | { type: 'HIDE_RESIZE' }
     | { type: 'UPDATE_ZOOM'; scale: number }
-    | { type: 'SHOW_RIPPLE'; x: number; y: number; side: 'left' | 'right' }
+    | { type: 'SHOW_RIPPLE'; side: 'left' | 'right'; seconds: number; x: number; y: number; at: number }
     | { type: 'HIDE_RIPPLE' }
     | { type: 'RESET_ALL' }
     | { type: 'RESET_SPEED' };
@@ -296,6 +302,10 @@ export interface UsePlayerUIReturn {
     unlock: () => void;
     toggleLock: () => void;
     showLockIconTemporarily: () => void;
+    /** Paused or scrubbing: controls stay up until this clears. */
+    setAutoHideBlocked: (blocked: boolean) => void;
+    /** TalkBack is on: controls never auto-hide. */
+    screenReaderEnabled: boolean;
 
     // Panel actions
     openPanel: (panel: PanelType) => void;
@@ -321,7 +331,7 @@ export interface UsePlayerHUDReturn {
     resetSpeed: () => void;
     updateZoom: (scale: number) => void;
     resetAll: () => void;
-    showRipple: (x: number, y: number, side: 'left' | 'right') => void;
+    showRipple: (side: 'left' | 'right', seconds: number, x: number, y: number) => void;
     hideRipple: () => void;
 }
 
@@ -333,6 +343,8 @@ export interface UsePlayerTracksReturn {
 
     // Subtitles
     subtitleTracks: SubtitleTrack[];
+    /** Embedded-track discovery has finished, found or not. Until then an empty list means "not yet". */
+    subtitleTracksReady: boolean;
     selectedSubtitleTrackIndex: number | null;
     subtitleCues: SubtitleCue[];
     currentSubtitleCue: SubtitleCue | null;
@@ -363,15 +375,12 @@ export interface UsePlayerTracksReturn {
 
 export interface UsePlayerBookmarksReturn {
     bookmarks: VideoBookmark[];
-    showToast: boolean;
-    toastMessage: string;
-    toastKey: number;
 
     // Actions
     addBookmark: () => void;
     deleteBookmark: (bookmarkId: string) => void;
     jumpToBookmark: (timestamp: number) => void;
-    hideToast: () => void;
+    /** Plain snackbar. */
     showToastWithMessage: (message: string) => void;
 }
 

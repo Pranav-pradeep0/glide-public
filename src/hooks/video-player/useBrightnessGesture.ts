@@ -1,7 +1,7 @@
 /**
  * useBrightnessGesture Hook
  *
- * Implements vertical pan gesture on the LEFT side of screen to adjust brightness.
+ * Implements vertical pan gesture on the LEFT half of the screen to adjust brightness.
  * Swipe up increases, swipe down decreases.
  */
 
@@ -39,7 +39,7 @@ interface UseBrightnessGestureOptions {
 
 /**
  * Creates a vertical pan gesture for brightness control.
- * Active only on the left ~15% of the screen.
+ * Active on the left half, minus the system-gesture strips at the top and bottom.
  */
 export function useBrightnessGesture(options: UseBrightnessGestureOptions) {
     const {
@@ -65,12 +65,12 @@ export function useBrightnessGesture(options: UseBrightnessGestureOptions) {
             .activeOffsetY([-25, 25])
             // Fail if horizontal swipe
             .failOffsetX([-15, 15])
-            // Only active on left side of screen
+            // Left half; the top/bottom strips belong to the notification shade and home gesture.
             .hitSlop({
                 left: 0,
                 right: -(screenWidth - leftZoneWidth),
-                top: 0,
-                bottom: 0,
+                top: -PLAYER_CONSTANTS.SYSTEM_EDGE_DP,
+                bottom: -PLAYER_CONSTANTS.SYSTEM_EDGE_DP,
             })
             .onStart((event) => {
                 'worklet';
