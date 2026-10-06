@@ -1,4 +1,5 @@
 // src/types/index.ts
+import type { NavigatorScreenParams } from '@react-navigation/native';
 
 
 export interface VideoFile {
@@ -104,7 +105,7 @@ export type PlayMode = 'with-haptics' | 'normal';
 
 export type RootStackParamList = {
     Onboarding: undefined;
-    MainTabs: undefined;
+    MainTabs: NavigatorScreenParams<MainTabParamList> | undefined;
     PlayerDetail: {
         videoPath: string;
         videoName: string;

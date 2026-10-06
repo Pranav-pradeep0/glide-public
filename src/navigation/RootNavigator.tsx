@@ -1,13 +1,14 @@
 import React, { useEffect, useRef, useCallback } from 'react';
 import { DefaultTheme, NavigationContainer, NavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { createBottomTabNavigator, BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { useAppStore } from '../store/appStore';
 import { useTheme } from '../hooks/useTheme';
 import { Feather } from '@react-native-vector-icons/feather';
 import { DeepLinkService } from '../services/DeepLinkService';
-import { BlurView } from '@react-native-community/blur';
-import { Platform, StyleSheet, View } from 'react-native';
+import { Platform, StyleSheet, Text, View } from 'react-native';
+import { Touchable, SnackbarHost } from '@/components/ui';
+import { metrics, type } from '@/theme/theme';
 
 import OnboardingScreen from '@/screens/OnboardingScreen';
 import RecentsScreen from '@/screens/RecentsScreen';
@@ -22,63 +23,75 @@ import { MainTabParamList, RootStackParamList } from '@/types';
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
+const TAB_HEIGHT = 64;
+
+// React Navigation calls `tabBar` as a plain function, so TabBar must be rendered as an element to use hooks.
+const renderTabBar = (props: BottomTabBarProps) => <TabBar {...props} />;
+
+function TabBar({ state, descriptors, navigation, insets }: BottomTabBarProps) {
+    const { colors } = useTheme();
+    return (
+        <View
+            style={[
+                styles.tabBar,
+                {
+                    backgroundColor: colors.surface,
+                    borderTopColor: colors.border,
+                    paddingBottom: insets.bottom,
+                    height: TAB_HEIGHT + insets.bottom,
+                },
+            ]}
+        >
+            {state.routes.map((route, index) => {
+                const { options } = descriptors[route.key];
+                const focused = state.index === index;
+                const label = options.title ?? route.name;
+                const onPress = () => {
+                    const event = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
+                    if (!focused && !event.defaultPrevented) {
+                        navigation.navigate(route.name, route.params);
+                    }
+                };
+                return (
+                    <Touchable
+                        key={route.key}
+                        onPress={onPress}
+                        scaleTo={1}
+                        accessibilityRole="tab"
+                        accessibilityLabel={label}
+                        accessibilityState={{ selected: focused }}
+                        style={styles.tab}
+                    >
+                        <View style={styles.pill}>
+                            {/* Mounted fresh with its colour: Fabric drops borderRadius when a background is added to an existing view. */}
+                            {focused && <View style={[styles.pillFill, { backgroundColor: colors.primaryContainer }]} />}
+                            {options.tabBarIcon?.({ focused, color: focused ? colors.primary : colors.textSecondary, size: 24 })}
+                        </View>
+                        <Text style={[type.caption, styles.label, { color: focused ? colors.text : colors.textSecondary }]}>
+                            {label}
+                        </Text>
+                    </Touchable>
+                );
+            })}
+        </View>
+    );
+}
+
 function MainTabs() {
-    const theme = useTheme();
+    const { colors } = useTheme();
     const { updateStatus } = useAppStore();
-    const showUpdateBadge = updateStatus.available;
 
     return (
         <Tab.Navigator
-            screenOptions={{
-                tabBarActiveTintColor: theme.colors.primary,
-                tabBarInactiveTintColor: theme.colors.textSecondary,
-                tabBarShowLabel: true,
-                tabBarLabelStyle: {
-                    fontSize: 10,
-                    fontWeight: '600',
-                    marginBottom: 4,
-                },
-                tabBarStyle: {
-                    position: 'absolute',
-                    bottom: 32,
-                    marginLeft: 48,
-                    marginRight: 48,
-                    height: 64,
-                    borderRadius: 32,
-                    backgroundColor: 'transparent',
-                    borderTopWidth: 0,
-                    elevation: 0,
-                    // Glass border effect
-                    paddingBottom: 8,
-                    paddingTop: 8,
-                    overflow: 'hidden',
-                },
-                tabBarBackground: () => (
-                    <View style={[StyleSheet.absoluteFill, { borderRadius: 32, overflow: 'hidden' }]}>
-                        <BlurView
-                            style={StyleSheet.absoluteFill}
-                            blurType={theme.dark ? 'dark' : 'light'}
-                            blurAmount={20}
-                            reducedTransparencyFallbackColor={theme.colors.card}
-                        />
-                    </View>
-                ),
-                headerStyle: {
-                    backgroundColor: theme.colors.card,
-                },
-                headerTintColor: theme.colors.text,
-                lazy: true,
-            }}
+            tabBar={renderTabBar}
+            screenOptions={{ headerShown: false, lazy: true }}
         >
             <Tab.Screen
                 name="Folders"
                 component={FoldersScreen}
                 options={{
-                    headerShown: false,
                     title: 'Folders',
-                    tabBarIcon: ({ color, size, focused }) => (
-                        <Feather name="folder" size={24} color={color} style={{ marginBottom: 4 }} />
-                    ),
+                    tabBarIcon: ({ color }) => <Feather name="folder" size={22} color={color} />,
                 }}
             />
             <Tab.Screen
@@ -86,10 +99,7 @@ function MainTabs() {
                 component={RecentsScreen}
                 options={{
                     title: 'Recents',
-                    headerShown: false,
-                    tabBarIcon: ({ color, size }) => (
-                        <Feather name="clock" size={24} color={color} style={{ marginBottom: 4 }} />
-                    ),
+                    tabBarIcon: ({ color }) => <Feather name="clock" size={22} color={color} />,
                 }}
             />
             <Tab.Screen
@@ -97,27 +107,10 @@ function MainTabs() {
                 component={SettingsScreen}
                 options={{
                     title: 'Settings',
-                    headerShown: false,
                     tabBarIcon: ({ color }) => (
-                        <View style={{ width: 28, height: 28, marginBottom: 4 }}>
-                            <Feather name="settings" size={24} color={color} />
-                            {showUpdateBadge && (
-                                <View
-                                    style={{
-                                        position: 'absolute',
-                                        top: -5,
-                                        right: -6,
-                                        width: 18,
-                                        height: 18,
-                                        borderRadius: 9,
-                                        backgroundColor: theme.colors.primary,
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                    }}
-                                >
-                                    <Feather name="arrow-up" size={12} color="#000" />
-                                </View>
-                            )}
+                        <View>
+                            <Feather name="settings" size={22} color={color} />
+                            {updateStatus.available && <View style={[styles.badge, { backgroundColor: colors.primary }]} />}
                         </View>
                     ),
                 }}
@@ -164,7 +157,7 @@ export default function RootNavigator({ onReady }: RootNavigatorProps) {
                 colors: {
                     primary: theme.colors.primary,
                     background: theme.colors.background,
-                    card: theme.colors.card,
+                    card: theme.colors.surface,
                     text: theme.colors.text,
                     border: theme.colors.border,
                     notification: theme.colors.primary,
@@ -229,8 +222,16 @@ export default function RootNavigator({ onReady }: RootNavigatorProps) {
                     </>
                 )}
             </Stack.Navigator>
+            <SnackbarHost bottomOffset={TAB_HEIGHT} />
         </NavigationContainer>
     );
 }
 
-
+const styles = StyleSheet.create({
+    tabBar: { flexDirection: 'row', borderTopWidth: StyleSheet.hairlineWidth },
+    tab: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: metrics.space.xs },
+    pill: { width: 56, height: 32, alignItems: 'center', justifyContent: 'center' },
+    pillFill: { ...StyleSheet.absoluteFill, borderRadius: 16 },
+    label: { fontWeight: '500' },
+    badge: { position: 'absolute', top: -2, right: -4, width: 8, height: 8, borderRadius: 4 },
+});

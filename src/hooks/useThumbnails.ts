@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { ThumbnailService } from '@/services/ThumbnailService';
 
-export function useThumbnail(videoPath: string | undefined, duration: number = 0) {
+export function useThumbnail(videoPath: string | undefined) {
     const [thumbnail, setThumbnail] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
 
@@ -36,10 +36,10 @@ export function useThumbnail(videoPath: string | undefined, duration: number = 0
         return () => {
             isMounted = false;
             if (videoPath) {
-                ThumbnailService.cancelRequest(videoPath, duration || 0);
+                ThumbnailService.cancelRequest(videoPath);
             }
         };
-    }, [videoPath, duration]);
+    }, [videoPath]);
 
     return { thumbnail, loading };
 }

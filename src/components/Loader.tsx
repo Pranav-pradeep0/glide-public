@@ -2,59 +2,48 @@
 import React from 'react';
 import { View, ActivityIndicator, StyleSheet, Text } from 'react-native';
 import { useTheme } from '@/hooks/useTheme';
+import { metrics, type } from '@/theme/theme';
 
 interface LoaderProps {
     size?: 'small' | 'medium' | 'large';
     text?: string;
+    /** Fill and centre in the parent on the page background. Pass false for an inline spinner. */
     fullScreen?: boolean;
 }
 
-export function Loader({ size = 'medium', text, fullScreen = false }: LoaderProps) {
-    const theme = useTheme();
-
-    const sizes = {
-        small: { spinner: 24, dot: 8, container: 40 },
-        medium: { spinner: 36, dot: 12, container: 60 },
-        large: { spinner: 48, dot: 16, container: 80 },
-    };
-
-    const currentSize = sizes[size];
-
-    const containerStyle = fullScreen
-        ? [styles.fullScreenContainer, { backgroundColor: theme.colors.background }]
-        : styles.inlineContainer;
+export function Loader({ size = 'medium', text, fullScreen = true }: LoaderProps) {
+    const { colors } = useTheme();
 
     return (
-        <View style={containerStyle}>
-            <View style={styles.loaderContent}>
-                <ActivityIndicator size={size === 'small' ? 'small' : 'large'} color={theme.colors.primary} />
-                {text && (
-                    <Text style={[styles.loaderText, { color: theme.colors.textSecondary, fontSize: size === 'small' ? 12 : 14 }]}>
-                        {text}
-                    </Text>
-                )}
-            </View>
+        <View
+            style={fullScreen ? [styles.fullScreen, { backgroundColor: colors.background }] : styles.inline}
+            accessibilityRole="progressbar"
+            accessibilityLabel={text ?? 'Loading'}
+        >
+            <ActivityIndicator size="small" color={colors.primary} />
+            {text && (
+                <Text style={[size === 'large' ? type.body : type.caption, styles.text, { color: colors.textSecondary }]}>
+                    {text}
+                </Text>
+            )}
         </View>
     );
 }
 
 const styles = StyleSheet.create({
-    fullScreenContainer: {
+    fullScreen: {
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
+        gap: metrics.space.md,
     },
-    inlineContainer: {
+    inline: {
         justifyContent: 'center',
         alignItems: 'center',
-        padding: 20,
+        gap: metrics.space.md,
+        padding: metrics.space.lg,
     },
-    loaderContent: {
-        alignItems: 'center',
-        gap: 12,
-    },
-    loaderText: {
+    text: {
         textAlign: 'center',
-        marginTop: 8,
     },
 });
