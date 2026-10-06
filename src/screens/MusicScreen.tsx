@@ -1,0 +1,908 @@
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import {
+    AppState,
+    Image,
+    RefreshControl,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import Feather from '@react-native-vector-icons/feather';
+import { FlashList } from '@shopify/flash-list';
+import Animated from 'react-native-reanimated';
+import { useAudioStore } from '@/store/audioStore';
+import { useFavoritesStore } from '@/store/favoritesStore';
+import { AudioMediaService } from '@/services/AudioMediaService';
+import { PermissionService } from '@/services/PermissionService';
+import { useTheme } from '@/hooks/useTheme';
+import { useAlbumArt } from '@/hooks/useAlbumArt';
+import { Button, Chip, IconButton, SortButton, Touchable } from '@/components/ui';
+import { EmptyState, ListHeader, cellEntering } from '@/components/VideoRow';
+import { TrackOptionsSheet } from '@/components/TrackOptionsSheet';
+import { metrics, type } from '@/theme/theme';
+import { formatDuration } from '@/utils/formatUtils';
+import { AudioAlbum, AudioArtist, AudioFolder, AudioTrack, RootStackParamList } from '@/types';
+import { Loader } from '@/components/Loader';
+
+type LibraryTab = 'tracks' | 'albums' | 'artists' | 'folders' | 'favorites';
+type TrackSortBy = 'title' | 'artist' | 'dateAdded' | 'duration';
+type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
+
+const GRID_HALF_GAP = metrics.space.sm / 2 + 2;
+const ALPHABET = ['#', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')];
+
+const SORT_OPTIONS: { key: TrackSortBy; label: string }[] = [
+    { key: 'title', label: 'Title (A–Z)' },
+    { key: 'artist', label: 'Artist' },
+    { key: 'dateAdded', label: 'Recently Added' },
+    { key: 'duration', label: 'Duration' },
+];
+
+const trackCollator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
+
+// Track row thumbnail with lazy artwork hook
+const TrackRowArt = React.memo(function TrackRowArtComponent({
+    albumId,
+    songUri,
+    artworkUri: initialArt,
+    isCurrent,
+    isPlaying,
+    colors,
+}: {
+    albumId: string;
+    songUri: string;
+    artworkUri?: string | null;
+    isCurrent: boolean;
+    isPlaying: boolean;
+    colors: any;
+}) {
+    const fetchedArt = useAlbumArt(albumId, songUri);
+    const art = initialArt || fetchedArt;
+
+    return (
+        <View style={[styles.trackArt, { backgroundColor: colors.surfaceVariant }]}>
+            {art ? (
+                <Image source={{ uri: art }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+            ) : (
+                <Feather
+                    name={isCurrent && isPlaying ? 'volume-2' : 'music'}
+                    size={18}
+                    color={isCurrent ? colors.primary : colors.textTertiary}
+                />
+            )}
+        </View>
+    );
+});
+
+// Album card thumbnail with lazy artwork hook
+const AlbumCardArt = React.memo(function AlbumCardArtComponent({
+    albumId,
+    songUri,
+    artworkUri: initialArt,
+    colors,
+}: {
+    albumId: string;
+    songUri?: string;
+    artworkUri?: string | null;
+    colors: any;
+}) {
+    const fetchedArt = useAlbumArt(albumId, songUri);
+    const art = initialArt || fetchedArt;
+
+    return (
+        <View style={[styles.albumGridArt, { backgroundColor: colors.surfaceVariant }]}>
+            {art ? (
+                <Image source={{ uri: art }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+            ) : (
+                <Feather name="disc" size={28} color={colors.textTertiary} />
+            )}
+        </View>
+    );
+});
+
+export default function MusicScreen() {
+    const { colors } = useTheme();
+    const insets = useSafeAreaInsets();
+    const navigation = useNavigation<NavigationProp>();
+
+    const [hasPermission, setHasPermission] = useState<boolean | null>(null);
+    const permissionWasDenied = useRef(false);
+    const [activeTab, setActiveTab] = useState<LibraryTab>('tracks');
+    const [loading, setLoading] = useState(true);
+
+    // Search and Sort
+    const [searchQuery, setSearchQuery] = useState('');
+    const [sortBy, setSortBy] = useState<TrackSortBy>('title');
+
+    // Data lists
+    const [tracks, setTracks] = useState<AudioTrack[]>([]);
+    const [albums, setAlbums] = useState<AudioAlbum[]>([]);
+    const [artists, setArtists] = useState<AudioArtist[]>([]);
+    const [folders, setFolders] = useState<AudioFolder[]>([]);
+
+    // Selected folder view (for folders tab)
+    const [selectedFolder, setSelectedFolder] = useState<AudioFolder | null>(null);
+    const [folderTracks, setFolderTracks] = useState<AudioTrack[]>([]);
+
+    // Selected track for options sheet
+    const [trackWithOptions, setTrackWithOptions] = useState<AudioTrack | null>(null);
+
+    const playTrack = useAudioStore((s) => s.playTrack);
+    const playQueue = useAudioStore((s) => s.playQueue);
+    const currentTrack = useAudioStore((s) => s.currentTrack);
+    const isPlaying = useAudioStore((s) => s.isPlaying);
+
+    const favoriteIds = useFavoritesStore((s) => s.favoriteIds);
+
+    const flashListRef = useRef<any>(null);
+
+    const loadData = useCallback(async (forceRefresh = false) => {
+        setLoading(true);
+        try {
+            const perm = await PermissionService.checkAudioPermission();
+            setHasPermission(perm);
+            if (!perm) {
+                permissionWasDenied.current = true;
+                setLoading(false);
+                return;
+            }
+            permissionWasDenied.current = false;
+
+            const { tracks: songsList, albums: albumsList, artists: artistsList } =
+                await AudioMediaService.getLibrary(forceRefresh);
+
+            setTracks(songsList);
+            setAlbums(albumsList);
+            setArtists(artistsList);
+            setFolders(AudioMediaService.groupFolders(songsList));
+        } catch (error) {
+            console.error('[MusicScreen] Failed to load library:', error);
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        loadData();
+    }, [loadData]);
+
+    // Re-check permission on foreground if previously denied
+    useEffect(() => {
+        const sub = AppState.addEventListener('change', (nextState) => {
+            if (nextState === 'active' && permissionWasDenied.current) {
+                PermissionService.checkAudioPermission().then((perm) => {
+                    setHasPermission(perm);
+                    if (perm) {
+                        permissionWasDenied.current = false;
+                        loadData(true);
+                    }
+                });
+            }
+        });
+        return () => sub.remove();
+    }, [loadData]);
+
+    const handleRequestPermission = async () => {
+        const granted = await PermissionService.requestAudioPermission();
+        setHasPermission(granted);
+        if (granted) {
+            permissionWasDenied.current = false;
+            loadData(true);
+        } else {
+            permissionWasDenied.current = true;
+        }
+    };
+
+    const handleSelectFolder = useCallback(async (folder: AudioFolder) => {
+        setSelectedFolder(folder);
+        setLoading(true);
+        const folderSongs = await AudioMediaService.getSongsByFolder(folder.path);
+        setFolderTracks(folderSongs);
+        setLoading(false);
+    }, []);
+
+    const favoriteSet = useMemo(() => new Set(favoriteIds), [favoriteIds]);
+
+    // Pre-sort tracks once when library or sort option changes
+    const sortedTracks = useMemo(() => {
+        const list = [...tracks];
+        if (sortBy === 'title') {
+            list.sort((a, b) => trackCollator.compare(a.title, b.title));
+        } else if (sortBy === 'artist') {
+            list.sort((a, b) => trackCollator.compare(a.artist, b.artist));
+        } else if (sortBy === 'dateAdded') {
+            list.sort((a, b) => (b.dateAdded ?? 0) - (a.dateAdded ?? 0));
+        } else if (sortBy === 'duration') {
+            list.sort((a, b) => b.duration - a.duration);
+        }
+        return list;
+    }, [tracks, sortBy]);
+
+    // Pre-sort folder tracks once when folder or sort option changes
+    const sortedFolderTracks = useMemo(() => {
+        const list = [...folderTracks];
+        if (sortBy === 'title') {
+            list.sort((a, b) => trackCollator.compare(a.title, b.title));
+        } else if (sortBy === 'artist') {
+            list.sort((a, b) => trackCollator.compare(a.artist, b.artist));
+        } else if (sortBy === 'dateAdded') {
+            list.sort((a, b) => (b.dateAdded ?? 0) - (a.dateAdded ?? 0));
+        } else if (sortBy === 'duration') {
+            list.sort((a, b) => b.duration - a.duration);
+        }
+        return list;
+    }, [folderTracks, sortBy]);
+
+    // Fast linear filter without expensive re-sorting on every keystroke
+    const displayedTracks = useMemo(() => {
+        let baseList = sortedTracks;
+        if (activeTab === 'favorites') {
+            baseList = sortedTracks.filter((t) => favoriteSet.has(t.id));
+        } else if (activeTab === 'folders' && selectedFolder) {
+            baseList = sortedFolderTracks;
+        }
+
+        const q = searchQuery.trim().toLowerCase();
+        if (!q) {
+            return baseList;
+        }
+
+        return baseList.filter(
+            (t) =>
+                t.title.toLowerCase().includes(q) ||
+                t.artist.toLowerCase().includes(q) ||
+                t.album.toLowerCase().includes(q)
+        );
+    }, [sortedTracks, sortedFolderTracks, favoriteSet, activeTab, selectedFolder, searchQuery]);
+
+    // Filter albums
+    const displayedAlbums = useMemo(() => {
+        if (!searchQuery.trim()) return albums;
+        const q = searchQuery.toLowerCase();
+        return albums.filter((a) => a.album.toLowerCase().includes(q) || a.artist.toLowerCase().includes(q));
+    }, [albums, searchQuery]);
+
+    // Filter artists
+    const displayedArtists = useMemo(() => {
+        if (!searchQuery.trim()) return artists;
+        const q = searchQuery.toLowerCase();
+        return artists.filter((a) => a.artist.toLowerCase().includes(q));
+    }, [artists, searchQuery]);
+
+    // Filter folders
+    const displayedFolders = useMemo(() => {
+        if (!searchQuery.trim()) return folders;
+        const q = searchQuery.toLowerCase();
+        return folders.filter((f) => f.name.toLowerCase().includes(q) || f.path.toLowerCase().includes(q));
+    }, [folders, searchQuery]);
+
+    // Play all / Shuffle handler
+    const handlePlayAll = useCallback(
+        async (shuffleMode = false) => {
+            const list = displayedTracks;
+            if (list.length === 0) return;
+            const source =
+                activeTab === 'favorites'
+                    ? 'Favorites'
+                    : selectedFolder
+                    ? `Folder: ${selectedFolder.name}`
+                    : 'Library';
+
+            if (shuffleMode) {
+                const randomIndex = Math.floor(Math.random() * list.length);
+                useAudioStore.setState({ shuffle: true });
+                await playQueue(list, randomIndex, source);
+            } else {
+                useAudioStore.setState({ shuffle: false });
+                await playQueue(list, 0, source);
+            }
+        },
+        [displayedTracks, playQueue, activeTab, selectedFolder]
+    );
+
+    // Track click: tap playing song opens Now Playing instead of restarting
+    const handleSongPress = useCallback(
+        (song: AudioTrack) => {
+            if (currentTrack?.id === song.id) {
+                navigation.navigate('NowPlaying');
+                return;
+            }
+            const source =
+                activeTab === 'favorites'
+                    ? 'Favorites'
+                    : selectedFolder
+                    ? `Folder: ${selectedFolder.name}`
+                    : 'Library';
+            playTrack(song, displayedTracks, source);
+        },
+        [currentTrack?.id, navigation, playTrack, displayedTracks, activeTab, selectedFolder]
+    );
+
+    // Alphabet jump scroller
+    const handleLetterPress = useCallback(
+        (letter: string) => {
+            if (displayedTracks.length === 0) return;
+            let targetIndex = -1;
+            if (letter === '#') {
+                targetIndex = displayedTracks.findIndex((t) => !/^[a-zA-Z]/.test(t.title));
+            } else {
+                targetIndex = displayedTracks.findIndex((t) =>
+                    t.title.toUpperCase().startsWith(letter)
+                );
+            }
+            if (targetIndex >= 0) {
+                flashListRef.current?.scrollToIndex({ index: targetIndex, animated: true });
+            }
+        },
+        [displayedTracks]
+    );
+
+    // Track row renderer
+    const renderTrackItem = useCallback(
+        ({ item }: { item: AudioTrack }) => {
+            const isCurrent = currentTrack?.id === item.id;
+            return (
+                <Touchable
+                    onPress={() => handleSongPress(item)}
+                    onLongPress={() => setTrackWithOptions(item)}
+                    scaleTo={0.98}
+                    stateLayer
+                    style={[styles.trackRow, isCurrent && { backgroundColor: colors.primaryContainer }]}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${item.title} by ${item.artist}`}
+                >
+                    <TrackRowArt
+                        albumId={item.albumId}
+                        songUri={item.uri}
+                        artworkUri={item.artworkUri}
+                        isCurrent={isCurrent}
+                        isPlaying={isPlaying}
+                        colors={colors}
+                    />
+
+                    <View style={styles.trackInfo}>
+                        <Text
+                            style={[type.row, { color: isCurrent ? colors.primary : colors.text, fontWeight: isCurrent ? '700' : '400' }]}
+                            numberOfLines={1}
+                        >
+                            {item.title}
+                        </Text>
+                        <Text style={[type.caption, { color: colors.textSecondary }]} numberOfLines={1}>
+                            {item.artist} · {item.album}
+                        </Text>
+                    </View>
+
+                    <Text style={[type.caption, styles.durationText, { color: colors.textTertiary }]}>
+                        {formatDuration(item.duration)}
+                    </Text>
+
+                    <IconButton
+                        icon="more-vertical"
+                        onPress={() => setTrackWithOptions(item)}
+                        accessibilityLabel="Options"
+                        iconSize={16}
+                        style={styles.moreBtn}
+                    />
+                </Touchable>
+            );
+        },
+        [currentTrack?.id, isPlaying, colors, handleSongPress]
+    );
+
+    // Album card renderer
+    const renderAlbumItem = useCallback(
+        ({ item }: { item: AudioAlbum }) => (
+            <Animated.View entering={cellEntering(true)} style={styles.albumGridCell}>
+                <Touchable
+                    onPress={() =>
+                        navigation.navigate('AlbumDetail', {
+                            albumId: item.id,
+                            albumTitle: item.album,
+                            artist: item.artist,
+                            artworkUri: item.artworkUri,
+                            firstSongUri: item.firstSongUri,
+                        })
+                    }
+                    scaleTo={0.98}
+                    style={styles.albumGridCard}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${item.album} by ${item.artist}`}
+                >
+                    <AlbumCardArt
+                        albumId={item.id}
+                        songUri={item.firstSongUri}
+                        artworkUri={item.artworkUri}
+                        colors={colors}
+                    />
+                    <View style={styles.albumGridInfo}>
+                        <Text style={[type.row, { color: colors.text }]} numberOfLines={1}>
+                            {item.album}
+                        </Text>
+                        <Text style={[type.caption, { color: colors.textSecondary }]} numberOfLines={1}>
+                            {item.artist} · {item.numberOfSongs} song{item.numberOfSongs !== 1 ? 's' : ''}
+                        </Text>
+                    </View>
+                </Touchable>
+            </Animated.View>
+        ),
+        [colors, navigation]
+    );
+
+    // Artist row renderer
+    const renderArtistItem = useCallback(
+        ({ item }: { item: AudioArtist }) => (
+            <Touchable
+                onPress={() =>
+                    navigation.navigate('ArtistDetail', {
+                        artistId: item.id,
+                        artistName: item.artist,
+                    })
+                }
+                scaleTo={0.98}
+                stateLayer
+                style={styles.artistRow}
+                accessibilityRole="button"
+                accessibilityLabel={item.artist}
+            >
+                <View style={[styles.artistAvatar, { backgroundColor: colors.fillStrong }]}>
+                    <Feather name="user" size={22} color={colors.textSecondary} />
+                </View>
+                <View style={styles.artistInfo}>
+                    <Text style={[type.row, { color: colors.text }]} numberOfLines={1}>
+                        {item.artist}
+                    </Text>
+                    <Text style={[type.caption, { color: colors.textSecondary }]}>
+                        {item.numberOfAlbums} album{item.numberOfAlbums !== 1 ? 's' : ''} · {item.numberOfTracks} song{item.numberOfTracks !== 1 ? 's' : ''}
+                    </Text>
+                </View>
+                <Feather name="chevron-right" size={18} color={colors.textTertiary} />
+            </Touchable>
+        ),
+        [colors, navigation]
+    );
+
+    // Folder row renderer
+    const renderFolderItem = useCallback(
+        ({ item }: { item: AudioFolder }) => (
+            <Touchable
+                onPress={() => handleSelectFolder(item)}
+                scaleTo={0.98}
+                stateLayer
+                style={styles.folderRow}
+                accessibilityRole="button"
+                accessibilityLabel={item.name}
+            >
+                <View style={[styles.folderIconWrap, { backgroundColor: colors.fillStrong }]}>
+                    <Feather name="folder" size={22} color={colors.textSecondary} />
+                </View>
+                <View style={styles.folderInfo}>
+                    <Text style={[type.row, { color: colors.text }]} numberOfLines={1}>
+                        {item.name}
+                    </Text>
+                    <Text style={[type.caption, { color: colors.textSecondary }]} numberOfLines={1}>
+                        {item.numberOfSongs} song{item.numberOfSongs !== 1 ? 's' : ''} · {item.path}
+                    </Text>
+                </View>
+                <Feather name="chevron-right" size={18} color={colors.textTertiary} />
+            </Touchable>
+        ),
+        [colors, handleSelectFolder]
+    );
+
+    // Permission required view
+    if (hasPermission === false) {
+        return (
+            <View style={[styles.container, { backgroundColor: colors.background, paddingTop: insets.top }]}>
+                <ListHeader title="Music" />
+                <View style={styles.permContainer}>
+                    <Feather name="music" size={48} color={colors.textTertiary} />
+                    <Text style={[type.title, { color: colors.text, textAlign: 'center' }]}>
+                        Access your Music
+                    </Text>
+                    <Text style={[type.body, { color: colors.textSecondary, textAlign: 'center' }]}>
+                        Allow Glide to access audio files on your device so you can listen to your songs.
+                    </Text>
+                    <Button
+                        label="Grant Permission"
+                        onPress={handleRequestPermission}
+                        variant="primary"
+                        icon="shield"
+                    />
+                </View>
+            </View>
+        );
+    }
+
+    return (
+        <View style={[styles.container, { backgroundColor: colors.background }]}>
+            {/* Header */}
+            <View style={{ paddingTop: insets.top }}>
+                <ListHeader
+                    title={selectedFolder ? selectedFolder.name : 'Music'}
+                    subtitle={selectedFolder ? `${selectedFolder.numberOfSongs} songs` : undefined}
+                    onBack={selectedFolder ? () => setSelectedFolder(null) : undefined}
+                />
+            </View>
+
+            {/* Search Box on Music Tab */}
+            <View style={[styles.searchBar, { backgroundColor: colors.fill }]}>
+                <Feather name="search" size={18} color={colors.textTertiary} />
+                <TextInput
+                    style={[styles.searchInput, { color: colors.text }]}
+                    placeholder={
+                        activeTab === 'tracks'
+                            ? 'Search songs by title, artist, album...'
+                            : activeTab === 'albums'
+                            ? 'Search albums...'
+                            : activeTab === 'artists'
+                            ? 'Search artists...'
+                            : 'Search music...'
+                    }
+                    placeholderTextColor={colors.textTertiary}
+                    value={searchQuery}
+                    onChangeText={setSearchQuery}
+                    returnKeyType="search"
+                    clearButtonMode="while-editing"
+                />
+                {searchQuery.length > 0 && (
+                    <IconButton
+                        icon="x"
+                        onPress={() => setSearchQuery('')}
+                        accessibilityLabel="Clear search"
+                        iconSize={16}
+                        style={styles.searchClearBtn}
+                    />
+                )}
+            </View>
+
+            {/* Segmented Tabs (Tracks, Albums, Artists, Folders, Favorites) */}
+            {!selectedFolder && (
+                <View style={styles.tabChipsRow}>
+                    <Chip
+                        label={`Tracks (${tracks.length})`}
+                        selected={activeTab === 'tracks'}
+                        onPress={() => setActiveTab('tracks')}
+                    />
+                    <Chip
+                        label={`Albums (${albums.length})`}
+                        selected={activeTab === 'albums'}
+                        onPress={() => setActiveTab('albums')}
+                    />
+                    <Chip
+                        label={`Artists (${artists.length})`}
+                        selected={activeTab === 'artists'}
+                        onPress={() => setActiveTab('artists')}
+                    />
+                    <Chip
+                        label={`Folders (${folders.length})`}
+                        selected={activeTab === 'folders'}
+                        onPress={() => setActiveTab('folders')}
+                    />
+                    <Chip
+                        label={`Favorites (${favoriteIds.length})`}
+                        selected={activeTab === 'favorites'}
+                        onPress={() => setActiveTab('favorites')}
+                    />
+                </View>
+            )}
+
+            {/* Quick Actions Bar (Play All / Shuffle / Sort) */}
+            {(activeTab === 'tracks' || activeTab === 'favorites' || selectedFolder) && displayedTracks.length > 0 && (
+                <View style={styles.actionBar}>
+                    <Text style={[type.caption, { color: colors.textSecondary }]}>
+                        {displayedTracks.length} song{displayedTracks.length !== 1 ? 's' : ''}
+                    </Text>
+                    <View style={styles.actionButtons}>
+                        <SortButton
+                            options={SORT_OPTIONS}
+                            value={sortBy}
+                            onChange={(key) => setSortBy(key)}
+                            title="Sort Tracks"
+                        />
+                        <Button
+                            label="Play All"
+                            onPress={() => handlePlayAll(false)}
+                            icon="play"
+                            size="md"
+                        />
+                        <Button
+                            label="Shuffle"
+                            onPress={() => handlePlayAll(true)}
+                            icon="shuffle"
+                            variant="secondary"
+                            size="md"
+                        />
+                    </View>
+                </View>
+            )}
+
+            {/* Main Content Area */}
+            {loading && tracks.length === 0 ? (
+                <Loader />
+            ) : activeTab === 'tracks' || activeTab === 'favorites' || selectedFolder ? (
+                displayedTracks.length === 0 ? (
+                    <EmptyState
+                        text={
+                            activeTab === 'favorites'
+                                ? 'No favorite songs yet'
+                                : searchQuery
+                                ? 'No matching songs found'
+                                : 'No songs found'
+                        }
+                        action="Refresh"
+                        onAction={() => loadData(true)}
+                    />
+                ) : (
+                    <View style={styles.listContainerWithScroller}>
+                        <FlashList
+                            ref={flashListRef}
+                            data={displayedTracks}
+                            renderItem={renderTrackItem}
+                            keyExtractor={(item) => item.id}
+                            contentContainerStyle={{
+                                paddingHorizontal: metrics.gutter,
+                                paddingBottom: metrics.space.xxl * 2,
+                            }}
+                            refreshControl={
+                                <RefreshControl
+                                    refreshing={loading}
+                                    onRefresh={() => loadData(true)}
+                                    tintColor={colors.primary}
+                                    colors={[colors.primary]}
+                                />
+                            }
+                            showsVerticalScrollIndicator={false}
+                        />
+
+                        {/* A–Z Fast Scroller Column */}
+                        {activeTab === 'tracks' && !searchQuery && displayedTracks.length > 20 && (
+                            <View style={styles.alphabetIndexCol}>
+                                {ALPHABET.map((letter) => (
+                                    <Touchable
+                                        key={letter}
+                                        onPress={() => handleLetterPress(letter)}
+                                        scaleTo={0.9}
+                                        style={styles.alphabetItem}
+                                    >
+                                        <Text style={[styles.alphabetText, { color: colors.textSecondary }]}>
+                                            {letter}
+                                        </Text>
+                                    </Touchable>
+                                ))}
+                            </View>
+                        )}
+                    </View>
+                )
+            ) : activeTab === 'albums' ? (
+                <FlashList
+                    data={displayedAlbums}
+                    renderItem={renderAlbumItem}
+                    keyExtractor={(item) => item.id}
+                    numColumns={2}
+                    contentContainerStyle={{
+                        paddingHorizontal: metrics.gutter - GRID_HALF_GAP,
+                        paddingBottom: metrics.space.xxl * 2,
+                    }}
+                    refreshControl={
+                        <RefreshControl
+                            refreshing={loading}
+                            onRefresh={() => loadData(true)}
+                            tintColor={colors.primary}
+                        />
+                    }
+                    showsVerticalScrollIndicator={false}
+                />
+            ) : activeTab === 'artists' ? (
+                <FlashList
+                    data={displayedArtists}
+                    renderItem={renderArtistItem}
+                    keyExtractor={(item) => item.id}
+                    contentContainerStyle={{
+                        paddingHorizontal: metrics.gutter,
+                        paddingBottom: metrics.space.xxl * 2,
+                    }}
+                    refreshControl={
+                        <RefreshControl
+                            refreshing={loading}
+                            onRefresh={() => loadData(true)}
+                            tintColor={colors.primary}
+                        />
+                    }
+                    showsVerticalScrollIndicator={false}
+                />
+            ) : (
+                <FlashList
+                    data={displayedFolders}
+                    renderItem={renderFolderItem}
+                    keyExtractor={(item) => item.path}
+                    contentContainerStyle={{
+                        paddingHorizontal: metrics.gutter,
+                        paddingBottom: metrics.space.xxl * 2,
+                    }}
+                    refreshControl={
+                        <RefreshControl
+                            refreshing={loading}
+                            onRefresh={() => loadData(true)}
+                            tintColor={colors.primary}
+                        />
+                    }
+                    showsVerticalScrollIndicator={false}
+                />
+            )}
+
+            {/* Song Options Bottom Sheet */}
+            <TrackOptionsSheet
+                track={trackWithOptions}
+                visible={!!trackWithOptions}
+                onClose={() => setTrackWithOptions(null)}
+                onGoToAlbum={(albumId, albumTitle, artist) => {
+                    navigation.navigate('AlbumDetail', { albumId, albumTitle, artist });
+                }}
+                onGoToArtist={(artistId, artistName) => {
+                    navigation.navigate('ArtistDetail', { artistId, artistName });
+                }}
+            />
+        </View>
+    );
+}
+
+const styles = StyleSheet.create({
+    container: {
+        flex: 1,
+    },
+    permContainer: {
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingHorizontal: metrics.gutter * 2,
+        gap: metrics.space.md,
+    },
+    searchBar: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginHorizontal: metrics.gutter,
+        marginVertical: metrics.space.xs,
+        paddingHorizontal: metrics.space.md,
+        height: 42,
+        borderRadius: metrics.radius.pill,
+        gap: metrics.space.sm,
+    },
+    searchInput: {
+        flex: 1,
+        paddingVertical: 0,
+        fontSize: 14,
+    },
+    searchClearBtn: {
+        width: 28,
+        height: 28,
+    },
+    tabChipsRow: {
+        flexDirection: 'row',
+        paddingHorizontal: metrics.gutter,
+        paddingVertical: metrics.space.xs,
+        gap: metrics.space.sm,
+    },
+    actionBar: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: metrics.gutter,
+        paddingVertical: metrics.space.sm,
+    },
+    actionButtons: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: metrics.space.xs,
+    },
+    listContainerWithScroller: {
+        flex: 1,
+        flexDirection: 'row',
+    },
+    alphabetIndexCol: {
+        width: 20,
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingRight: 2,
+    },
+    alphabetItem: {
+        paddingVertical: 1,
+        paddingHorizontal: 2,
+    },
+    alphabetText: {
+        fontSize: 10,
+        fontWeight: '600',
+    },
+    trackRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        minHeight: 58,
+        paddingVertical: metrics.space.xs,
+        paddingHorizontal: metrics.space.sm,
+        borderRadius: metrics.radius.md,
+        gap: metrics.space.md,
+    },
+    trackArt: {
+        width: 44,
+        height: 44,
+        borderRadius: metrics.radius.sm,
+        overflow: 'hidden',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    trackInfo: {
+        flex: 1,
+        justifyContent: 'center',
+        gap: 2,
+    },
+    durationText: {
+        fontVariant: ['tabular-nums'],
+    },
+    moreBtn: {
+        width: 28,
+        height: 28,
+    },
+    albumGridCell: {
+        flex: 1,
+        paddingHorizontal: GRID_HALF_GAP,
+        paddingBottom: metrics.space.lg,
+    },
+    albumGridCard: {
+        flex: 1,
+    },
+    albumGridArt: {
+        width: '100%',
+        aspectRatio: 1,
+        borderRadius: metrics.radius.card,
+        overflow: 'hidden',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    albumGridInfo: {
+        paddingTop: metrics.space.sm,
+        gap: 2,
+    },
+    artistRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        minHeight: 64,
+        paddingVertical: metrics.space.sm,
+        paddingHorizontal: metrics.space.sm,
+        borderRadius: metrics.radius.md,
+        gap: metrics.space.md,
+    },
+    artistAvatar: {
+        width: 48,
+        height: 48,
+        borderRadius: 24,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    artistInfo: {
+        flex: 1,
+        gap: 2,
+    },
+    folderRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        minHeight: 64,
+        paddingVertical: metrics.space.sm,
+        paddingHorizontal: metrics.space.sm,
+        borderRadius: metrics.radius.md,
+        gap: metrics.space.md,
+    },
+    folderIconWrap: {
+        width: 48,
+        height: 48,
+        borderRadius: metrics.radius.sm,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    folderInfo: {
+        flex: 1,
+        gap: 2,
+    },
+});

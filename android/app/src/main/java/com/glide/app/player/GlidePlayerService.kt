@@ -8,16 +8,19 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 
+import android.app.PendingIntent
+import com.glide.app.MainActivity
+
 /**
  * Where the player view and the session service find each other.
  *
  * They live in one process but are created independently by the system, and an Intent
- * cannot carry an object reference. Glide plays one video at a time, so one slot is enough.
+ * cannot carry an object reference.
  *
  * Main thread only, which is where both the view and the service are created.
  */
 @UnstableApi
-internal object GlidePlayerHolder {
+object GlidePlayerHolder {
 
     @JvmStatic
     var player: ExoPlayer? = null
@@ -30,15 +33,20 @@ internal object GlidePlayerHolder {
     }
 
     fun start(context: Context, value: ExoPlayer) {
+        player?.takeIf { it !== value }?.pause()
         player = value
-        try {
-            context.applicationContext.startService(
-                Intent(context.applicationContext, GlidePlayerService::class.java)
-            )
-        } catch (e: IllegalStateException) {
-            // A background start can be refused. Playback still works; only the session and
-            // its notification are missing.
-            Log.w(GlidePlayerView.TAG, "could not start playback service: ${e.message}")
+        if (service != null) {
+            service?.updatePlayer(value)
+        } else {
+            try {
+                context.applicationContext.startService(
+                    Intent(context.applicationContext, GlidePlayerService::class.java)
+                )
+            } catch (e: IllegalStateException) {
+                // A background start can be refused. Playback still works; only the session and
+                // its notification are missing.
+                Log.w(GlidePlayerView.TAG, "could not start playback service: ${e.message}")
+            }
         }
     }
 
@@ -89,18 +97,42 @@ class GlidePlayerService : MediaSessionService() {
             return
         }
 
+        buildAndAddSession(player)
+        Log.w(GlidePlayerView.TAG, "media session created")
+    }
+
+    private fun buildAndAddSession(player: ExoPlayer) {
+        val sessionActivityIntent = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
         // Registering explicitly matters: building a session does not hand it to the
         // service. onGetSession only fires when a MediaController connects, and Glide's UI
         // drives the player directly, so with no controller the service would never adopt
         // the session, never observe the player, and never post a notification.
-        session = MediaSession.Builder(this, player).build().also { addSession(it) }
-        Log.w(GlidePlayerView.TAG, "media session created")
+        session = MediaSession.Builder(this, player)
+            .setSessionActivity(sessionActivityIntent)
+            .build()
+            .also { addSession(it) }
+    }
+
+    fun updatePlayer(newPlayer: ExoPlayer) {
+        session?.player = newPlayer
+        Log.w(GlidePlayerView.TAG, "media session updated with new player")
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
 
     fun releaseSession() {
-        session?.release()
+        session?.let {
+            removeSession(it)
+            it.release()
+        }
         session = null
     }
 

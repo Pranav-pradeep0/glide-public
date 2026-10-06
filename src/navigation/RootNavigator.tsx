@@ -18,6 +18,11 @@ import SearchScreen from '@/screens/SearchScreen';
 import PlayerDetailScreen from '@/screens/PlayerDetailScreen';
 import VideoPlayerScreen from '@/screens/VideoPlayerScreen';
 import AlbumVideosScreen from '@/screens/AlbumVideosScreen';
+import MusicScreen from '@/screens/MusicScreen';
+import NowPlayingScreen from '@/screens/NowPlayingScreen';
+import AlbumDetailScreen from '@/screens/AlbumDetailScreen';
+import ArtistDetailScreen from '@/screens/ArtistDetailScreen';
+import { MiniPlayer } from '@/components/MiniPlayer';
 import { MainTabParamList, RootStackParamList } from '@/types';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -31,48 +36,51 @@ const renderTabBar = (props: BottomTabBarProps) => <TabBar {...props} />;
 function TabBar({ state, descriptors, navigation, insets }: BottomTabBarProps) {
     const { colors } = useTheme();
     return (
-        <View
-            style={[
-                styles.tabBar,
-                {
-                    backgroundColor: colors.surface,
-                    borderTopColor: colors.border,
-                    paddingBottom: insets.bottom,
-                    height: TAB_HEIGHT + insets.bottom,
-                },
-            ]}
-        >
-            {state.routes.map((route, index) => {
-                const { options } = descriptors[route.key];
-                const focused = state.index === index;
-                const label = options.title ?? route.name;
-                const onPress = () => {
-                    const event = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
-                    if (!focused && !event.defaultPrevented) {
-                        navigation.navigate(route.name, route.params);
-                    }
-                };
-                return (
-                    <Touchable
-                        key={route.key}
-                        onPress={onPress}
-                        scaleTo={1}
-                        accessibilityRole="tab"
-                        accessibilityLabel={label}
-                        accessibilityState={{ selected: focused }}
-                        style={styles.tab}
-                    >
-                        <View style={styles.pill}>
-                            {/* Mounted fresh with its colour: Fabric drops borderRadius when a background is added to an existing view. */}
-                            {focused && <View style={[styles.pillFill, { backgroundColor: colors.primaryContainer }]} />}
-                            {options.tabBarIcon?.({ focused, color: focused ? colors.primary : colors.textSecondary, size: 24 })}
-                        </View>
-                        <Text style={[type.caption, styles.label, { color: focused ? colors.text : colors.textSecondary }]}>
-                            {label}
-                        </Text>
-                    </Touchable>
-                );
-            })}
+        <View style={{ backgroundColor: colors.surface }}>
+            <MiniPlayer />
+            <View
+                style={[
+                    styles.tabBar,
+                    {
+                        backgroundColor: colors.surface,
+                        borderTopColor: colors.border,
+                        paddingBottom: insets.bottom,
+                        height: TAB_HEIGHT + insets.bottom,
+                    },
+                ]}
+            >
+                {state.routes.map((route, index) => {
+                    const { options } = descriptors[route.key];
+                    const focused = state.index === index;
+                    const label = options.title ?? route.name;
+                    const onPress = () => {
+                        const event = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
+                        if (!focused && !event.defaultPrevented) {
+                            navigation.navigate(route.name, route.params);
+                        }
+                    };
+                    return (
+                        <Touchable
+                            key={route.key}
+                            onPress={onPress}
+                            scaleTo={1}
+                            accessibilityRole="tab"
+                            accessibilityLabel={label}
+                            accessibilityState={{ selected: focused }}
+                            style={styles.tab}
+                        >
+                            <View style={styles.pill}>
+                                {/* Mounted fresh with its colour: Fabric drops borderRadius when a background is added to an existing view. */}
+                                {focused && <View style={[styles.pillFill, { backgroundColor: colors.primaryContainer }]} />}
+                                {options.tabBarIcon?.({ focused, color: focused ? colors.primary : colors.textSecondary, size: 24 })}
+                            </View>
+                            <Text style={[type.caption, styles.label, { color: focused ? colors.text : colors.textSecondary }]}>
+                                {label}
+                            </Text>
+                        </Touchable>
+                    );
+                })}
+            </View>
         </View>
     );
 }
@@ -100,6 +108,14 @@ function MainTabs() {
                 options={{
                     title: 'Recents',
                     tabBarIcon: ({ color }) => <Feather name="clock" size={22} color={color} />,
+                }}
+            />
+            <Tab.Screen
+                name="Music"
+                component={MusicScreen}
+                options={{
+                    title: 'Music',
+                    tabBarIcon: ({ color }) => <Feather name="music" size={22} color={color} />,
                 }}
             />
             <Tab.Screen
@@ -214,6 +230,31 @@ export default function RootNavigator({ onReady }: RootNavigatorProps) {
                         <Stack.Screen
                             name="Search"
                             component={SearchScreen}
+                            options={{
+                                headerShown: false,
+                                animation: 'slide_from_right',
+                            }}
+                        />
+                        <Stack.Screen
+                            name="NowPlaying"
+                            component={NowPlayingScreen}
+                            options={{
+                                headerShown: false,
+                                animation: 'slide_from_bottom',
+                                presentation: 'modal',
+                            }}
+                        />
+                        <Stack.Screen
+                            name="AlbumDetail"
+                            component={AlbumDetailScreen}
+                            options={{
+                                headerShown: false,
+                                animation: 'slide_from_right',
+                            }}
+                        />
+                        <Stack.Screen
+                            name="ArtistDetail"
+                            component={ArtistDetailScreen}
                             options={{
                                 headerShown: false,
                                 animation: 'slide_from_right',

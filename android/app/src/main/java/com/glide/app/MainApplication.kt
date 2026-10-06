@@ -29,6 +29,7 @@ class MainApplication : Application(), ReactApplication {
               // The Media3/ExoPlayer playback core. Registered alongside the VLC view, not
               // instead of it; which one renders is a setting (docs/player-engine-migration-plan.md).
               add(com.glide.app.player.GlidePlayerPackage())
+              add(com.glide.app.audio.AudioPackage())
             },
         // Stallion hands back the downloaded OTA bundle, or null to fall through to the
         // bundle packaged in the APK. This replaces the old getJSBundleFile() override.

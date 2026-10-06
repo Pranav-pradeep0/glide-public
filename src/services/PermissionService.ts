@@ -1,4 +1,4 @@
-import { PermissionsAndroid, Platform } from 'react-native';
+import { Linking, PermissionsAndroid, Platform } from 'react-native';
 
 class PermissionServiceClass {
     /**
@@ -31,13 +31,59 @@ class PermissionServiceClass {
                 PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE
             );
             return status === PermissionsAndroid.RESULTS.GRANTED;
-
         } catch (error) {
             console.error('[PermissionService] Permission request failed:', error);
             return false;
         }
     }
 
+    /**
+     * Check if audio permission is granted without prompting.
+     */
+    async checkAudioPermission(): Promise<boolean> {
+        if (Platform.OS !== 'android') {
+            return true;
+        }
+        try {
+            if (Platform.Version >= 33) {
+                return await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.READ_MEDIA_AUDIO);
+            }
+            return await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE);
+        } catch (error) {
+            console.error('[PermissionService] Permission check failed:', error);
+            return false;
+        }
+    }
+
+    /**
+     * Request the audio permission Glide needs to scan songs on Android.
+     */
+    async requestAudioPermission(): Promise<boolean> {
+        if (Platform.OS !== 'android') {
+            return true;
+        }
+        try {
+            const perm =
+                Platform.Version >= 33
+                    ? PermissionsAndroid.PERMISSIONS.READ_MEDIA_AUDIO
+                    : PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE;
+            const status = await PermissionsAndroid.request(perm);
+            if (status === PermissionsAndroid.RESULTS.GRANTED) {
+                return true;
+            }
+            if (status === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN) {
+                try {
+                    await Linking.openSettings();
+                } catch {
+                    // ignore
+                }
+            }
+            return false;
+        } catch (error) {
+            console.error('[PermissionService] Audio permission request failed:', error);
+            return false;
+        }
+    }
 }
 
 export const PermissionService = new PermissionServiceClass();

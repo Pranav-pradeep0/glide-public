@@ -194,22 +194,23 @@ dependencies {
 
     implementation 'com.arthenica:smart-exception-java:0.2.1'
     implementation "androidx.core:core-splashscreen:1.0.1"
+    implementation "androidx.palette:palette:1.0.0"
 
     // The phase 1 playback core (com.glide.app.player) and the HDR spike. No longer
     // debug-only: the new engine ships behind a setting so it can be compared against VLC
     // on a real build.
     // media3-session/common are already used by the player module at the same version.
-    implementation "androidx.media3:media3-exoplayer:1.11.0"
+    implementation "androidx.media3:media3-exoplayer:1.11.1"
     // Colour enhancement as GPU shaders. setVideoEffects throws IllegalStateException if
     // this is missing, and its version must match media3-exoplayer exactly.
-    implementation "androidx.media3:media3-effect:1.11.0"
+    implementation "androidx.media3:media3-effect:1.11.1"
     // The media session and its notification. The player module declares this too, but
     // `implementation` is not transitive, so the app needs its own at the same version.
-    implementation "androidx.media3:media3-session:1.11.0"
+    implementation "androidx.media3:media3-session:1.11.1"
     // rtsp:// is still advertised in NavigationService/VideoPlayerScreen, and LibVLC used
     // to be what honoured it. DefaultMediaSourceFactory finds RtspMediaSource by
     // Class.forName, so having this on the classpath is the whole wiring.
-    implementation "androidx.media3:media3-exoplayer-rtsp:1.11.0"
+    implementation "androidx.media3:media3-exoplayer-rtsp:1.11.1"
     // NOT debug-only, and it must never go back to being debug-only.
     //
     // This device has no AC-3, E-AC-3, DTS or TrueHD decoder in hardware. Without this

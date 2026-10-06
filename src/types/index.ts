@@ -134,7 +134,68 @@ export type RootStackParamList = {
         videoCount: number;
     };
     Search: undefined;
+    NowPlaying: undefined;
+    AlbumDetail: {
+        albumId: string;
+        albumTitle: string;
+        artist: string;
+        artworkUri?: string | null;
+        firstSongUri?: string;
+    };
+    ArtistDetail: {
+        artistId: string;
+        artistName: string;
+    };
 };
+
+export interface AudioTrack {
+    id: string;
+    title: string;
+    artist: string;
+    artistId?: string;
+    album: string;
+    albumId: string;
+    duration: number; // in seconds
+    path: string;
+    uri: string; // content:// URI
+    size: number;
+    trackNumber: number;
+    year?: number;
+    dateAdded?: number;
+    artworkUri?: string | null;
+    primaryColor?: string | null;
+}
+
+export interface AudioAlbum {
+    id: string;
+    album: string;
+    artist: string;
+    numberOfSongs: number;
+    year?: number;
+    artworkUri?: string | null;
+    firstSongUri?: string;
+    primaryColor?: string | null;
+}
+
+export interface AudioArtist {
+    id: string;
+    artist: string;
+    numberOfAlbums: number;
+    numberOfTracks: number;
+}
+
+export interface AudioFolder {
+    path: string;
+    name: string;
+    numberOfSongs: number;
+}
+
+export interface LyricLine {
+    time: number; // seconds
+    text: string;
+}
+
+export type AudioRepeatMode = 'off' | 'all' | 'one';
 
 export interface VideoBookmark {
     id: string;
@@ -166,5 +227,6 @@ export interface VideoHistoryEntry {
 export type MainTabParamList = {
     Folders: undefined;
     Recents: undefined;
+    Music: undefined;
     Settings: undefined;
 };
