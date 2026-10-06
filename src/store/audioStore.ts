@@ -246,13 +246,7 @@ export const useAudioStore = create<AudioStoreState>((set, get) => ({
         const audioModule = getAudioModule();
         if (Platform.OS === 'android' && audioModule) {
             try {
-                if (typeof audioModule.addMediaItem === 'function') {
-                    await audioModule.addMediaItem(insertIndex, track);
-                } else {
-                    const { position, isPlaying, shuffle, repeatMode, equalizerPreset } = get();
-                    const equalizerBands = getPresetBands(equalizerPreset);
-                    await audioModule.setQueue(nextQueue, currentIndex, position, isPlaying, shuffle, repeatMode, equalizerBands);
-                }
+                await audioModule.addMediaItem(insertIndex, track);
             } catch (err) {
                 console.error('[AudioStore] playNext error:', err);
             }
@@ -273,13 +267,7 @@ export const useAudioStore = create<AudioStoreState>((set, get) => ({
         const audioModule = getAudioModule();
         if (Platform.OS === 'android' && audioModule) {
             try {
-                if (typeof audioModule.addMediaItem === 'function') {
-                    await audioModule.addMediaItem(insertIndex, track);
-                } else {
-                    const { currentIndex, position, isPlaying, shuffle, repeatMode, equalizerPreset } = get();
-                    const equalizerBands = getPresetBands(equalizerPreset);
-                    await audioModule.setQueue(nextQueue, currentIndex, position, isPlaying, shuffle, repeatMode, equalizerBands);
-                }
+                await audioModule.addMediaItem(insertIndex, track);
             } catch (err) {
                 console.error('[AudioStore] addToQueue error:', err);
             }
@@ -318,13 +306,7 @@ export const useAudioStore = create<AudioStoreState>((set, get) => ({
         const audioModule = getAudioModule();
         if (Platform.OS === 'android' && audioModule) {
             try {
-                if (typeof audioModule.removeMediaItem === 'function') {
-                    await audioModule.removeMediaItem(index);
-                } else {
-                    const { isPlaying, shuffle, repeatMode, equalizerPreset } = get();
-                    const equalizerBands = getPresetBands(equalizerPreset);
-                    await audioModule.setQueue(nextQueue, nextIndex, nextPosition, isPlaying, shuffle, repeatMode, equalizerBands);
-                }
+                await audioModule.removeMediaItem(index);
             } catch (err) {
                 console.error('[AudioStore] removeFromQueue error:', err);
             }
@@ -366,13 +348,7 @@ export const useAudioStore = create<AudioStoreState>((set, get) => ({
         const audioModule = getAudioModule();
         if (Platform.OS === 'android' && audioModule) {
             try {
-                if (typeof audioModule.moveMediaItem === 'function') {
-                    await audioModule.moveMediaItem(fromIndex, toIndex);
-                } else {
-                    const { position, isPlaying, shuffle, repeatMode, equalizerPreset } = get();
-                    const equalizerBands = getPresetBands(equalizerPreset);
-                    await audioModule.setQueue(nextQueue, nextIndex, position, isPlaying, shuffle, repeatMode, equalizerBands);
-                }
+                await audioModule.moveMediaItem(fromIndex, toIndex);
             } catch (err) {
                 console.error('[AudioStore] moveQueueItem error:', err);
             }
@@ -380,16 +356,16 @@ export const useAudioStore = create<AudioStoreState>((set, get) => ({
         get()._persistState();
     },
 
-    setSleepTimer: (option: number | 'end_of_track' | 'off') => {
+    setSleepTimer: async (option: number | 'end_of_track' | 'off') => {
         clearSleepTimerInterval();
         const audioModule = getAudioModule();
         if (option === 'off') {
             set({ sleepTimerMode: 'off', sleepTimerRemaining: 0 });
             if (Platform.OS === 'android' && audioModule) {
                 try {
-                    audioModule.clearSleepTimer?.();
-                } catch {
-                    // ignore
+                    await audioModule.clearSleepTimer();
+                } catch (err) {
+                    console.error('[AudioStore] clearSleepTimer error:', err);
                 }
             }
             return;
@@ -398,9 +374,9 @@ export const useAudioStore = create<AudioStoreState>((set, get) => ({
             set({ sleepTimerMode: 'end_of_track', sleepTimerRemaining: 0 });
             if (Platform.OS === 'android' && audioModule) {
                 try {
-                    audioModule.setSleepTimer?.(0, true);
-                } catch {
-                    // ignore
+                    await audioModule.setSleepTimer(0, true);
+                } catch (err) {
+                    console.error('[AudioStore] setSleepTimer error:', err);
                 }
             }
             return;
@@ -410,9 +386,9 @@ export const useAudioStore = create<AudioStoreState>((set, get) => ({
         set({ sleepTimerMode: 'time', sleepTimerRemaining: totalSecs });
         if (Platform.OS === 'android' && audioModule) {
             try {
-                audioModule.setSleepTimer?.(option, false);
-            } catch {
-                // ignore
+                await audioModule.setSleepTimer(option, false);
+            } catch (err) {
+                console.error('[AudioStore] setSleepTimer error:', err);
             }
         }
         sleepTimerInterval = setInterval(() => {
@@ -420,7 +396,6 @@ export const useAudioStore = create<AudioStoreState>((set, get) => ({
             if (remaining <= 0) {
                 clearSleepTimerInterval();
                 set({ sleepTimerMode: 'off', sleepTimerRemaining: 0 });
-                get().pause();
             } else {
                 set({ sleepTimerRemaining: remaining });
             }
@@ -627,22 +602,17 @@ export const useAudioStore = create<AudioStoreState>((set, get) => ({
     },
 
     _setTrackChanged: (data) => {
-        const { queue, currentIndex, sleepTimerMode } = get();
+        const { queue, currentTrack } = get();
         const nextIndex = data.currentIndex;
         if (nextIndex >= 0 && nextIndex < queue.length) {
             const nextTrack = queue[nextIndex];
-            const hasIndexChanged = nextIndex !== currentIndex;
-
-            if (sleepTimerMode === 'end_of_track' && hasIndexChanged) {
-                clearSleepTimerInterval();
-                set({ sleepTimerMode: 'off', sleepTimerRemaining: 0 });
-            }
+            const hasTrackChanged = data.trackId ? data.trackId !== currentTrack?.id : nextTrack.id !== currentTrack?.id;
 
             set((prev) => ({
                 currentIndex: nextIndex,
                 currentTrack: nextTrack,
-                // Only reset position to 0 when the song index actually changes (prevents resetting on shuffle toggle)
-                position: hasIndexChanged ? 0 : prev.position,
+                // Only reset position to 0 when the playing song actually changes, not when its index shifts from queue edits
+                position: hasTrackChanged ? 0 : prev.position,
                 duration: data.duration && data.duration > 0 ? data.duration : nextTrack.duration,
                 shuffledIndices: data.queueIndices ?? prev.shuffledIndices,
             }));
@@ -711,5 +681,10 @@ if (Platform.OS === 'android') {
 
     DeviceEventEmitter.addListener('onAudioError', () => {
         useAudioStore.getState()._setPlaybackState({ isPlaying: false, isBuffering: false });
+    });
+
+    DeviceEventEmitter.addListener('onSleepTimerFired', () => {
+        clearSleepTimerInterval();
+        useAudioStore.setState({ sleepTimerMode: 'off', sleepTimerRemaining: 0 });
     });
 }

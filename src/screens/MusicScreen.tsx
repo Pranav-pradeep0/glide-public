@@ -44,6 +44,20 @@ const SORT_OPTIONS: { key: TrackSortBy; label: string }[] = [
 
 const trackCollator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
 
+function sortTracks(list: AudioTrack[], sortBy: TrackSortBy): AudioTrack[] {
+    const sorted = [...list];
+    if (sortBy === 'title') {
+        sorted.sort((a, b) => trackCollator.compare(a.title, b.title));
+    } else if (sortBy === 'artist') {
+        sorted.sort((a, b) => trackCollator.compare(a.artist, b.artist));
+    } else if (sortBy === 'dateAdded') {
+        sorted.sort((a, b) => (b.dateAdded ?? 0) - (a.dateAdded ?? 0));
+    } else if (sortBy === 'duration') {
+        sorted.sort((a, b) => b.duration - a.duration);
+    }
+    return sorted;
+}
+
 // Track row thumbnail with lazy artwork hook
 const TrackRowArt = React.memo(function TrackRowArtComponent({
     albumId,
@@ -208,34 +222,10 @@ export default function MusicScreen() {
     const favoriteSet = useMemo(() => new Set(favoriteIds), [favoriteIds]);
 
     // Pre-sort tracks once when library or sort option changes
-    const sortedTracks = useMemo(() => {
-        const list = [...tracks];
-        if (sortBy === 'title') {
-            list.sort((a, b) => trackCollator.compare(a.title, b.title));
-        } else if (sortBy === 'artist') {
-            list.sort((a, b) => trackCollator.compare(a.artist, b.artist));
-        } else if (sortBy === 'dateAdded') {
-            list.sort((a, b) => (b.dateAdded ?? 0) - (a.dateAdded ?? 0));
-        } else if (sortBy === 'duration') {
-            list.sort((a, b) => b.duration - a.duration);
-        }
-        return list;
-    }, [tracks, sortBy]);
+    const sortedTracks = useMemo(() => sortTracks(tracks, sortBy), [tracks, sortBy]);
 
     // Pre-sort folder tracks once when folder or sort option changes
-    const sortedFolderTracks = useMemo(() => {
-        const list = [...folderTracks];
-        if (sortBy === 'title') {
-            list.sort((a, b) => trackCollator.compare(a.title, b.title));
-        } else if (sortBy === 'artist') {
-            list.sort((a, b) => trackCollator.compare(a.artist, b.artist));
-        } else if (sortBy === 'dateAdded') {
-            list.sort((a, b) => (b.dateAdded ?? 0) - (a.dateAdded ?? 0));
-        } else if (sortBy === 'duration') {
-            list.sort((a, b) => b.duration - a.duration);
-        }
-        return list;
-    }, [folderTracks, sortBy]);
+    const sortedFolderTracks = useMemo(() => sortTracks(folderTracks, sortBy), [folderTracks, sortBy]);
 
     // Fast linear filter without expensive re-sorting on every keystroke
     const displayedTracks = useMemo(() => {

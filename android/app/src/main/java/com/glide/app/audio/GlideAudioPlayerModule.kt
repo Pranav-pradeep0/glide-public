@@ -104,6 +104,13 @@ class GlideAudioPlayerModule(private val reactContext: ReactApplicationContext) 
                 emitPlaybackState()
             }
 
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                if (reason == Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM) {
+                    player?.pauseAtEndOfMediaItems = false
+                    emitDeviceEvent("onSleepTimerFired", Arguments.createMap())
+                }
+            }
+
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 emitTrackChanged()
             }
@@ -393,6 +400,7 @@ class GlideAudioPlayerModule(private val reactContext: ReactApplicationContext) 
                         val runnable = Runnable {
                             player?.pause()
                             sleepTimerRunnable = null
+                            emitDeviceEvent("onSleepTimerFired", Arguments.createMap())
                             emitPlaybackState()
                         }
                         sleepTimerRunnable = runnable

@@ -101,6 +101,7 @@ export class LyricsServiceClass {
     }
 
     async pickAndSaveLyrics(trackId: string): Promise<LyricLine[] | null> {
+        let tempCachePath: string | null = null;
         try {
             const result = await pick({
                 mode: 'open',
@@ -113,9 +114,10 @@ export class LyricsServiceClass {
             let targetPath = file.uri;
 
             if (Platform.OS === 'android' && targetPath.startsWith('content://')) {
-                const cachePath = `${RNFS.CachesDirectoryPath}/picked_lyrics_${Date.now()}.lrc`;
-                await RNFS.copyFile(targetPath, cachePath);
-                targetPath = cachePath;
+                // Set before the copy so a partial copy is cleaned up too.
+                tempCachePath = `${RNFS.CachesDirectoryPath}/picked_lyrics_${Date.now()}.lrc`;
+                await RNFS.copyFile(targetPath, tempCachePath);
+                targetPath = tempCachePath;
             }
 
             const rawContent = await RNFS.readFile(targetPath, 'utf8');
@@ -132,6 +134,10 @@ export class LyricsServiceClass {
         } catch (err) {
             console.warn('[LyricsService] Error picking lyrics:', err);
             return null;
+        } finally {
+            if (tempCachePath) {
+                RNFS.unlink(tempCachePath).catch(() => {});
+            }
         }
     }
 
