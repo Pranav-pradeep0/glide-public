@@ -6,11 +6,11 @@
  * - Smooth gesture handling
  * - Custom horizontal thumb
  * - Floating value indicator
- * - Haptic feedback
+ * - One tick when the thumb reaches either end
  */
 
-import React, { useEffect, useCallback, useState } from 'react';
-import { View, StyleSheet, Text, TextInput, LayoutChangeEvent, Vibration, Platform } from 'react-native';
+import React, { useEffect, useCallback } from 'react';
+import { View, StyleSheet, TextInput, AccessibilityActionEvent } from 'react-native';
 import Animated, {
     useSharedValue,
     useAnimatedStyle,
@@ -23,17 +23,12 @@ import Animated, {
     useDerivedValue,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { haptic } from '@/native/HapticModule';
+import { metrics, motion, playerTheme, type } from '@/theme/theme';
 
-// Fallback for haptics using standard Vibration
-const triggerHaptic = () => {
-    if (Platform.OS === 'android') {
-        Vibration.vibrate(10); // Short vibration for feedback
-    } else {
-        // iOS Taptic Engine logic would go here if using a native module
-        // For now, minimal vibration or nothing
-        Vibration.vibrate([0, 10]);
-    }
-};
+const { colors } = playerTheme;
+
+const tickEdge = () => haptic('segmentTick');
 
 interface VerticalSliderProps {
     min: number;
@@ -47,6 +42,7 @@ interface VerticalSliderProps {
     trackColor?: string;
     activeTrackColor?: string;
     disabled?: boolean;
+    accessibilityLabel?: string;
 }
 
 const THUMB_HEIGHT = 12;
@@ -66,14 +62,16 @@ export const VerticalSlider: React.FC<VerticalSliderProps> = React.memo(({
     onValueChange,
     step = 1,
     height = DEFAULT_HEIGHT,
-    thumbColor = '#FFFFFF',
-    trackColor = '#333333',
-    activeTrackColor = '#CCCCCC',
+    thumbColor = colors.primary,
+    trackColor = colors.fillStrong,
+    activeTrackColor = colors.primary,
     disabled = false,
+    accessibilityLabel,
 }) => {
     // Shared values
     const progress = useSharedValue(0); // 0 to 1 (0 = min, 1 = max)
     const isTouching = useSharedValue(false);
+    const lastStep = useSharedValue(value);
     const containerHeight = height;
 
     // Derived value for text on the UI thread
@@ -89,17 +87,26 @@ export const VerticalSlider: React.FC<VerticalSliderProps> = React.memo(({
         const newProgress = (clampedValue - min) / (max - min);
         // Use withTiming only when prop changes from outside to avoid fighting gestures
         if (!isTouching.value) {
-            progress.value = withTiming(newProgress, { duration: 150 });
+            progress.value = withSpring(newProgress, motion.spatial);
         }
-    }, [value, min, max, isTouching]);
+    }, [value, min, max, isTouching, progress]);
 
-    // Haptic feedback helper called from gesture
-    const triggerStepHaptic = useCallback((val: number) => {
+    // One tick each time the thumb arrives at an end.
+    const tickOnStepChange = () => {
         'worklet';
-        // Only trigger if value actually changed (discrete steps)
-        // Note: In a production app, we'd use a shared value to track last haptic value
-        runOnJS(triggerHaptic)();
-    }, []);
+        const stepped = derivedSteppedValue.value;
+        if (stepped !== lastStep.value) {
+            lastStep.value = stepped;
+            if (stepped <= min || stepped >= max) { runOnJS(tickEdge)(); }
+        }
+    };
+
+    const onAccessibilityAction = useCallback((e: AccessibilityActionEvent) => {
+        const { actionName } = e.nativeEvent;
+        const delta = actionName === 'increment' ? step : actionName === 'decrement' ? -step : 0;
+        const next = Math.min(Math.max(value + delta, min), max);
+        if (next !== value) {onValueChange(next);}
+    }, [value, step, min, max, onValueChange]);
 
     // Animated props for the value display
     const animatedProps = useAnimatedProps(() => {
@@ -118,6 +125,7 @@ export const VerticalSlider: React.FC<VerticalSliderProps> = React.memo(({
         .onBegin((e) => {
             'worklet';
             isTouching.value = true;
+            lastStep.value = derivedSteppedValue.value;
             const relativeY = Math.max(0, Math.min(e.y, containerHeight));
             progress.value = 1 - (relativeY / containerHeight);
         })
@@ -125,6 +133,7 @@ export const VerticalSlider: React.FC<VerticalSliderProps> = React.memo(({
             'worklet';
             const relativeY = Math.max(0, Math.min(e.y, containerHeight));
             progress.value = 1 - (relativeY / containerHeight);
+            tickOnStepChange();
         })
         .onEnd(() => {
             'worklet';
@@ -135,10 +144,7 @@ export const VerticalSlider: React.FC<VerticalSliderProps> = React.memo(({
             const finalValue = derivedSteppedValue.value;
             const finalProgress = (finalValue - min) / totalRange;
 
-            progress.value = withSpring(finalProgress, {
-                damping: 20,
-                stiffness: 200,
-            });
+            progress.value = withSpring(finalProgress, motion.spatial);
 
             runOnJS(onValueChange)(finalValue);
         });
@@ -155,7 +161,7 @@ export const VerticalSlider: React.FC<VerticalSliderProps> = React.memo(({
         return {
             transform: [
                 { translateY },
-                { scale: withSpring(isTouching.value ? 1.15 : 1) },
+                { scale: withSpring(isTouching.value ? 1.15 : 1, motion.press) },
             ],
             backgroundColor: thumbColor,
         };
@@ -181,12 +187,21 @@ export const VerticalSlider: React.FC<VerticalSliderProps> = React.memo(({
                 { translateX: -30 },
                 { translateY },
             ],
-            opacity: withTiming(isTouching.value ? 1 : 0, { duration: 150 }),
+            opacity: withTiming(isTouching.value ? 1 : 0, { duration: isTouching.value ? motion.fadeIn : motion.fadeOut }),
         };
     });
 
     return (
-        <View style={[styles.container, { height, opacity: disabled ? 0.5 : 1 }]}>
+        <View
+            style={[styles.container, { height }, disabled && styles.disabled]}
+            accessible
+            accessibilityRole="adjustable"
+            accessibilityLabel={accessibilityLabel}
+            accessibilityState={{ disabled }}
+            accessibilityValue={{ min, max, now: value, text: `${value > 0 ? '+' : ''}${value} dB` }}
+            accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
+            onAccessibilityAction={disabled ? undefined : onAccessibilityAction}
+        >
             <GestureDetector gesture={pan}>
                 <Animated.View style={[styles.touchArea, { height }]}>
                     {/* Background Track */}
@@ -223,6 +238,9 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         marginHorizontal: 0,
     },
+    disabled: {
+        opacity: 0.5,
+    },
     touchArea: {
         width: 60,
         alignItems: 'center',
@@ -244,40 +262,34 @@ const styles = StyleSheet.create({
         position: 'absolute',
         width: '100%',
         height: 1,
-        backgroundColor: 'rgba(255,255,255,0.2)',
+        backgroundColor: colors.fillStrong,
         zIndex: 1,
     },
     thumb: {
         position: 'absolute',
         width: THUMB_WIDTH,
         height: THUMB_HEIGHT,
-        borderRadius: 4,
+        borderRadius: metrics.radius.xs,
         top: 0,
         left: (60 - THUMB_WIDTH) / 2,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.2,
-        shadowRadius: 2,
-        elevation: 3,
     },
     valueIndicator: {
         position: 'absolute',
         top: 0,
-        backgroundColor: '#1A1A1A',
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        borderRadius: 6,
-        borderWidth: 1,
-        borderColor: '#333',
+        backgroundColor: colors.cardElevated,
+        paddingHorizontal: metrics.space.sm,
+        paddingVertical: metrics.space.xs,
+        borderRadius: metrics.radius.sm,
         zIndex: 100,
         left: '50%',
         minWidth: 60,
         alignItems: 'center',
     },
     valueText: {
-        color: '#FFFFFF',
-        fontSize: 12,
+        ...type.caption,
+        color: colors.text,
         fontWeight: '700',
+        fontVariant: ['tabular-nums'],
         padding: 0,
         margin: 0,
         textAlign: 'center',

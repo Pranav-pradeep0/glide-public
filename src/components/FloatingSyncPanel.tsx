@@ -1,20 +1,16 @@
 import React, { useState, useCallback, useRef } from 'react';
-import {
-    View,
-    Text,
-    StyleSheet,
-    Pressable,
-    TextInput,
-    type TextInputInstance,
-    ScrollView,
-    ActivityIndicator,
-} from 'react-native';
+import { View, Text, StyleSheet, TextInput, type TextInputInstance, ScrollView } from 'react-native';
 import Animated, { FadeIn, FadeOut, LinearTransition } from 'react-native-reanimated';
 import Feather from '@react-native-vector-icons/feather';
+import { Button, IconButton, Touchable } from '@/components/ui';
+import { haptic } from '@/native/HapticModule';
+import { metrics, motion, playerTheme, type } from '@/theme/theme';
 import { SubtitleCue } from '../types';
 import { SubtitleSyncService, MatchResult } from '../services/SubtitleSyncService';
 import type { AutoSyncResult } from '../services/SubtitleAutoSync';
 import { describeAutoSync } from '../hooks/video-player/useSubtitleAutoSync';
+
+const { colors } = playerTheme;
 
 /** Earlier on the left, later on the right; coarse on the outside, fine on the inside. */
 const EARLIER_MS = [-500, -50];
@@ -42,7 +38,7 @@ const formatMatchTime = (seconds: number) => {
 };
 
 export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
-    type,
+    type: syncType,
     value,
     onChange,
     onClose,
@@ -54,7 +50,6 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
     const [searchMode, setSearchMode] = useState(false);
     const [query, setQuery] = useState('');
     const [results, setResults] = useState<MatchResult[]>([]);
-    const [isFocused, setIsFocused] = useState(false);
     const inputRef = useRef<TextInputInstance>(null);
     // Matching and offset calculation must use the same playback instant. Playback keeps
     // moving while the user reviews the matches.
@@ -65,10 +60,12 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
     const [undoTo, setUndoTo] = useState<number | null>(null);
 
     const setValue = useCallback((ms: number) => {
+        // One tick as the offset passes through zero.
+        if ((value < 0 && ms >= 0) || (value > 0 && ms <= 0)) { haptic('segmentTick'); }
         setAutoNote(null);
         setUndoTo(null);
         onChange(ms);
-    }, [onChange]);
+    }, [onChange, value]);
 
     const handleAuto = useCallback(async () => {
         if (!onAutoSync) {return;}
@@ -78,8 +75,10 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
         const result = await onAutoSync();
         if (!result) {return;}
         if (result.kind === 'synced') {
+            haptic('confirm');
             if (result.delayMs !== before) {setUndoTo(before);}
         } else {
+            haptic('reject');
             setAutoNote(describeAutoSync(result));
         }
     }, [onAutoSync, value]);
@@ -111,56 +110,55 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
         setResults([]);
     }, [setValue]);
 
-    const isSubtitle = type === 'subtitle' && subtitleCues.length > 0;
-    const noun = type === 'audio' ? 'Audio plays' : 'Subtitles show';
+    const isSubtitle = syncType === 'subtitle' && subtitleCues.length > 0;
+    const noun = syncType === 'audio' ? 'Audio plays' : 'Subtitles show';
     const caption = autoNote
         ?? (value === 0 ? 'No offset' : `${noun} ${(Math.abs(value) / 1000).toFixed(2)} s ${value > 0 ? 'later' : 'earlier'}`);
 
     const renderNudge = (ms: number) => (
-        <Pressable
+        <Touchable
             key={ms}
             onPress={() => setValue(value + ms)}
-            style={({ pressed }) => [styles.nudge, Math.abs(ms) < 500 && styles.nudgeFine, pressed && styles.pressed]}
+            onPlayer
+            style={[styles.nudge, Math.abs(ms) < 500 && styles.nudgeFine]}
             accessibilityRole="button"
             accessibilityLabel={`${ms > 0 ? 'Later' : 'Earlier'} by ${Math.abs(ms)} milliseconds`}
         >
-            <Text style={styles.nudgeText}>{ms > 0 ? '+' : '−'}{Math.abs(ms) / 1000}</Text>
-        </Pressable>
+            <Text style={[type.label, styles.nudgeText]}>{ms > 0 ? '+' : '−'}{Math.abs(ms) / 1000}</Text>
+        </Touchable>
     );
 
     return (
         <Animated.View
             style={styles.container}
-            entering={FadeIn.duration(200)}
-            exiting={FadeOut.duration(200)}
-            layout={LinearTransition.springify()}
+            entering={FadeIn.duration(motion.fadeIn)}
+            exiting={FadeOut.duration(motion.fadeOut)}
+            layout={LinearTransition.springify().mass(motion.spatial.mass).stiffness(motion.spatial.stiffness).damping(motion.spatial.damping)}
             pointerEvents="box-none"
         >
             <View style={styles.card}>
                 <View style={styles.headerRow}>
                     {searchMode ? (
-                        <Pressable onPress={handleToggleSearch} hitSlop={10} style={styles.headerLeft} accessibilityLabel="Back">
-                            <Feather name="chevron-left" size={18} color="#FFF" />
-                            <Text style={styles.title}>Find the line you heard</Text>
-                        </Pressable>
+                        <View style={styles.headerLeft}>
+                            <IconButton icon="chevron-left" onPress={handleToggleSearch} accessibilityLabel="Back" onPlayer style={styles.headerBack} />
+                            <Text style={[type.heading, styles.title]} numberOfLines={1}>Find the line you heard</Text>
+                        </View>
                     ) : (
-                        <Text style={styles.title}>{type === 'audio' ? 'Audio sync' : 'Subtitle sync'}</Text>
+                        <Text style={[type.heading, styles.title]}>{syncType === 'audio' ? 'Audio sync' : 'Subtitle sync'}</Text>
                     )}
                     <View style={styles.headerRight}>
                         {!searchMode && (
-                            <Pressable
+                            <IconButton
+                                icon="rotate-ccw"
+                                iconSize={18}
+                                color={colors.textSecondary}
                                 onPress={() => setValue(0)}
                                 disabled={value === 0}
-                                hitSlop={8}
-                                style={[styles.iconButton, value === 0 && styles.disabled]}
                                 accessibilityLabel="Reset to zero"
-                            >
-                                <Feather name="rotate-ccw" size={15} color="#CCC" />
-                            </Pressable>
+                                onPlayer
+                            />
                         )}
-                        <Pressable onPress={onClose} hitSlop={8} style={styles.iconButton} accessibilityLabel="Close">
-                            <Feather name="x" size={17} color="#CCC" />
-                        </Pressable>
+                        <IconButton icon="x" iconSize={20} color={colors.textSecondary} onPress={onClose} accessibilityLabel="Close" onPlayer />
                     </View>
                 </View>
 
@@ -169,74 +167,65 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
                         <View style={styles.stepper}>
                             {EARLIER_MS.map(renderNudge)}
                             <View style={styles.valueBox} accessibilityLiveRegion="polite">
-                                <Text style={[styles.value, value === 0 && styles.valueZero]} numberOfLines={1} adjustsFontSizeToFit>
+                                <Text style={[type.hero, styles.value, value === 0 && styles.valueZero]} numberOfLines={1} adjustsFontSizeToFit>
                                     {formatSeconds(value)}
                                 </Text>
-                                <Text style={styles.valueUnit}>seconds</Text>
+                                <Text style={[type.caption, styles.valueUnit]}>seconds</Text>
                             </View>
                             {LATER_MS.map(renderNudge)}
                         </View>
 
                         <View style={styles.captionRow}>
-                            <Text style={styles.caption} numberOfLines={2}>{caption}</Text>
+                            <Text style={[type.caption, styles.caption]} numberOfLines={2}>{caption}</Text>
                             {undoTo !== null && (
-                                <Pressable onPress={() => setValue(undoTo)} hitSlop={10} accessibilityLabel="Undo auto sync">
-                                    <Text style={styles.undo}>Undo</Text>
-                                </Pressable>
+                                <Button label="Undo" variant="ghost" onPress={() => setValue(undoTo)} accessibilityLabel="Undo auto sync" onPlayer />
                             )}
                         </View>
 
                         {isSubtitle && (
                             <View style={styles.actionRow}>
                                 {onAutoSync && (
-                                    <Pressable
+                                    <Button
+                                        label={autoSyncRunning ? 'Syncing…' : 'Auto sync'}
+                                        variant="primary"
+                                        icon="zap"
+                                        loading={autoSyncRunning}
                                         onPress={handleAuto}
-                                        disabled={autoSyncRunning}
-                                        style={({ pressed }) => [styles.action, styles.actionPrimary, pressed && styles.pressed]}
                                         accessibilityLabel="Sync subtitles automatically from the audio"
-                                    >
-                                        {autoSyncRunning
-                                            ? <ActivityIndicator size="small" color="#000" />
-                                            : <Feather name="zap" size={15} color="#000" />}
-                                        <Text style={[styles.actionText, styles.actionTextPrimary]}>
-                                            {autoSyncRunning ? 'Syncing…' : 'Auto sync'}
-                                        </Text>
-                                    </Pressable>
+                                        onPlayer
+                                        style={styles.flex}
+                                    />
                                 )}
-                                <Pressable
+                                <Button
+                                    label="Pick a line"
+                                    icon="search"
                                     onPress={handleToggleSearch}
-                                    style={({ pressed }) => [styles.action, pressed && styles.pressed]}
                                     accessibilityLabel="Pick the line you just heard"
-                                >
-                                    <Feather name="search" size={15} color="#FFF" />
-                                    <Text style={styles.actionText}>Pick a line</Text>
-                                </Pressable>
+                                    onPlayer
+                                    style={styles.flex}
+                                />
                             </View>
                         )}
                     </>
                 )}
 
                 {searchMode && (
-                    <Animated.View entering={FadeIn.duration(200)} style={styles.searchArea}>
-                        <View style={[styles.inputWrapper, isFocused && styles.inputWrapperFocused]}>
-                            <Feather name="search" size={15} color={isFocused ? '#FFF' : '#777'} />
+                    <Animated.View entering={FadeIn.duration(motion.fadeIn)} style={styles.searchArea}>
+                        <View style={styles.inputWrapper}>
+                            <Feather name="search" size={16} color={colors.textTertiary} />
                             <TextInput
                                 ref={inputRef}
-                                style={styles.input}
+                                style={[type.body, styles.input]}
                                 placeholder="Type a few words you just heard"
-                                placeholderTextColor="#777"
+                                placeholderTextColor={colors.textTertiary}
                                 value={query}
                                 onChangeText={handleSearch}
-                                onFocus={() => setIsFocused(true)}
-                                onBlur={() => setIsFocused(false)}
                                 autoCorrect={false}
                                 autoCapitalize="none"
-                                selectionColor="#FFFFFF"
+                                selectionColor={colors.primary}
                             />
                             {query.length > 0 && (
-                                <Pressable onPress={() => handleSearch('')} hitSlop={8} accessibilityLabel="Clear">
-                                    <Feather name="x-circle" size={15} color="#777" />
-                                </Pressable>
+                                <IconButton icon="x" iconSize={16} color={colors.textTertiary} onPress={() => handleSearch('')} accessibilityLabel="Clear" onPlayer />
                             )}
                         </View>
 
@@ -245,26 +234,29 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
                                 {results.map((item, index) => {
                                     const shift = SubtitleSyncService.calculateOffset(item.cue, matchReferenceTimeRef.current);
                                     return (
-                                        <Pressable
+                                        <Touchable
                                             key={`${item.cue.startTime}-${index}`}
-                                            style={({ pressed }) => [styles.resultItem, pressed && styles.resultPressed]}
+                                            scaleTo={1}
+                                            stateLayer
+                                            onPlayer
+                                            style={styles.resultItem}
                                             onPress={() => applySync(item)}
                                         >
                                             <View style={styles.resultBody}>
-                                                <Text style={styles.resultText} numberOfLines={2}>
+                                                <Text style={[type.row, styles.resultText]} numberOfLines={2}>
                                                     {item.cue.text.replace(/\n/g, ' ')}
                                                 </Text>
-                                                <Text style={styles.resultTime}>{formatMatchTime(item.cue.startTime)}</Text>
+                                                <Text style={[type.caption, styles.resultTime]}>{formatMatchTime(item.cue.startTime)}</Text>
                                             </View>
-                                            <Text style={styles.resultShift}>{formatSeconds(shift)} s</Text>
-                                        </Pressable>
+                                            <Text style={[type.label, styles.resultShift]}>{formatSeconds(shift)} s</Text>
+                                        </Touchable>
                                     );
                                 })}
                             </ScrollView>
                         )}
 
                         {query.length >= 2 && results.length === 0 && (
-                            <Text style={styles.emptyText}>No matching line near here</Text>
+                            <Text style={[type.caption, styles.emptyText]}>No matching line near here</Text>
                         )}
                     </Animated.View>
                 )}
@@ -274,6 +266,7 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
 };
 
 const styles = StyleSheet.create({
+    flex: { flex: 1 },
     container: {
         position: 'absolute',
         bottom: 96,
@@ -285,90 +278,65 @@ const styles = StyleSheet.create({
     card: {
         width: '92%',
         maxWidth: 420,
-        backgroundColor: 'rgba(20, 20, 20, 0.97)',
-        borderRadius: 24,
-        paddingHorizontal: 16,
-        paddingTop: 12,
-        paddingBottom: 16,
-        gap: 14,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: 'rgba(255, 255, 255, 0.12)',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.4,
-        shadowRadius: 16,
-        elevation: 12,
+        backgroundColor: colors.cardElevated,
+        borderRadius: metrics.radius.card,
+        paddingHorizontal: metrics.space.lg,
+        paddingTop: metrics.space.sm,
+        paddingBottom: metrics.space.lg,
+        gap: metrics.space.md,
     },
-    headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 36 },
-    headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1 },
-    headerRight: { flexDirection: 'row', alignItems: 'center', gap: 4, marginRight: -6 },
-    title: { color: '#FFF', fontSize: 15, fontWeight: '600' },
-    iconButton: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-    disabled: { opacity: 0.3 },
-    pressed: { opacity: 0.55 },
+    headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: metrics.touch },
+    headerLeft: { flexDirection: 'row', alignItems: 'center', flexShrink: 1 },
+    headerBack: { marginLeft: -metrics.space.sm },
+    headerRight: { flexDirection: 'row', alignItems: 'center', marginRight: -metrics.space.sm },
+    title: { color: colors.text },
 
-    stepper: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    stepper: { flexDirection: 'row', alignItems: 'center', gap: metrics.space.xs },
     nudge: {
-        width: 48,
-        height: 48,
-        borderRadius: 14,
+        width: metrics.touch,
+        height: metrics.touch,
+        borderRadius: metrics.radius.md,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: 'rgba(255, 255, 255, 0.12)',
+        backgroundColor: colors.fillStrong,
     },
-    nudgeFine: { backgroundColor: 'rgba(255, 255, 255, 0.06)' },
-    nudgeText: { color: '#FFF', fontSize: 13, fontWeight: '600', fontVariant: ['tabular-nums'] },
+    nudgeFine: { backgroundColor: colors.fill },
+    nudgeText: { color: colors.text, fontVariant: ['tabular-nums'] },
     valueBox: { flex: 1, alignItems: 'center' },
-    value: { color: '#FFF', fontSize: 30, fontWeight: '700', fontVariant: ['tabular-nums'], letterSpacing: -0.5 },
-    valueZero: { color: '#8A8A8A' },
-    valueUnit: { color: '#777', fontSize: 11, marginTop: -2 },
+    value: { color: colors.text },
+    valueZero: { color: colors.textTertiary },
+    valueUnit: { color: colors.textTertiary, marginTop: -2 },
 
-    captionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, marginTop: -4 },
-    caption: { color: '#AAA', fontSize: 12, textAlign: 'center', flexShrink: 1 },
-    undo: { color: '#FFF', fontSize: 12, fontWeight: '700' },
+    captionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: metrics.space.sm },
+    caption: { color: colors.textSecondary, textAlign: 'center', flexShrink: 1 },
 
-    actionRow: { flexDirection: 'row', gap: 8 },
-    action: {
-        flex: 1,
-        height: 44,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        borderRadius: 22,
-        backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    },
-    actionPrimary: { backgroundColor: '#FFFFFF' },
-    actionText: { color: '#FFF', fontSize: 14, fontWeight: '600' },
-    actionTextPrimary: { color: '#000' },
+    actionRow: { flexDirection: 'row', gap: metrics.space.sm },
 
-    searchArea: { gap: 8 },
+    searchArea: { gap: metrics.space.sm },
     inputWrapper: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: metrics.space.sm,
         height: 44,
-        paddingHorizontal: 14,
-        borderRadius: 22,
-        backgroundColor: 'rgba(255, 255, 255, 0.08)',
-        borderWidth: 1,
-        borderColor: 'transparent',
+        paddingLeft: 14,
+        paddingRight: metrics.space.xs,
+        borderRadius: metrics.radius.pill,
+        backgroundColor: colors.fill,
     },
-    inputWrapperFocused: { borderColor: 'rgba(255, 255, 255, 0.28)' },
-    input: { flex: 1, color: '#FFF', fontSize: 14, paddingVertical: 0 },
+    input: { flex: 1, color: colors.text, paddingVertical: 0 },
     resultsList: { maxHeight: 200 },
     resultItem: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 12,
-        paddingVertical: 10,
-        paddingHorizontal: 10,
-        borderRadius: 12,
+        gap: metrics.space.md,
+        minHeight: metrics.touch,
+        paddingVertical: metrics.space.sm,
+        paddingHorizontal: metrics.space.sm,
+        borderRadius: metrics.radius.md,
     },
-    resultPressed: { backgroundColor: 'rgba(255, 255, 255, 0.08)' },
     resultBody: { flex: 1, gap: 2 },
-    resultText: { color: '#EEE', fontSize: 14 },
-    resultTime: { color: '#777', fontSize: 11, fontVariant: ['tabular-nums'] },
-    resultShift: { color: '#FFF', fontSize: 13, fontWeight: '600', fontVariant: ['tabular-nums'] },
-    emptyText: { color: '#777', fontSize: 12, textAlign: 'center', paddingVertical: 6 },
+    resultText: { color: colors.text },
+    resultTime: { color: colors.textTertiary, fontVariant: ['tabular-nums'] },
+    resultShift: { color: colors.text, fontVariant: ['tabular-nums'] },
+    emptyText: { color: colors.textTertiary, textAlign: 'center', paddingVertical: metrics.space.sm },
 });

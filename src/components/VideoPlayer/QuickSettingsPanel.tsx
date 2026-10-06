@@ -1,37 +1,26 @@
-import React, { memo, useRef, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable } from 'react-native';
+import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import Slider from '@react-native-community/slider';
-import { Feather } from '@react-native-vector-icons/feather';
+import Animated, { SlideInLeft, SlideInRight, SlideOutLeft, SlideOutRight } from 'react-native-reanimated';
 import type { PlayerResizeMode } from '@/components/VideoPlayer/GlidePlayer';
-import { AudioIcon, SubtitleIcon, BookmarkListIcon } from './PlayerIcons';
+import { Chip, ListGroup, ListRow } from '@/components/ui';
+import { metrics, motion, playerTheme, type } from '@/theme/theme';
+import { haptic } from '@/native/HapticModule';
+import { DISPLAY_MODES, formatRate } from './PlayerIcons';
+import { SidePanel } from './SidePanel';
 import { useAppStore } from '../../store/appStore';
 import HapticModule from '../../native/HapticModule';
-import Animated, {
-    FadeIn,
-    FadeOut,
-    SlideInLeft,
-    SlideOutLeft,
-} from 'react-native-reanimated';
 
-import { useWindowDimensions } from 'react-native';
+const { colors } = playerTheme;
 
-const SPEED_OPTIONS = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0];
-const DISPLAY_MODE_OPTIONS: Array<{ mode: PlayerResizeMode; label: string }> = [
-    { mode: 'best-fit', label: 'BEST FIT' },
-    { mode: 'contain', label: 'CONTAIN' },
-    { mode: 'cover', label: 'COVER' },
-    { mode: 'fill', label: 'FILL' },
-    { mode: 'scale-down', label: 'SCALE DOWN' },
-    { mode: 'none', label: 'NONE' },
-    { mode: 'stretch', label: 'STRETCH' },
-];
+const SPEED_CHIPS = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 const SLEEP_TIMER_OPTIONS = [
     { label: 'Off', value: null },
-    { label: '10m', value: 10 },
-    { label: '20m', value: 20 },
-    { label: '30m', value: 30 },
-    { label: '60m', value: 60 },
-    { label: 'End', value: -1 },
+    { label: '10 min', value: 10 },
+    { label: '20 min', value: 20 },
+    { label: '30 min', value: 30 },
+    { label: '1 hour', value: 60 },
+    { label: 'End of video', value: -1 },
 ];
 
 /** Strength presets; 1 is the tuned look, and the slider runs to 1.5. */
@@ -40,6 +29,25 @@ const ENHANCEMENT_PRESETS = [
     { label: 'Natural', value: 1 },
     { label: 'Vivid', value: 1.5 },
 ];
+
+const HAPTIC_PRESETS = [
+    { label: 'Light', value: 50 },
+    { label: 'Medium', value: 120 },
+    { label: 'Strong', value: 200 },
+];
+
+// Sub-pages slide in on the same spring as the panel.
+const spring = <T extends { springify: () => any }>(b: T) =>
+    b.springify().mass(motion.spatial.mass).stiffness(motion.spatial.stiffness).damping(motion.spatial.damping);
+const PAGE_IN = spring(SlideInRight);
+const PAGE_BACK_IN = spring(SlideInLeft);
+const PAGE_OUT = spring(SlideOutLeft);
+const PAGE_BACK_OUT = spring(SlideOutRight);
+
+type ShakeAction = 'play_pause' | 'next' | 'previous' | 'seek_forward' | 'seek_backward';
+type Page = 'main' | 'display' | 'sleep' | 'shake';
+
+const PAGE_TITLES: Record<Page, string> = { main: 'Playback', display: 'Display', sleep: 'Sleep timer', shake: 'Shake to control' };
 
 interface QuickSettingsPanelProps {
     onClose: () => void;
@@ -63,673 +71,324 @@ interface QuickSettingsPanelProps {
     enableHaptics?: boolean;
     shakeEnabled?: boolean;
     onToggleShake?: () => void;
-    shakeAction?: 'play_pause' | 'next' | 'previous' | 'seek_forward' | 'seek_backward';
-    onSelectShakeAction?: (action: 'play_pause' | 'next' | 'previous' | 'seek_forward' | 'seek_backward') => void;
+    shakeAction?: ShakeAction;
+    onSelectShakeAction?: (action: ShakeAction) => void;
     seekDuration?: number;
     videoEnhancement?: boolean;
     onToggleVideoEnhancement?: () => void;
     videoEnhancementStrength?: number;
     onSetVideoEnhancementStrength?: (strength: number) => void;
+    /** Each toggle row renders only when its handler is given. */
+    nightModeActive?: boolean;
+    onToggleNightMode?: () => void;
+    backgroundPlayEnabled?: boolean;
+    onToggleBackgroundPlay?: () => void;
+    hapticsEnabled?: boolean;
+    onToggleHaptics?: () => void;
+    /** Current track names shown beside the Audio and Subtitles rows. */
+    audioValue?: string;
+    subtitleValue?: string;
 }
 
 export const QuickSettingsPanel: React.FC<QuickSettingsPanelProps> = memo((props) => {
-    // Reactive Dimensions
-    const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = useWindowDimensions();
-    const isLandscape = SCREEN_WIDTH > SCREEN_HEIGHT;
-
-    // Width Logic:
-    // Landscape: 45% of screen (or min 400, max 600)
-    // Portrait: 90% of screen (or min 350, max 450)
-    const PANEL_WIDTH = isLandscape
-        ? Math.min(500, Math.max(400, SCREEN_WIDTH * 0.40))
-        : Math.min(480, SCREEN_WIDTH * 0.9);
-
-    // Haptics
     const { settings, setHapticIntensity, toggleHaptics } = useAppStore();
     const { hapticSettings } = settings;
-    const lastPreviewTime = useRef(0);
+    // Older builds stored any value from a 1-255 slider; show the nearest preset.
+    const hapticPreset = HAPTIC_PRESETS.reduce((best, p) =>
+        Math.abs(p.value - hapticSettings.intensity) < Math.abs(best.value - hapticSettings.intensity) ? p : best,
+    ).value;
 
-    const handleIntensityChange = useCallback((value: number) => {
-        setHapticIntensity(value);
-        const now = Date.now();
-        if (now - lastPreviewTime.current > 150 && HapticModule) {
-            lastPreviewTime.current = now;
-            HapticModule.vibrate(50, Math.round(value));
+    const [shown, setShown] = useState(false);
+    const [page, setPage] = useState<Page>('main');
+    const navigated = useRef(false);
+    const closeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+    const lastRate = useRef(props.playbackRate);
+
+    useEffect(() => {
+        setShown(true);
+        return () => clearTimeout(closeTimer.current);
+    }, []);
+
+    // Stay mounted for the exit animation, then let the screen unmount us.
+    const { onClose } = props;
+    const close = useCallback(() => {
+        setShown(false);
+        closeTimer.current = setTimeout(onClose, motion.fadeOut);
+    }, [onClose]);
+
+    const goTo = (next: Page) => {
+        navigated.current = true;
+        setPage(next);
+    };
+
+    const setRate = (rate: number, fromSlider: boolean) => {
+        const prev = lastRate.current;
+        lastRate.current = rate;
+        // One tick as the slider passes normal speed.
+        if (fromSlider && ((prev < 1 && rate >= 1) || (prev > 1 && rate <= 1))) { haptic('segmentTick'); }
+        props.onPlaybackRateChange(rate);
+    };
+
+    // `stretch` renders exactly like `fill`, which is the option shown for it.
+    const displayMode = props.resizeMode === 'stretch' ? 'fill' : props.resizeMode;
+    const displayLabel = DISPLAY_MODES.find(m => m.mode === displayMode)?.label;
+    const sleepLabel = SLEEP_TIMER_OPTIONS.find(o => o.value === props.sleepTimer)?.label ?? 'Off';
+    const enhancementStrength = props.videoEnhancementStrength ?? 1;
+    const seconds = props.seekDuration ?? 30;
+    const shakeActions: Array<{ id: ShakeAction; label: string }> = [
+        { id: 'play_pause', label: 'Play or pause' },
+        { id: 'next', label: 'Next' },
+        { id: 'previous', label: 'Previous' },
+        { id: 'seek_forward', label: `Forward ${seconds} s` },
+        { id: 'seek_backward', label: `Back ${seconds} s` },
+    ];
+
+    const toggleHapticsRow = props.onToggleHaptics ?? (props.enableHaptics ? toggleHaptics : undefined);
+    const hapticsOn = props.hapticsEnabled ?? hapticSettings.enabled;
+
+    const renderMain = () => (
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
+            <View style={styles.speedHead}>
+                <Text style={[type.label, styles.speedLabel]}>Speed</Text>
+                <Text style={[type.row, styles.speedValue]}>{formatRate(props.playbackRate)}</Text>
+            </View>
+            <View style={styles.chips}>
+                {SPEED_CHIPS.map(rate => (
+                    <Chip
+                        key={rate}
+                        label={formatRate(rate)}
+                        selected={props.playbackRate === rate}
+                        onPress={() => setRate(rate, false)}
+                        accessibilityLabel={`Speed ${formatRate(rate)}`}
+                        onPlayer
+                    />
+                ))}
+            </View>
+            <Slider
+                style={styles.slider}
+                minimumValue={0.25}
+                maximumValue={4}
+                step={0.05}
+                value={props.playbackRate}
+                onValueChange={v => setRate(Math.round(v * 100) / 100, true)}
+                minimumTrackTintColor={colors.primary}
+                maximumTrackTintColor={colors.fillStrong}
+                thumbTintColor={colors.primary}
+                accessibilityLabel="Playback speed"
+            />
+
+            <ListGroup inset onPlayer style={styles.group}>
+                <ListRow icon="volume-2" title="Audio" value={props.audioValue} chevron onPress={props.onOpenAudio} onPlayer />
+                <ListRow icon="type" title="Subtitles" value={props.subtitleValue} chevron onPress={props.onOpenSubtitle} onPlayer />
+                <ListRow icon="maximize" title="Display" value={displayLabel} chevron onPress={() => goTo('display')} onPlayer />
+                <ListRow icon="clock" title="Sleep timer" value={sleepLabel} chevron onPress={() => goTo('sleep')} onPlayer />
+                {props.onOpenPlaylist && (
+                    <ListRow icon="list" title="Playlist" chevron onPress={props.onOpenPlaylist} onPlayer />
+                )}
+                {props.onOpenBookmarkPanel && (
+                    <ListRow icon="bookmark" title="Bookmarks" chevron onPress={props.onOpenBookmarkPanel} onPlayer />
+                )}
+                {props.onAddBookmark && (
+                    <ListRow icon="plus-circle" title="Add bookmark here" onPress={props.onAddBookmark} onPlayer />
+                )}
+            </ListGroup>
+
+            <ListGroup inset onPlayer style={styles.group}>
+                {props.onToggleNightMode && (
+                    <ListRow
+                        icon="moon"
+                        title="Night mode"
+                        toggle={{ value: !!props.nightModeActive, onChange: props.onToggleNightMode }}
+                        onPlayer
+                    />
+                )}
+                {props.onToggleBackgroundPlay && (
+                    <ListRow
+                        icon="headphones"
+                        title="Background play"
+                        toggle={{ value: !!props.backgroundPlayEnabled, onChange: props.onToggleBackgroundPlay }}
+                        onPlayer
+                    />
+                )}
+                <ListRow icon="volume-x" title="Mute" toggle={{ value: props.muted, onChange: props.onToggleMute }} onPlayer />
+                <ListRow icon="repeat" title="Repeat" toggle={{ value: props.repeat, onChange: props.onToggleRepeat }} onPlayer />
+                {props.onToggleVideoEnhancement && (
+                    <ListRow
+                        icon="droplet"
+                        title="Color enhancement"
+                        toggle={{ value: !!props.videoEnhancement, onChange: props.onToggleVideoEnhancement }}
+                        onPlayer
+                    />
+                )}
+                {props.onToggleVideoEnhancement && props.videoEnhancement && (
+                    <View style={styles.subOptions}>
+                        <View style={styles.chips}>
+                            {ENHANCEMENT_PRESETS.map(({ label, value }) => (
+                                <Chip
+                                    key={label}
+                                    label={label}
+                                    selected={Math.abs(enhancementStrength - value) < 0.01}
+                                    onPress={() => props.onSetVideoEnhancementStrength?.(value)}
+                                    onPlayer
+                                />
+                            ))}
+                        </View>
+                        <View style={styles.sliderRow}>
+                            <Slider
+                                style={[styles.slider, styles.sliderFlex]}
+                                minimumValue={0}
+                                maximumValue={1.5}
+                                step={0.05}
+                                value={enhancementStrength}
+                                onValueChange={props.onSetVideoEnhancementStrength}
+                                minimumTrackTintColor={colors.primary}
+                                maximumTrackTintColor={colors.fillStrong}
+                                thumbTintColor={colors.primary}
+                                accessibilityLabel="Color enhancement strength"
+                            />
+                            <Text style={[type.body, styles.valueText]}>{Math.round(enhancementStrength * 100)}%</Text>
+                        </View>
+                    </View>
+                )}
+                {toggleHapticsRow && (
+                    <ListRow
+                        icon="zap"
+                        title="Haptics"
+                        toggle={{ value: hapticsOn, onChange: toggleHapticsRow }}
+                        onPlayer
+                    />
+                )}
+                {toggleHapticsRow && hapticsOn && (
+                    <View style={[styles.chips, styles.subOptions]}>
+                        {HAPTIC_PRESETS.map(p => (
+                            <Chip
+                                key={p.value}
+                                label={p.label}
+                                selected={hapticPreset === p.value}
+                                onPress={() => {
+                                    setHapticIntensity(p.value);
+                                    HapticModule?.vibrate(80, p.value);
+                                }}
+                                accessibilityLabel={`${p.label} haptics`}
+                                onPlayer
+                            />
+                        ))}
+                    </View>
+                )}
+                {props.onToggleShake && (
+                    <ListRow
+                        icon="activity"
+                        title="Shake to control"
+                        value={props.shakeEnabled ? 'On' : 'Off'}
+                        chevron
+                        onPress={() => goTo('shake')}
+                        onPlayer
+                    />
+                )}
+            </ListGroup>
+        </ScrollView>
+    );
+
+    const renderSub = () => {
+        if (page === 'display') {
+            return (
+                <ListGroup inset onPlayer>
+                    {DISPLAY_MODES.map(({ mode, label }) => (
+                        <ListRow
+                            key={mode}
+                            title={label}
+                            selected={displayMode === mode}
+                            onPress={() => props.onSetResizeMode(mode)}
+                            onPlayer
+                        />
+                    ))}
+                </ListGroup>
+            );
         }
-    }, [setHapticIntensity]);
-
-    const handlePresetSelect = useCallback((value: number) => {
-        setHapticIntensity(value);
-        HapticModule?.vibrate(80, value);
-    }, [setHapticIntensity]);
+        if (page === 'sleep') {
+            return (
+                <ListGroup inset onPlayer>
+                    {SLEEP_TIMER_OPTIONS.map(opt => (
+                        <ListRow
+                            key={opt.label}
+                            title={opt.label}
+                            selected={props.sleepTimer === opt.value}
+                            onPress={() => props.onSetSleepTimer(opt.value)}
+                            onPlayer
+                        />
+                    ))}
+                </ListGroup>
+            );
+        }
+        return (
+            <>
+                <ListGroup inset onPlayer>
+                    <ListRow
+                        title="Shake to control"
+                        toggle={{ value: !!props.shakeEnabled, onChange: () => props.onToggleShake?.() }}
+                        onPlayer
+                    />
+                </ListGroup>
+                {props.shakeEnabled && (
+                    <ListGroup inset onPlayer style={styles.group}>
+                        {shakeActions.map(item => (
+                            <ListRow
+                                key={item.id}
+                                title={item.label}
+                                selected={props.shakeAction === item.id}
+                                onPress={() => props.onSelectShakeAction?.(item.id)}
+                                onPlayer
+                            />
+                        ))}
+                    </ListGroup>
+                )}
+            </>
+        );
+    };
 
     return (
-        <View style={[StyleSheet.absoluteFill, { zIndex: 1000 }]}>
-            {/* Backdrop */}
-            <Animated.View
-                entering={FadeIn.duration(200)}
-                exiting={FadeOut.duration(200)}
-                style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.5)' }]}
-            >
-                <Pressable style={StyleSheet.absoluteFill} onPress={props.onClose} />
-            </Animated.View>
-
-            {/* Panel */}
-            <Animated.View
-                entering={SlideInLeft.duration(250)}
-                exiting={SlideOutLeft.duration(250)}
-                style={[
-                    styles.panelContainer,
-                    {
-                        width: PANEL_WIDTH,
-                        paddingTop: props.insets?.top || 0,
-                        paddingBottom: props.insets?.bottom || 0,
-                    },
-                ]}
-            >
-                {/* Content */}
-                <View style={styles.contentContainer}>
-                    {/* Header */}
-                    <View style={styles.header}>
-                        <View style={styles.titleRow}>
-                            <View style={styles.iconBadge}>
-                                <Feather name="settings" size={20} color="#FFF" />
-                            </View>
-                            <Text style={styles.titleText}>Quick Settings</Text>
-                        </View>
-                        <Pressable
-                            style={({ pressed }) => [styles.closeBtn, pressed && styles.opacityPressed]}
-                            onPress={props.onClose}
-                            hitSlop={15}
-                        >
-                            <Feather name="x" size={22} color="#FFF" />
-                        </Pressable>
-                    </View>
-
-                    <ScrollView
-                        showsVerticalScrollIndicator={false}
-                        contentContainerStyle={styles.scrollContent}
+        <SidePanel
+            visible={shown}
+            title={PAGE_TITLES[page]}
+            onClose={close}
+            onBack={page === 'main' ? undefined : () => setPage('main')}
+        >
+            <View style={styles.pages}>
+                {page === 'main' ? (
+                    <Animated.View
+                        key="main"
+                        style={styles.page}
+                        entering={navigated.current ? PAGE_BACK_IN : undefined}
+                        exiting={PAGE_OUT}
                     >
-                        {/* HAPTICS SECTION */}
-                        {props.enableHaptics && (
-                            <View style={styles.section}>
-                                <View style={styles.sectionHeaderRow}>
-                                    <Text style={styles.sectionTitle}>HAPTICS</Text>
-                                    <Pressable
-                                        style={[styles.switch, hapticSettings.enabled && styles.switchActive]}
-                                        onPress={toggleHaptics}
-                                    >
-                                        <View style={[styles.switchThumb, hapticSettings.enabled && styles.switchThumbActive]} />
-                                    </Pressable>
-                                </View>
-
-                                <View style={[styles.card, !hapticSettings.enabled && styles.disabledOpacity]}>
-                                    <View style={styles.sliderRow}>
-                                        <Feather name="zap" size={18} color="rgba(255,255,255,0.5)" style={{ marginRight: 12 }} />
-                                        <Slider
-                                            style={{ flex: 1, height: 40 }}
-                                            minimumValue={1}
-                                            maximumValue={255}
-                                            value={hapticSettings.intensity}
-                                            onValueChange={handleIntensityChange}
-                                            minimumTrackTintColor="#FFFFFF"
-                                            maximumTrackTintColor="rgba(255,255,255,0.2)"
-                                            thumbTintColor="#FFF"
-                                            disabled={!hapticSettings.enabled}
-                                        />
-                                        <Text style={styles.valueText}>{Math.round(hapticSettings.intensity)}</Text>
-                                    </View>
-                                    <View style={styles.presetsContainer}>
-                                        {[50, 120, 200].map((val, idx) => (
-                                            <Pressable
-                                                key={val}
-                                                style={[
-                                                    styles.presetChip,
-                                                    hapticSettings.intensity === val && styles.activeChip,
-                                                ]}
-                                                onPress={() => handlePresetSelect(val)}
-                                                disabled={!hapticSettings.enabled}
-                                            >
-                                                <Text style={[
-                                                    styles.chipText,
-                                                    hapticSettings.intensity === val && styles.activeChipText,
-                                                ]}>
-                                                    {['Light', 'Medium', 'Strong'][idx]}
-                                                </Text>
-                                            </Pressable>
-                                        ))}
-                                    </View>
-                                </View>
-                            </View>
-                        )}
-
-                        {/* COLOR ENHANCEMENT */}
-                        {props.onToggleVideoEnhancement && (
-                            <View style={styles.section}>
-                                <View style={styles.sectionHeaderRow}>
-                                    <Text style={styles.sectionTitle}>COLOR ENHANCEMENT</Text>
-                                    <Pressable
-                                        style={[styles.switch, props.videoEnhancement && styles.switchActive]}
-                                        onPress={props.onToggleVideoEnhancement}
-                                        accessibilityRole="switch"
-                                        accessibilityLabel="Color enhancement"
-                                        accessibilityState={{ checked: !!props.videoEnhancement }}
-                                    >
-                                        <View style={[styles.switchThumb, props.videoEnhancement && styles.switchThumbActive]} />
-                                    </Pressable>
-                                </View>
-
-                                <View style={[styles.card, !props.videoEnhancement && styles.disabledOpacity]}>
-                                    <View style={styles.sliderRow}>
-                                        <Feather name="aperture" size={18} color="rgba(255,255,255,0.5)" style={{ marginRight: 12 }} />
-                                        <Slider
-                                            style={{ flex: 1, height: 40 }}
-                                            minimumValue={0}
-                                            maximumValue={1.5}
-                                            step={0.05}
-                                            value={props.videoEnhancementStrength ?? 1}
-                                            onValueChange={props.onSetVideoEnhancementStrength}
-                                            minimumTrackTintColor="#FFFFFF"
-                                            maximumTrackTintColor="rgba(255,255,255,0.2)"
-                                            thumbTintColor="#FFF"
-                                            disabled={!props.videoEnhancement}
-                                            accessibilityLabel="Color enhancement strength"
-                                        />
-                                        <Text style={styles.valueText}>
-                                            {Math.round((props.videoEnhancementStrength ?? 1) * 100)}%
-                                        </Text>
-                                    </View>
-                                    <View style={styles.presetsContainer}>
-                                        {ENHANCEMENT_PRESETS.map(({ label, value }) => {
-                                            const active = Math.abs((props.videoEnhancementStrength ?? 1) - value) < 0.01;
-                                            return (
-                                                <Pressable
-                                                    key={label}
-                                                    style={[styles.presetChip, active && styles.activeChip]}
-                                                    onPress={() => props.onSetVideoEnhancementStrength?.(value)}
-                                                    disabled={!props.videoEnhancement}
-                                                >
-                                                    <Text style={[styles.chipText, active && styles.activeChipText]}>{label}</Text>
-                                                </Pressable>
-                                            );
-                                        })}
-                                    </View>
-                                </View>
-                            </View>
-                        )}
-
-                        {/* SHAKE CONTROLS */}
-                        <View style={styles.section}>
-                            <View style={styles.sectionHeaderRow}>
-                                <Text style={styles.sectionTitle}>SHAKE CONTROLS</Text>
-                                <Pressable
-                                    style={[styles.switch, props.shakeEnabled && styles.switchActive]}
-                                    onPress={props.onToggleShake}
-                                >
-                                    <View style={[styles.switchThumb, props.shakeEnabled && styles.switchThumbActive]} />
-                                </Pressable>
-                            </View>
-                            <View style={[styles.card, !props.shakeEnabled && styles.disabledOpacity]}>
-                                <Text style={styles.subtleText}>
-                                    Intensity: {settings.shakeThreshold.toFixed(1)} · Tune in Settings
-                                </Text>
-                                <View style={styles.gridContainer}>
-                                    {([
-                                        { id: 'play_pause', label: 'Play/Pause' },
-                                        { id: 'next', label: 'Next' },
-                                        { id: 'previous', label: 'Previous' },
-                                        { id: 'seek_forward', label: `Seek +${props.seekDuration ?? 30}` },
-                                        { id: 'seek_backward', label: `Seek -${props.seekDuration ?? 30}` },
-                                    ] as const).map((item) => (
-                                        <Pressable
-                                            key={item.id}
-                                            style={[
-                                                styles.gridItem,
-                                                props.shakeAction === item.id && styles.activeGridItem,
-                                                { flexGrow: 1, minWidth: 110 },
-                                            ]}
-                                            onPress={() => props.onSelectShakeAction?.(item.id)}
-                                            disabled={!props.shakeEnabled}
-                                        >
-                                            <Text style={[
-                                                styles.gridItemText,
-                                                props.shakeAction === item.id && styles.activeGridItemText,
-                                            ]}>
-                                                {item.label}
-                                            </Text>
-                                        </Pressable>
-                                    ))}
-                                </View>
-                            </View>
-                        </View>
-
-                        {/* PLAYBACK SPEED */}
-                        <View style={styles.section}>
-                            <Text style={styles.sectionTitle}>PLAYBACK SPEED</Text>
-                            <View style={styles.gridContainer}>
-                                {SPEED_OPTIONS.map(rate => (
-                                    <Pressable
-                                        key={rate}
-                                        style={[
-                                            styles.gridItem,
-                                            props.playbackRate === rate && styles.activeGridItem,
-                                        ]}
-                                        onPress={() => props.onPlaybackRateChange(rate)}
-                                    >
-                                        <Text style={[
-                                            styles.gridItemText,
-                                            props.playbackRate === rate && styles.activeGridItemText,
-                                        ]}>{rate}x</Text>
-                                    </Pressable>
-                                ))}
-                            </View>
-                        </View>
-
-                        {/* RESIZE MODE */}
-                        <View style={styles.section}>
-                            <Text style={styles.sectionTitle}>DISPLAY MODE</Text>
-                            <View style={styles.gridContainer}>
-                                {DISPLAY_MODE_OPTIONS.map(({ mode, label }) => (
-                                    <Pressable
-                                        key={mode}
-                                        style={[
-                                            styles.gridItem,
-                                            props.resizeMode === mode && styles.activeGridItem, { justifyContent: 'center' }]}
-                                        onPress={() => props.onSetResizeMode(mode)}
-                                    >
-                                        <Text style={[
-                                            styles.gridItemText,
-                                            props.resizeMode === mode && styles.activeGridItemText,
-                                        ]}>{label}</Text>
-                                    </Pressable>
-                                ))}
-                            </View>
-                        </View>
-
-                        {/* TOOLS GRID */}
-                        <View style={styles.section}>
-                            <Text style={styles.sectionTitle}>TOOLS</Text>
-                            <View style={styles.rowLayout}>
-                                <Pressable
-                                    style={[styles.toolCard, props.muted && styles.activeToolCard]}
-                                    onPress={props.onToggleMute}
-                                >
-                                    <View style={styles.iconCircle}>
-                                        <Feather name={props.muted ? 'volume-x' : 'volume-2'} size={20} color={props.muted ? '#000' : '#FFF'} />
-                                    </View>
-                                    <Text style={[styles.toolLabel, props.muted && styles.activeToolLabel]}>Mute</Text>
-                                </Pressable>
-                                <Pressable
-                                    style={[styles.toolCard, props.repeat && styles.activeToolCard]}
-                                    onPress={props.onToggleRepeat}
-                                >
-                                    <View style={styles.iconCircle}>
-                                        <Feather name="repeat" size={20} color={props.repeat ? '#000' : '#FFF'} />
-                                    </View>
-                                    <Text style={[styles.toolLabel, props.repeat && styles.activeToolLabel]}>Repeat</Text>
-                                </Pressable>
-                            </View>
-                        </View>
-
-                        {/* SLEEP TIMER */}
-                        <View style={styles.section}>
-                            <Text style={styles.sectionTitle}>SLEEP TIMER</Text>
-                            <ScrollView
-                                horizontal
-                                showsHorizontalScrollIndicator={false}
-                                contentContainerStyle={{ gap: 10, paddingHorizontal: 24 }}
-                                style={{ marginHorizontal: -24 }}
-                            >
-                                {SLEEP_TIMER_OPTIONS.map(opt => (
-                                    <Pressable
-                                        key={opt.label}
-                                        style={[
-                                            styles.capsuleTab,
-                                            props.sleepTimer === opt.value && styles.activeCapsule,
-                                        ]}
-                                        onPress={() => props.onSetSleepTimer(opt.value)}
-                                    >
-                                        <Text style={[
-                                            styles.capsuleText,
-                                            props.sleepTimer === opt.value && styles.activeCapsuleText,
-                                        ]}>{opt.label}</Text>
-                                    </Pressable>
-                                ))}
-                            </ScrollView>
-                        </View>
-
-
-                        {/* ACTIONS LIST */}
-                        <View style={[styles.section, { marginBottom: 60 }]}>
-                            <Text style={styles.sectionTitle}>ACTIONS</Text>
-                            {[
-                                { label: 'Audio Track', icon: AudioIcon, onPress: props.onOpenAudio },
-                                { label: 'Subtitles', icon: SubtitleIcon, onPress: props.onOpenSubtitle },
-                                { label: 'Playlist', icon: Feather, iconName: 'list', onPress: props.onOpenPlaylist },
-                                { label: 'Bookmarks', icon: BookmarkListIcon, onPress: props.onOpenBookmarkPanel },
-                                { label: 'Add Bookmark', icon: Feather, iconName: 'bookmark', onPress: props.onAddBookmark },
-                            ].filter(item => typeof item.onPress === 'function')
-                                .map((item) => {
-                                const Icon = item.icon as any;
-                                return (
-                                    <Pressable
-                                        key={item.label}
-                                        style={({ pressed }) => [styles.actionRow, pressed && styles.actionPressed]}
-                                        onPress={item.onPress as () => void}
-                                    >
-                                        <View style={styles.actionIcon}>
-                                            {item.iconName
-                                                ? <Feather name={item.iconName as any} size={22} color="#FFF" />
-                                                : <Icon size={22} color="#FFF" />
-                                            }
-                                        </View>
-                                        <Text style={styles.actionLabel}>{item.label}</Text>
-                                        <Feather name="chevron-right" size={20} color="rgba(255,255,255,0.3)" />
-                                    </Pressable>
-                                );
-                            })}
-                        </View>
-
-                    </ScrollView>
-                </View>
-            </Animated.View>
-        </View>
+                        {renderMain()}
+                    </Animated.View>
+                ) : (
+                    <Animated.View key="sub" style={styles.page} entering={PAGE_IN} exiting={PAGE_BACK_OUT}>
+                        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
+                            {renderSub()}
+                        </ScrollView>
+                    </Animated.View>
+                )}
+            </View>
+        </SidePanel>
     );
 });
 
 QuickSettingsPanel.displayName = 'QuickSettingsPanel';
 
 const styles = StyleSheet.create({
-    panelContainer: {
-        position: 'absolute',
-        left: 0,
-        top: 0,
-        bottom: 0,
-        backgroundColor: 'rgba(12, 12, 12, 0.96)',
-        borderRightWidth: 1,
-        borderColor: 'rgba(255,255,255,0.1)',
-        shadowColor: '#000',
-        shadowOffset: { width: 10, height: 0 },
-        shadowOpacity: 0.5,
-        shadowRadius: 30,
-        elevation: 20,
-    },
-    contentContainer: {
-        flex: 1,
-    },
-    header: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingHorizontal: 24,
-        paddingBottom: 20,
-        borderBottomWidth: 1,
-        borderBottomColor: 'rgba(255,255,255,0.06)',
-    },
-    titleRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 14,
-    },
-    iconBadge: {
-        width: 36,
-        height: 36,
-        borderRadius: 12,
-        backgroundColor: 'rgba(255,255,255,0.08)',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    titleText: {
-        color: '#FFF',
-        fontSize: 20,
-        fontWeight: '700',
-        letterSpacing: 0.5,
-    },
-    closeBtn: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        backgroundColor: 'rgba(255,255,255,0.05)',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    opacityPressed: {
-        opacity: 0.7,
-        backgroundColor: 'rgba(255,255,255,0.1)',
-    },
-    scrollContent: {
-        paddingHorizontal: 24,
-        paddingVertical: 20,
-    },
-    section: {
-        marginBottom: 32,
-    },
-    sectionHeaderRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        marginBottom: 16,
-    },
-    sectionTitle: {
-        color: 'rgba(255,255,255,0.5)',
-        fontSize: 12,
-        fontWeight: '800',
-        marginBottom: 12,
-        letterSpacing: 1.5,
-        textTransform: 'uppercase',
-    },
-    card: {
-        backgroundColor: 'rgba(255,255,255,0.04)',
-        borderRadius: 16,
-        padding: 18,
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.06)',
-    },
-    disabledOpacity: {
-        opacity: 0.4,
-    },
-    switch: {
-        width: 38,
-        height: 18,
-        borderRadius: 14,
-        backgroundColor: 'rgba(255,255,255,0.15)',
-        padding: 2,
-        justifyContent: 'center',
-    },
-    switchActive: {
-        backgroundColor: '#FFF',
-    },
-    switchThumb: {
-        width: 16,
-        height: 16,
-        borderRadius: 8,
-        backgroundColor: '#000',
-    },
-    switchThumbActive: {
-        alignSelf: 'flex-end',
-        backgroundColor: '#000',
-    },
-    sliderRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginBottom: 16,
-    },
-    valueText: {
-        color: '#FFF',
-        fontSize: 14,
-        fontWeight: '700',
-        width: 35,
-        textAlign: 'right',
-    },
-    presetsContainer: {
-        flexDirection: 'row',
-        gap: 10,
-    },
-    presetChip: {
-        flex: 1,
-        backgroundColor: 'rgba(255,255,255,0.08)',
-        paddingVertical: 10,
-        borderRadius: 10,
-        alignItems: 'center',
-        borderWidth: 1,
-        borderColor: 'transparent',
-    },
-    activeChip: {
-        backgroundColor: '#FFF',
-    },
-    chipText: {
-        color: 'rgba(255,255,255,0.7)',
-        fontSize: 13,
-        fontWeight: '600',
-    },
-    activeChipText: {
-        color: '#000',
-        fontWeight: '800',
-    },
-    gridContainer: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 10,
-    },
-    gridItem: {
-        backgroundColor: 'rgba(255,255,255,0.06)',
-        borderRadius: 12,
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderWidth: 1,
-        borderColor: 'transparent',
-        padding: 8,
-    },
-    activeGridItem: {
-        backgroundColor: '#FFF',
-        borderColor: '#FFF',
-    },
-    gridItemText: {
-        color: 'rgba(255,255,255,0.7)',
-        fontSize: 13,
-        fontWeight: '600',
-    },
-    activeGridItemText: {
-        color: '#000',
-        fontWeight: '800',
-    },
-    rowLayout: {
-        flexDirection: 'row',
-        gap: 12,
-    },
-    toolCard: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 12,
-        backgroundColor: 'rgba(255,255,255,0.06)',
-        paddingVertical: 18, // Increased padding for better centering
-        borderRadius: 14,
-        borderWidth: 1,
-        borderColor: 'transparent',
-    },
-    activeToolCard: {
-        backgroundColor: '#FFF',
-    },
-    iconCircle: {
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    toolLabel: {
-        color: '#FFF',
-        fontSize: 15,
-        fontWeight: '600',
-        includeFontPadding: false, // Android specific fix for vertical alignment
-        textAlignVertical: 'center',
-    },
-    activeToolLabel: {
-        color: '#000',
-    },
-    capsuleTab: {
-        paddingHorizontal: 18,
-        paddingVertical: 10,
-        borderRadius: 24,
-        backgroundColor: 'rgba(255,255,255,0.06)',
-        borderWidth: 1,
-        borderColor: 'transparent',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    activeCapsule: {
-        backgroundColor: '#FFF',
-    },
-    capsuleText: {
-        color: 'rgba(255,255,255,0.7)',
-        fontSize: 13,
-        fontWeight: '600',
-        includeFontPadding: false,
-        textAlignVertical: 'center',
-    },
-    activeCapsuleText: {
-        color: '#000',
-        fontWeight: '800',
-    },
-    segmentContainer: {
-        flexDirection: 'row',
-        backgroundColor: 'rgba(0,0,0,0.4)',
-        borderRadius: 14,
-        padding: 5,
-    },
-    segmentBtn: {
-        flex: 1,
-        alignItems: 'center',
-        justifyContent: 'center', // Ensuring center
-        paddingVertical: 12,
-        borderRadius: 10,
-    },
-    activeSegment: {
-        backgroundColor: 'rgba(255,255,255,0.15)',
-        shadowColor: '#000',
-        shadowOpacity: 0.3,
-        shadowRadius: 4,
-    },
-    segmentText: {
-        color: 'rgba(255,255,255,0.5)',
-        fontSize: 13,
-        fontWeight: '600',
-        includeFontPadding: false,
-    },
-    activeSegmentText: {
-        color: '#FFF',
-        fontWeight: '800',
-    },
-    actionRow: {
-        flexDirection: 'row',
-        alignItems: 'center', // Strict center alignment
-        paddingVertical: 18, // Increased hit area
-        paddingHorizontal: 8,
-        borderBottomWidth: 1,
-        borderBottomColor: 'rgba(255,255,255,0.06)',
-    },
-    actionPressed: {
-        backgroundColor: 'rgba(255,255,255,0.04)',
-        borderRadius: 8,
-    },
-    actionIcon: {
-        width: 36,
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginRight: 16,
-    },
-    actionLabel: {
-        flex: 1,
-        color: '#FFF',
-        fontSize: 16,
-        fontWeight: '600',
-        letterSpacing: 0.3,
-        includeFontPadding: false,
-        textAlignVertical: 'center',
-    },
-    subtleText: {
-        color: 'rgba(255,255,255,0.55)',
-        fontSize: 12,
-        marginBottom: 10,
-    },
+    pages: { flex: 1, overflow: 'hidden' },
+    page: { flex: 1 },
+    scroll: { paddingTop: metrics.space.sm, paddingBottom: metrics.space.xxl },
+    speedHead: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: metrics.space.md },
+    speedLabel: { color: colors.textSecondary },
+    speedValue: { color: colors.text, fontVariant: ['tabular-nums'] },
+    chips: { flexDirection: 'row', flexWrap: 'wrap', gap: metrics.space.sm },
+    slider: { height: 40, marginTop: metrics.space.xs },
+    sliderFlex: { flex: 1 },
+    group: { marginTop: metrics.space.lg },
+    subOptions: { padding: metrics.space.lg, paddingTop: metrics.space.xs, gap: metrics.space.sm },
+    sliderRow: { flexDirection: 'row', alignItems: 'center', gap: metrics.space.sm },
+    valueText: { color: colors.text, fontVariant: ['tabular-nums'], minWidth: 44, textAlign: 'right' },
 });
-
