@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import Markdown from 'react-native-markdown-display';
 import { useTheme } from '@/hooks/useTheme';
+import { metrics, type } from '@/theme/theme';
 
 /**
  * Release notes come from the GitHub release body, which the release workflow builds
@@ -37,19 +38,17 @@ interface UpdateNotesProps {
 }
 
 export function UpdateNotes({ notes, maxHeight = 200 }: UpdateNotesProps) {
-    const theme = useTheme();
+    const { colors } = useTheme();
     const displayNotes = useMemo(() => formatNotes(notes), [notes]);
-    const textColor = theme.dark ? '#FFFFFF' : '#000000';
-    const textSecondaryColor = theme.dark ? '#A0A0A0' : '#6B7280';
 
     return (
         <View style={styles.block}>
-            <Text style={[styles.title, { color: textColor }]}>What's new</Text>
+            <Text style={[type.heading, styles.title, { color: colors.text }]}>What's new</Text>
             <ScrollView style={{ maxHeight }} showsVerticalScrollIndicator={false} nestedScrollEnabled>
                 <Markdown
                     style={{
-                        body: { ...styles.text, color: textSecondaryColor },
-                        heading3: { ...styles.heading, color: textColor },
+                        body: { ...type.body, lineHeight: 20, color: colors.textSecondary },
+                        heading3: { ...type.heading, color: colors.text, marginVertical: metrics.space.xs },
                         list_item: styles.listItem,
                         bullet_list: styles.list,
                         ordered_list: styles.list,
@@ -63,29 +62,8 @@ export function UpdateNotes({ notes, maxHeight = 200 }: UpdateNotesProps) {
 }
 
 const styles = StyleSheet.create({
-    block: {
-        marginBottom: 20,
-    },
-    title: {
-        fontSize: 14,
-        fontWeight: '700',
-        marginBottom: 8,
-    },
-    text: {
-        fontSize: 13,
-        lineHeight: 20,
-    },
-    heading: {
-        fontSize: 14,
-        fontWeight: '700',
-        marginBottom: 6,
-        marginTop: 6,
-    },
-    list: {
-        marginTop: 4,
-        marginBottom: 4,
-    },
-    listItem: {
-        marginBottom: 4,
-    },
+    block: { marginBottom: metrics.space.lg },
+    title: { marginBottom: metrics.space.sm },
+    list: { marginVertical: metrics.space.xs },
+    listItem: { marginBottom: metrics.space.xs },
 });
