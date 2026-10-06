@@ -4,6 +4,8 @@ import android.content.Context;
 import android.os.Build;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
+import android.app.Activity;
+import android.view.HapticFeedbackConstants;
 
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
@@ -105,5 +107,31 @@ public class HapticModule extends ReactContextBaseJavaModule {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
                 vibrator != null &&
                 vibrator.hasVibrator();
+    }
+
+    /**
+     * System UI haptic (HapticFeedbackConstants) on the window. Follows the user's
+     * touch-feedback setting; newer constants fall back to the closest older one.
+     */
+    @ReactMethod
+    public void perform(String type) {
+        Activity activity = getCurrentActivity();
+        if (activity == null) {
+            return;
+        }
+        int sdk = Build.VERSION.SDK_INT;
+        int constant;
+        switch (type) {
+            case "confirm": constant = sdk >= 30 ? HapticFeedbackConstants.CONFIRM : HapticFeedbackConstants.VIRTUAL_KEY; break;
+            case "reject": constant = sdk >= 30 ? HapticFeedbackConstants.REJECT : HapticFeedbackConstants.LONG_PRESS; break;
+            case "gestureEnd": constant = sdk >= 30 ? HapticFeedbackConstants.GESTURE_END : HapticFeedbackConstants.CLOCK_TICK; break;
+            case "toggleOn": constant = sdk >= 34 ? HapticFeedbackConstants.TOGGLE_ON : HapticFeedbackConstants.CLOCK_TICK; break;
+            case "toggleOff": constant = sdk >= 34 ? HapticFeedbackConstants.TOGGLE_OFF : HapticFeedbackConstants.CLOCK_TICK; break;
+            case "segmentTick": constant = sdk >= 34 ? HapticFeedbackConstants.SEGMENT_TICK : HapticFeedbackConstants.CLOCK_TICK; break;
+            case "longPress": constant = HapticFeedbackConstants.LONG_PRESS; break;
+            default: constant = HapticFeedbackConstants.CLOCK_TICK; break;
+        }
+        final int finalConstant = constant;
+        activity.runOnUiThread(() -> activity.getWindow().getDecorView().performHapticFeedback(finalConstant));
     }
 }
