@@ -3,6 +3,7 @@ import {
     AppState,
     Image,
     RefreshControl,
+    ScrollView,
     StyleSheet,
     Text,
     TextInput,
@@ -23,8 +24,8 @@ import { useAlbumArt } from '@/hooks/useAlbumArt';
 import { Button, Chip, IconButton, SortButton, Touchable } from '@/components/ui';
 import { EmptyState, ListHeader, cellEntering } from '@/components/VideoRow';
 import { TrackOptionsSheet } from '@/components/TrackOptionsSheet';
+import { TrackRow } from '@/components/TrackRow';
 import { metrics, type } from '@/theme/theme';
-import { formatDuration } from '@/utils/formatUtils';
 import { AudioAlbum, AudioArtist, AudioFolder, AudioTrack, RootStackParamList } from '@/types';
 import { Loader } from '@/components/Loader';
 
@@ -57,40 +58,6 @@ function sortTracks(list: AudioTrack[], sortBy: TrackSortBy): AudioTrack[] {
     }
     return sorted;
 }
-
-// Track row thumbnail with lazy artwork hook
-const TrackRowArt = React.memo(function TrackRowArtComponent({
-    albumId,
-    songUri,
-    artworkUri: initialArt,
-    isCurrent,
-    isPlaying,
-    colors,
-}: {
-    albumId: string;
-    songUri: string;
-    artworkUri?: string | null;
-    isCurrent: boolean;
-    isPlaying: boolean;
-    colors: any;
-}) {
-    const fetchedArt = useAlbumArt(albumId, songUri);
-    const art = initialArt || fetchedArt;
-
-    return (
-        <View style={[styles.trackArt, { backgroundColor: colors.surfaceVariant }]}>
-            {art ? (
-                <Image source={{ uri: art }} style={StyleSheet.absoluteFill} resizeMode="cover" />
-            ) : (
-                <Feather
-                    name={isCurrent && isPlaying ? 'volume-2' : 'music'}
-                    size={18}
-                    color={isCurrent ? colors.primary : colors.textTertiary}
-                />
-            )}
-        </View>
-    );
-});
 
 // Album card thumbnail with lazy artwork hook
 const AlbumCardArt = React.memo(function AlbumCardArtComponent({
@@ -333,54 +300,16 @@ export default function MusicScreen() {
 
     // Track row renderer
     const renderTrackItem = useCallback(
-        ({ item }: { item: AudioTrack }) => {
-            const isCurrent = currentTrack?.id === item.id;
-            return (
-                <Touchable
-                    onPress={() => handleSongPress(item)}
-                    onLongPress={() => setTrackWithOptions(item)}
-                    scaleTo={0.98}
-                    stateLayer
-                    style={[styles.trackRow, isCurrent && { backgroundColor: colors.primaryContainer }]}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${item.title} by ${item.artist}`}
-                >
-                    <TrackRowArt
-                        albumId={item.albumId}
-                        songUri={item.uri}
-                        artworkUri={item.artworkUri}
-                        isCurrent={isCurrent}
-                        isPlaying={isPlaying}
-                        colors={colors}
-                    />
-
-                    <View style={styles.trackInfo}>
-                        <Text
-                            style={[type.row, { color: isCurrent ? colors.primary : colors.text, fontWeight: isCurrent ? '700' : '400' }]}
-                            numberOfLines={1}
-                        >
-                            {item.title}
-                        </Text>
-                        <Text style={[type.caption, { color: colors.textSecondary }]} numberOfLines={1}>
-                            {item.artist} · {item.album}
-                        </Text>
-                    </View>
-
-                    <Text style={[type.caption, styles.durationText, { color: colors.textTertiary }]}>
-                        {formatDuration(item.duration)}
-                    </Text>
-
-                    <IconButton
-                        icon="more-vertical"
-                        onPress={() => setTrackWithOptions(item)}
-                        accessibilityLabel="Options"
-                        iconSize={16}
-                        style={styles.moreBtn}
-                    />
-                </Touchable>
-            );
-        },
-        [currentTrack?.id, isPlaying, colors, handleSongPress]
+        ({ item }: { item: AudioTrack }) => (
+            <TrackRow
+                track={item}
+                isCurrent={currentTrack?.id === item.id}
+                isPlaying={isPlaying}
+                onPress={() => handleSongPress(item)}
+                onMore={() => setTrackWithOptions(item)}
+            />
+        ),
+        [currentTrack?.id, isPlaying, handleSongPress]
     );
 
     // Album card renderer
@@ -551,7 +480,12 @@ export default function MusicScreen() {
 
             {/* Segmented Tabs (Tracks, Albums, Artists, Folders, Favorites) */}
             {!selectedFolder && (
-                <View style={styles.tabChipsRow}>
+                <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    style={styles.tabChipsScroll}
+                    contentContainerStyle={styles.tabChipsRow}
+                >
                     <Chip
                         label={`Tracks (${tracks.length})`}
                         selected={activeTab === 'tracks'}
@@ -577,7 +511,7 @@ export default function MusicScreen() {
                         selected={activeTab === 'favorites'}
                         onPress={() => setActiveTab('favorites')}
                     />
-                </View>
+                </ScrollView>
             )}
 
             {/* Quick Actions Bar (Play All / Shuffle / Sort) */}
@@ -628,7 +562,11 @@ export default function MusicScreen() {
                     />
                 ) : (
                     <View style={styles.listContainerWithScroller}>
+                        {/* Each tab's list gets its own key: FlashList keeps column and size
+                            measurements, so reusing one instance across a 2-column grid and
+                            1-column lists leaves gaps where the old grid's cells were. */}
                         <FlashList
+                            key={selectedFolder ? 'folder-tracks' : activeTab}
                             ref={flashListRef}
                             data={displayedTracks}
                             renderItem={renderTrackItem}
@@ -669,6 +607,7 @@ export default function MusicScreen() {
                 )
             ) : activeTab === 'albums' ? (
                 <FlashList
+                    key="albums"
                     data={displayedAlbums}
                     renderItem={renderAlbumItem}
                     keyExtractor={(item) => item.id}
@@ -688,6 +627,7 @@ export default function MusicScreen() {
                 />
             ) : activeTab === 'artists' ? (
                 <FlashList
+                    key="artists"
                     data={displayedArtists}
                     renderItem={renderArtistItem}
                     keyExtractor={(item) => item.id}
@@ -706,6 +646,7 @@ export default function MusicScreen() {
                 />
             ) : (
                 <FlashList
+                    key="folders"
                     data={displayedFolders}
                     renderItem={renderFolderItem}
                     keyExtractor={(item) => item.path}
@@ -755,7 +696,8 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         marginHorizontal: metrics.gutter,
-        marginVertical: metrics.space.xs,
+        marginTop: metrics.space.xs,
+        marginBottom: metrics.space.md,
         paddingHorizontal: metrics.space.md,
         height: 42,
         borderRadius: metrics.radius.pill,
@@ -770,10 +712,14 @@ const styles = StyleSheet.create({
         width: 28,
         height: 28,
     },
+    // Without this a horizontal ScrollView in a column grows to fill the screen's height.
+    tabChipsScroll: {
+        flexGrow: 0,
+    },
     tabChipsRow: {
         flexDirection: 'row',
         paddingHorizontal: metrics.gutter,
-        paddingVertical: metrics.space.xs,
+        paddingBottom: metrics.space.sm,
         gap: metrics.space.sm,
     },
     actionBar: {
@@ -805,35 +751,6 @@ const styles = StyleSheet.create({
     alphabetText: {
         fontSize: 10,
         fontWeight: '600',
-    },
-    trackRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        minHeight: 58,
-        paddingVertical: metrics.space.xs,
-        paddingHorizontal: metrics.space.sm,
-        borderRadius: metrics.radius.md,
-        gap: metrics.space.md,
-    },
-    trackArt: {
-        width: 44,
-        height: 44,
-        borderRadius: metrics.radius.sm,
-        overflow: 'hidden',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    trackInfo: {
-        flex: 1,
-        justifyContent: 'center',
-        gap: 2,
-    },
-    durationText: {
-        fontVariant: ['tabular-nums'],
-    },
-    moreBtn: {
-        width: 28,
-        height: 28,
     },
     albumGridCell: {
         flex: 1,

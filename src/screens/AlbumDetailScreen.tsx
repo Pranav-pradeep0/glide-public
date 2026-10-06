@@ -8,7 +8,8 @@ import { FlashList } from '@shopify/flash-list';
 import { useAudioStore } from '@/store/audioStore';
 import { AudioMediaService } from '@/services/AudioMediaService';
 import { useTheme } from '@/hooks/useTheme';
-import { useAlbumArt } from '@/hooks/useAlbumArt';
+import { useAlbumPalette } from '@/hooks/useAlbumArt';
+import LinearGradient from 'react-native-linear-gradient';
 import { Button, IconButton, Touchable } from '@/components/ui';
 import { TrackOptionsSheet } from '@/components/TrackOptionsSheet';
 import { MiniPlayer } from '@/components/MiniPlayer';
@@ -21,7 +22,7 @@ type AlbumDetailRouteProp = RouteProp<RootStackParamList, 'AlbumDetail'>;
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 export default function AlbumDetailScreen() {
-    const { colors } = useTheme();
+    const { colors, dark } = useTheme();
     const insets = useSafeAreaInsets();
     const navigation = useNavigation<NavigationProp>();
     const route = useRoute<AlbumDetailRouteProp>();
@@ -37,8 +38,11 @@ export default function AlbumDetailScreen() {
     const currentTrack = useAudioStore((s) => s.currentTrack);
     const isPlaying = useAudioStore((s) => s.isPlaying);
 
-    const fetchedArt = useAlbumArt(albumId, firstSongUri);
-    const artworkUri = initialArt || fetchedArt;
+    const palette = useAlbumPalette(albumId, firstSongUri);
+    const artworkUri = initialArt || palette.artworkUri;
+    // The cover's colour washes down from the top, so the page belongs to the album instead
+    // of being flat black. Dark swatch in dark mode; a light tint of the main one otherwise.
+    const tint = dark ? palette.secondaryColor : palette.primaryColor && `${palette.primaryColor}40`;
 
     useEffect(() => {
         let isMounted = true;
@@ -146,6 +150,14 @@ export default function AlbumDetailScreen() {
 
     return (
         <View style={[styles.container, { backgroundColor: colors.background }]}>
+            {!!tint && (
+                <LinearGradient
+                    pointerEvents="none"
+                    colors={[tint, colors.background]}
+                    style={styles.headerWash}
+                />
+            )}
+
             {/* Navigation Header */}
             <View style={[styles.navHeader, { paddingTop: insets.top + metrics.space.xs }]}>
                 <IconButton
@@ -248,6 +260,13 @@ export default function AlbumDetailScreen() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
+    },
+    headerWash: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        height: 420,
     },
     navHeader: {
         flexDirection: 'row',

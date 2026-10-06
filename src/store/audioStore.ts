@@ -4,6 +4,7 @@ import { createMMKV } from 'react-native-mmkv';
 import { AudioRepeatMode, AudioTrack } from '@/types';
 import { AudioMediaService } from '@/services/AudioMediaService';
 import { EQUALIZER_PRESETS } from '@/config/equalizerPresets';
+import { useMusicHistoryStore } from '@/store/musicHistoryStore';
 
 const getAudioModule = () => NativeModules.GlideAudioPlayerModule;
 const mmkv = createMMKV({ id: 'glide_audio_store_v1' });
@@ -688,3 +689,12 @@ if (Platform.OS === 'android') {
         useAudioStore.setState({ sleepTimerMode: 'off', sleepTimerRemaining: 0 });
     });
 }
+
+// Recents > Music. One place catches every way a song starts: a tap, skip, auto-advance or
+// the notification controls. The song restored at launch is not a change, so it is not counted.
+useAudioStore.subscribe((state, prev) => {
+    const id = state.currentTrack?.id;
+    if (id && id !== prev.currentTrack?.id) {
+        useMusicHistoryStore.getState().recordPlay(id);
+    }
+});

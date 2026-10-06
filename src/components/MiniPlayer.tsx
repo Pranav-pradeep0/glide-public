@@ -1,13 +1,13 @@
-import React, { useCallback, useMemo } from 'react';
-import { ActivityIndicator, Image, StyleSheet, Text, View } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import { ActivityIndicator, Image, StyleSheet, Text, View, type HostInstance } from 'react-native';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Feather from '@react-native-vector-icons/feather';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import { runOnJS } from 'react-native-reanimated';
+import { makeMutable, runOnJS } from 'react-native-reanimated';
 import { useAudioStore } from '@/store/audioStore';
 import { useTheme } from '@/hooks/useTheme';
-import { useAlbumArt } from '@/hooks/useAlbumArt';
+import { useAlbumPalette } from '@/hooks/useAlbumArt';
 import { IconButton, Touchable } from '@/components/ui';
 import { metrics, type } from '@/theme/theme';
 import { RootStackParamList } from '@/types';
@@ -15,8 +15,35 @@ import { haptic } from '@/native/HapticModule';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
+/**
+ * Where the visible mini player sits, in window coordinates. Now Playing grows out of the
+ * bar and its cover, and shrinks back into them, so the two read as one surface.
+ * Written by whichever mini player is on the focused screen; width 0 means not measured yet.
+ */
+export const miniArtRect = { x: 0, y: 0, width: 0, height: 0 };
+export const miniBarRect = { x: 0, y: 0, width: 0, height: 0 };
+
+/** The floating card's corner radius; Now Playing's collapse rounds to the same value. */
+export const MINI_CARD_RADIUS = metrics.radius.md;
+
+/**
+ * The card's colour. In dark mode the cover's dark swatch, so the card belongs to the song; in
+ * light mode the raised surface, where a dark card would fight the page. Shared with Now
+ * Playing so the collapse lands on exactly this colour.
+ */
+export function miniCardColor(dark: boolean, raisedSurface: string, coverDark: string | null) {
+    return dark && coverDark ? coverDark : raisedSurface;
+}
+
+/**
+ * How open Now Playing is: 0 is the mini player, 1 is full screen. Now Playing drives it; the
+ * tab bar reads it to slide out of the way in step, so the player never covers the tabs and
+ * then suddenly uncovers them.
+ */
+export const playerExpansion = makeMutable(0);
+
 export function MiniPlayer() {
-    const { colors } = useTheme();
+    const { colors, dark } = useTheme();
     const navigation = useNavigation<NavigationProp>();
     const currentTrack = useAudioStore((s) => s.currentTrack);
     const isPlaying = useAudioStore((s) => s.isPlaying);
@@ -27,8 +54,28 @@ export function MiniPlayer() {
     const skipNext = useAudioStore((s) => s.skipNext);
     const skipPrevious = useAudioStore((s) => s.skipPrevious);
 
-    const fetchedArt = useAlbumArt(currentTrack?.albumId, currentTrack?.uri);
-    const artworkUri = currentTrack?.artworkUri || fetchedArt;
+    const palette = useAlbumPalette(currentTrack?.albumId, currentTrack?.uri);
+    const artworkUri = currentTrack?.artworkUri || palette.artworkUri;
+    const cardColor = miniCardColor(dark, colors.cardElevated, palette.secondaryColor);
+
+    // The tab bar and the album/artist screens each have a mini player; only the focused one
+    // is the one Now Playing collapses onto.
+    const isFocused = useIsFocused();
+    const artRef = useRef<HostInstance>(null);
+    const barRef = useRef<HostInstance>(null);
+    const measureArt = useCallback(() => {
+        if (!isFocused) return;
+        artRef.current?.measureInWindow((x, y, width, height) => {
+            if (width > 0) Object.assign(miniArtRect, { x, y, width, height });
+        });
+        barRef.current?.measureInWindow((x, y, width, height) => {
+            if (height > 0) Object.assign(miniBarRect, { x, y, width, height });
+        });
+    }, [isFocused]);
+    const hasTrack = !!currentTrack;
+    useEffect(() => {
+        if (hasTrack) requestAnimationFrame(measureArt);
+    }, [hasTrack, measureArt]);
 
     const handlePress = useCallback(() => {
         navigation.navigate('NowPlaying');
@@ -69,20 +116,11 @@ export function MiniPlayer() {
     const progress = duration > 0 ? Math.min(1, Math.max(0, position / duration)) : 0;
 
     return (
-        <View style={[styles.wrapper, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
-            {/* Progress line at top */}
-            <View style={[styles.progressTrack, { backgroundColor: colors.fillStrong }]}>
-                <View
-                    style={[
-                        styles.progressBar,
-                        {
-                            width: `${progress * 100}%`,
-                            backgroundColor: colors.primary,
-                        },
-                    ]}
-                />
-            </View>
-
+        <View
+            ref={barRef}
+            collapsable={false}
+            style={[styles.wrapper, { backgroundColor: cardColor, borderColor: colors.border, shadowColor: colors.shadow }]}
+        >
             <GestureDetector gesture={panGesture}>
                 <Touchable
                     onPress={handlePress}
@@ -92,7 +130,12 @@ export function MiniPlayer() {
                     accessibilityLabel={`Now playing: ${currentTrack.title} by ${currentTrack.artist}`}
                 >
                     {/* Artwork */}
-                    <View style={[styles.artContainer, { backgroundColor: colors.surfaceVariant }]}>
+                    <View
+                        ref={artRef}
+                        onLayout={measureArt}
+                        collapsable={false}
+                        style={[styles.artContainer, { backgroundColor: colors.surfaceVariant }]}
+                    >
                         {artworkUri ? (
                             <Image source={{ uri: artworkUri }} style={StyleSheet.absoluteFill} resizeMode="cover" />
                         ) : (
@@ -133,18 +176,93 @@ export function MiniPlayer() {
                     </View>
                 </Touchable>
             </GestureDetector>
+
+            {/* Progress along the card's bottom edge */}
+            <View style={[styles.progressTrack, { backgroundColor: colors.fillStrong }]}>
+                <View style={[styles.progressBar, { width: `${progress * 100}%`, backgroundColor: colors.text }]} />
+            </View>
+        </View>
+    );
+}
+
+const noop = () => {};
+
+/**
+ * The mini player's look without its behaviour: same styles, same layout, no gestures.
+ * Now Playing draws it on its collapsing backdrop, so by the time the backdrop reaches the bar
+ * it already shows the bar's title, artist and buttons. The cover slot is left empty because
+ * Now Playing's own morphing cover lands there.
+ */
+export function MiniPlayerReplica() {
+    const { colors, dark } = useTheme();
+    const currentTrack = useAudioStore((s) => s.currentTrack);
+    const isPlaying = useAudioStore((s) => s.isPlaying);
+    const isBuffering = useAudioStore((s) => s.isBuffering);
+    const position = useAudioStore((s) => s.position);
+    const duration = useAudioStore((s) => s.duration);
+    const palette = useAlbumPalette(currentTrack?.albumId, currentTrack?.uri);
+
+    if (!currentTrack) {
+        return null;
+    }
+
+    const progress = duration > 0 ? Math.min(1, Math.max(0, position / duration)) : 0;
+    const cardColor = miniCardColor(dark, colors.cardElevated, palette.secondaryColor);
+
+    return (
+        <View
+            pointerEvents="none"
+            importantForAccessibility="no-hide-descendants"
+            style={[styles.wrapper, { backgroundColor: cardColor, borderColor: colors.border, shadowColor: colors.shadow }]}
+        >
+            <View style={styles.content}>
+                <View style={styles.artContainer} />
+                <View style={styles.textContainer}>
+                    <Text style={[type.row, { color: colors.text }]} numberOfLines={1}>
+                        {currentTrack.title}
+                    </Text>
+                    <Text style={[type.caption, { color: colors.textSecondary }]} numberOfLines={1}>
+                        {currentTrack.artist}
+                    </Text>
+                </View>
+                <View style={styles.actions}>
+                    {isBuffering ? (
+                        <View style={styles.spinnerSlot}>
+                            <ActivityIndicator size="small" color={colors.primary} />
+                        </View>
+                    ) : (
+                        <IconButton icon={isPlaying ? 'pause' : 'play'} onPress={noop} accessibilityLabel="" iconSize={20} />
+                    )}
+                    <IconButton icon="skip-forward" onPress={noop} accessibilityLabel="" iconSize={20} />
+                </View>
+            </View>
+            <View style={[styles.progressTrack, { backgroundColor: colors.fillStrong }]}>
+                <View style={[styles.progressBar, { width: `${progress * 100}%`, backgroundColor: colors.text }]} />
+            </View>
         </View>
     );
 }
 
 const styles = StyleSheet.create({
+    // A floating card rather than a full-width strip: it reads as deliberate on any screen,
+    // with or without a tab bar under it.
     wrapper: {
-        width: '100%',
-        borderTopWidth: StyleSheet.hairlineWidth,
+        marginHorizontal: metrics.space.sm,
+        marginBottom: metrics.space.sm,
+        borderRadius: MINI_CARD_RADIUS,
+        borderWidth: StyleSheet.hairlineWidth,
+        overflow: 'hidden',
+        elevation: 6,
+        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.2,
+        shadowRadius: 8,
     },
     progressTrack: {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        bottom: 0,
         height: 2,
-        width: '100%',
     },
     progressBar: {
         height: '100%',
@@ -153,7 +271,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         height: 56,
-        paddingHorizontal: metrics.gutter,
+        paddingHorizontal: metrics.space.sm,
         gap: metrics.space.md,
     },
     artContainer: {

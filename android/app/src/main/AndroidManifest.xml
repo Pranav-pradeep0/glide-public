@@ -65,6 +65,18 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent-filter>
+        <!-- "Open with" for audio files. Plays in the music player inside the main app,
+             unlike video, which has its own player Activity. Local files only; JS checks
+             the URI again (RootNavigator), since this Activity is exported. Some file
+             managers label .ogg as application/ogg rather than audio/ogg. -->
+        <intent-filter>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <data android:scheme="content" />
+            <data android:scheme="file" />
+            <data android:mimeType="audio/*" />
+            <data android:mimeType="application/ogg" />
+        </intent-filter>
       </activity>
 
       <!-- Media3 owns the notification, media buttons and lock-screen controls, derived

@@ -168,7 +168,7 @@ export default function FoldersScreen() {
     return (
         <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
             <View style={{ paddingTop: insets.top }}>
-                <ListHeader title="Folders">
+                <ListHeader title="Videos">
                     <IconButton
                         icon={grid ? 'list' : 'grid'}
                         onPress={() => setViewMode(grid ? 'list' : 'grid')}

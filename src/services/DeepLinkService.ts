@@ -31,6 +31,15 @@ export class DeepLinkService {
     }
 
     /**
+     * An audio file handed to the main app by "Open with". MainActivity is exported, so any
+     * app can send it any URI: only local content:// and file:// are played, and the length
+     * is capped like VideoPlayerActivity's.
+     */
+    static isOpenableAudioUri(uri: string): boolean {
+        return uri.length <= 8192 && /^(content|file):\/\/\S+$/i.test(uri);
+    }
+
+    /**
      * Extract video name from URI
      */
     static getVideoNameFromUri(uri: string): string {

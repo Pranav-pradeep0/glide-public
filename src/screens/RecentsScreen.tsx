@@ -12,7 +12,8 @@ import { useVideoHistoryStore } from '@/store/videoHistoryStore';
 import { useTheme } from '@/hooks/useTheme';
 import { NavigationService } from '@/services/NavigationService';
 import { VideoOptionsBottomSheet } from '@/components/VideoOptionsBottomSheet';
-import { IconButton, SortButton } from '@/components/ui';
+import { Chip, IconButton, SortButton } from '@/components/ui';
+import { RecentMusicList } from '@/components/RecentMusicList';
 import {
     AmbientBackdrop, ContinueCard, EmptyState, ListHeader, SectionTitle, VideoCard, VideoItemCell, VideoRow,
     confirmDelete, getRelativeTime, joinMeta, listContentStyle, progressOf, shareVideo, timeLabel,
@@ -21,6 +22,7 @@ import { metrics } from '@/theme/theme';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 type ViewMode = 'grid' | 'list';
+type RecentsKind = 'videos' | 'music';
 
 type SortByOption = 'recent' | 'views' | 'name';
 
@@ -54,6 +56,7 @@ export default function RecentsScreen() {
     const getAllHistory = useVideoHistoryStore(s => s.getAllHistory);
     const clearVideoHistory = useVideoHistoryStore(s => s.clearVideoHistory);
 
+    const [kind, setKind] = useState<RecentsKind>('videos');
     const [refreshing, setRefreshing] = useState(false);
     const [viewMode, setViewMode] = useState<ViewMode>('list');
     const [sortBy, setSortBy] = useState<SortByOption>('recent');
@@ -94,7 +97,7 @@ export default function RecentsScreen() {
         const video = selectedVideo;
         if (!video) {return;}
         if (!video.contentUri) {
-            Alert.alert('Cannot delete here', 'Open this video from Folders to delete it.');
+            Alert.alert('Cannot delete here', 'Open this video from Videos to delete it.');
             return;
         }
         const contentUri = video.contentUri;
@@ -173,28 +176,38 @@ export default function RecentsScreen() {
 
     return (
         <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
-            <AmbientBackdrop path={hero?.videoPath} />
+            {kind === 'videos' && <AmbientBackdrop path={hero?.videoPath} />}
             <View style={{ paddingTop: insets.top }}>
                 <ListHeader title="Recents">
-                    <IconButton
-                        icon="search"
-                        iconSize={20}
-                        onPress={() => navigation.navigate('Search')}
-                        accessibilityLabel="Search videos"
-                    />
-                    <IconButton
-                        icon={grid ? 'list' : 'grid'}
-                        iconSize={20}
-                        onPress={() => setViewMode(grid ? 'list' : 'grid')}
-                        accessibilityLabel={grid ? 'Switch to list view' : 'Switch to grid view'}
-                    />
+                    {kind === 'videos' && (
+                        <>
+                            <IconButton
+                                icon="search"
+                                iconSize={20}
+                                onPress={() => navigation.navigate('Search')}
+                                accessibilityLabel="Search videos"
+                            />
+                            <IconButton
+                                icon={grid ? 'list' : 'grid'}
+                                iconSize={20}
+                                onPress={() => setViewMode(grid ? 'list' : 'grid')}
+                                accessibilityLabel={grid ? 'Switch to list view' : 'Switch to grid view'}
+                            />
+                        </>
+                    )}
                 </ListHeader>
+                <View style={styles.kindRow}>
+                    <Chip label="Videos" selected={kind === 'videos'} onPress={() => setKind('videos')} />
+                    <Chip label="Music" selected={kind === 'music'} onPress={() => setKind('music')} />
+                </View>
             </View>
 
-            {history.length === 0 ? (
+            {kind === 'music' ? (
+                <RecentMusicList />
+            ) : history.length === 0 ? (
                 <EmptyState
                     text="Nothing watched yet"
-                    action="Browse folders"
+                    action="Browse videos"
                     onAction={() => navigation.navigate('MainTabs', { screen: 'Folders' })}
                 />
             ) : (
@@ -234,5 +247,6 @@ export default function RecentsScreen() {
 
 const styles = StyleSheet.create({
     container: { flex: 1 },
+    kindRow: { flexDirection: 'row', gap: metrics.space.sm, paddingHorizontal: metrics.gutter, paddingBottom: metrics.space.sm },
         sortBar: { alignSelf: 'flex-end', marginRight: metrics.gutter, marginTop: metrics.space.sm, marginBottom: metrics.space.sm },
 });

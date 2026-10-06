@@ -7,6 +7,7 @@ import { useTheme } from '../hooks/useTheme';
 import { Feather } from '@react-native-vector-icons/feather';
 import { DeepLinkService } from '../services/DeepLinkService';
 import { Platform, StyleSheet, Text, View } from 'react-native';
+import Animated, { useAnimatedStyle } from 'react-native-reanimated';
 import { Touchable, SnackbarHost } from '@/components/ui';
 import { metrics, type } from '@/theme/theme';
 
@@ -22,8 +23,11 @@ import MusicScreen from '@/screens/MusicScreen';
 import NowPlayingScreen from '@/screens/NowPlayingScreen';
 import AlbumDetailScreen from '@/screens/AlbumDetailScreen';
 import ArtistDetailScreen from '@/screens/ArtistDetailScreen';
-import { MiniPlayer } from '@/components/MiniPlayer';
-import { MainTabParamList, RootStackParamList } from '@/types';
+import { MiniPlayer, playerExpansion } from '@/components/MiniPlayer';
+import { AudioTrack, MainTabParamList, RootStackParamList } from '@/types';
+import { useAudioStore } from '@/store/audioStore';
+import { AudioMediaService } from '@/services/AudioMediaService';
+import { PermissionService } from '@/services/PermissionService';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -35,18 +39,26 @@ const renderTabBar = (props: BottomTabBarProps) => <TabBar {...props} />;
 
 function TabBar({ state, descriptors, navigation, insets }: BottomTabBarProps) {
     const { colors } = useTheme();
+    const tabBarHeight = TAB_HEIGHT + insets.bottom;
+    // Slides down out of the way as Now Playing opens and back up as it collapses, its top edge
+    // tracking the player's bottom edge, so the player never covers the tabs.
+    const slideStyle = useAnimatedStyle(() => ({
+        transform: [{ translateY: playerExpansion.value * tabBarHeight }],
+    }));
     return (
-        <View style={{ backgroundColor: colors.surface }}>
+        // The page colour, not the tab bar's: the mini player is a card floating over the page.
+        <View style={{ backgroundColor: colors.background }}>
             <MiniPlayer />
-            <View
+            <Animated.View
                 style={[
                     styles.tabBar,
                     {
                         backgroundColor: colors.surface,
                         borderTopColor: colors.border,
                         paddingBottom: insets.bottom,
-                        height: TAB_HEIGHT + insets.bottom,
+                        height: tabBarHeight,
                     },
+                    slideStyle,
                 ]}
             >
                 {state.routes.map((route, index) => {
@@ -80,7 +92,7 @@ function TabBar({ state, descriptors, navigation, insets }: BottomTabBarProps) {
                         </Touchable>
                     );
                 })}
-            </View>
+            </Animated.View>
         </View>
     );
 }
@@ -98,8 +110,9 @@ function MainTabs() {
                 name="Folders"
                 component={FoldersScreen}
                 options={{
-                    title: 'Folders',
-                    tabBarIcon: ({ color }) => <Feather name="folder" size={22} color={color} />,
+                    // The route stays "Folders"; only what the user sees changed when music arrived.
+                    title: 'Videos',
+                    tabBarIcon: ({ color }) => <Feather name="film" size={22} color={color} />,
                 }}
             />
             <Tab.Screen
@@ -144,24 +157,63 @@ export default function RootNavigator({ onReady }: RootNavigatorProps) {
     const theme = useTheme();
     const navigationRef = useRef<NavigationContainerRef<RootStackParamList>>(null);
 
-    useEffect(() => {
-        const handleUrl = (url: string) => {
-            if (__DEV__) { console.log('[RootNavigator] URL event received:', url); }
-            if (DeepLinkService.isVideoUri(url)) {
-                if (__DEV__) { console.log('[RootNavigator] Received video URL in main activity, ignoring'); }
-            }
-        };
-        const unsubscribe = DeepLinkService.addUrlListener(handleUrl);
-        return unsubscribe;
+    // Set when an opened file arrives before navigation is ready (a cold start); the player
+    // opens as soon as it is.
+    const pendingNowPlaying = useRef(false);
+
+    const openNowPlaying = useCallback(() => {
+        const nav = navigationRef.current;
+        if (!nav?.isReady()) {
+            pendingNowPlaying.current = true;
+            return;
+        }
+        pendingNowPlaying.current = false;
+        // Absent while onboarding is showing; the song still plays.
+        if (nav.getRootState()?.routeNames.includes('NowPlaying')) {
+            nav.navigate('NowPlaying');
+        }
     }, []);
+
+    // Only audio reaches MainActivity: its sole VIEW filter is audio/*. Video goes to
+    // VideoPlayerActivity instead.
+    useEffect(() => {
+        const playOpenedFile = async (url: string | null) => {
+            if (!url || !DeepLinkService.isOpenableAudioUri(url)) { return; }
+            // Files by Google and others hand over the MediaStore URI, which is exactly how the
+            // library stores each song, so a library song keeps its title, artist and cover.
+            const inLibrary = (await PermissionService.checkAudioPermission())
+                ? (await AudioMediaService.getSongs()).find((s) => s.uri === url)
+                : undefined;
+            const fileName = DeepLinkService.getVideoNameFromUri(url);
+            // ponytail: outside the library the title is the file name and the artist unknown;
+            // reading the file's tags (MediaMetadataRetriever) is the upgrade if that matters.
+            const track: AudioTrack = inLibrary ?? {
+                id: url,
+                title: fileName === 'External Video' ? 'Audio file' : fileName.replace(/\.[^.]+$/, ''),
+                artist: 'Unknown Artist',
+                album: '',
+                albumId: '',
+                duration: 0,
+                path: '',
+                uri: url,
+                size: 0,
+                trackNumber: 0,
+            };
+            useAudioStore.getState().playTrack(track, [track], 'Files');
+            openNowPlaying();
+        };
+        DeepLinkService.getInitialUrl().then(playOpenedFile);
+        return DeepLinkService.addUrlListener(playOpenedFile);
+    }, [openNowPlaying]);
 
     const onNavigationReady = useCallback(() => {
         if (__DEV__) { console.log('[RootNavigator] Navigation ready'); }
+        if (pendingNowPlaying.current) { openNowPlaying(); }
         // Wait for one frame to ensure paint has started
         requestAnimationFrame(() => {
             onReady?.();
         });
-    }, [onReady]);
+    }, [onReady, openNowPlaying]);
 
     return (
         <NavigationContainer
@@ -240,8 +292,11 @@ export default function RootNavigator({ onReady }: RootNavigatorProps) {
                             component={NowPlayingScreen}
                             options={{
                                 headerShown: false,
-                                animation: 'slide_from_bottom',
-                                presentation: 'modal',
+                                // Transparent and unanimated: the screen animates itself out of
+                                // the mini player, which stays visible underneath.
+                                animation: 'none',
+                                presentation: 'transparentModal',
+                                contentStyle: { backgroundColor: 'transparent' },
                             }}
                         />
                         <Stack.Screen
