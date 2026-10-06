@@ -67,7 +67,7 @@ import kotlin.math.pow
  * 6.1e-5 * 10,000 = **0.61 nits**, became exactly 0. Measured on device with a readback of
  * the texture this pass receives, on a dark HDR scene: 89.9% of pixels were 0 and nothing
  * sat between 0 and 0.61 nits. That, not any enhancement maths, is what crushed HDR blacks
- * whenever an effect was on. The copies in `res/raw` differ from media3 1.11.0's only in
+ * whenever an effect was on. The copies in `res/raw` differ from media3 1.11.1's only in
  * `precision highp float`; with them, 0.0% of the same scene is 0. App resources override
  * library resources of the same name, so upgrading media3 means re-copying both files --
  * [ColorEnhancementTest] fails until that is done.

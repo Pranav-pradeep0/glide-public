@@ -33,7 +33,7 @@
 
 #extension GL_OES_EGL_image_external : require
 #extension GL_EXT_YUV_target : require
-// Glide override of media3 1.11.0: mediump is fp16 here, which flushed HDR light
+// Glide override of media3 1.11.1: mediump is fp16 here, which flushed HDR light
 // under 0.61 nits to zero (crushed blacks with any video effect). highp fixes it.
 // Keep in sync with the media3 version -- see ColorEnhancement.kt.
 precision highp float;
