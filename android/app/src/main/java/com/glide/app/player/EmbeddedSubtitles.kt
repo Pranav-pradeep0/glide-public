@@ -115,7 +115,18 @@ object EmbeddedSubtitles {
         )
     }
 
-    private fun read(context: Context, uri: Uri, output: ExtractorOutput, done: () -> Boolean) {
+    /**
+     * Runs a Media3 extractor over [uri] into [output] until [done] or the end of the file.
+     * [seekTo] is asked after every read; a non-null point repositions the extractor there
+     * (used to jump to a time once the file's seek map is known).
+     */
+    internal fun read(
+        context: Context,
+        uri: Uri,
+        output: ExtractorOutput,
+        seekTo: () -> androidx.media3.extractor.SeekPoint? = { null },
+        done: () -> Boolean,
+    ) {
         val extractors = DefaultExtractorsFactory()
             .setSubtitleParserFactory(DefaultSubtitleParserFactory())
             .setTextTrackTranscodingEnabled(true)
@@ -153,6 +164,12 @@ object EmbeddedSubtitles {
                                 continue@outer
                             }
                             Extractor.RESULT_END_OF_INPUT -> break@outer
+                        }
+                        val point = seekTo()
+                        if (point != null) {
+                            extractor.seek(point.position, point.timeUs)
+                            position = point.position
+                            continue@outer
                         }
                     }
                     break@outer

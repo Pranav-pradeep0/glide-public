@@ -107,178 +107,265 @@ class SubtitleSyncModule(context: ReactApplicationContext) : ReactContextBaseJav
 
     /**
      * Decodes up to [durationS] of audio from [windowStartS] and measures its speech-band
-     * loudness. Platform decoders first; failing that, the Media3 FFmpeg extension the player
-     * already ships, for the AC-3, E-AC-3, DTS and TrueHD soundtracks most phones cannot
-     * decode -- often a film's only audio, and what ffmpeg-kit used to cover here.
+     * loudness. The file is read with Media3's extractors -- the player's own, which see every
+     * track it can play; Android's MediaExtractor hides DTS and TrueHD inside MKV -- and the
+     * first audio track a decoder exists for is used: a platform decoder, else the Media3 FFmpeg
+     * extension the player already ships, for the AC-3, E-AC-3, DTS and TrueHD soundtracks
+     * most phones cannot decode and that are often a film's only audio.
      */
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     private fun decodeAudioWindow(videoPath: String, windowStartS: Double, durationS: Double = 300.0): DecodedLevels? {
-        val context = reactApplicationContext
-        val uri = Uri.parse(videoPath)
-        var pfd: ParcelFileDescriptor? = null
-        val extractor = MediaExtractor()
+        val startUs = (windowStartS * 1_000_000).toLong().coerceAtLeast(0L)
+        val window = WindowMeter(startUs, startUs + (durationS * 1_000_000).toLong())
+        val audio = AudioCollector(window, startUs)
         try {
-            if (videoPath.startsWith("content://")) {
-                pfd = context.contentResolver.openFileDescriptor(uri, "r")
-                if (pfd != null) extractor.setDataSource(pfd.fileDescriptor) else extractor.setDataSource(context, uri, null)
-            } else {
-                val cleanPath = if (videoPath.startsWith("file://")) uri.path ?: videoPath.removePrefix("file://") else videoPath
-                extractor.setDataSource(cleanPath)
-            }
+            EmbeddedSubtitles.read(
+                reactApplicationContext,
+                EmbeddedSubtitles.toUri(videoPath),
+                audio,
+                seekTo = audio::seekRequest,
+            ) { window.done || audio.noDecoder }
+            if (!window.done) audio.decoder?.finish()
+        } finally {
+            audio.decoder?.release()
+        }
+        val result = window.result(windowStartS)
+        android.util.Log.i(
+            NAME, "auto-sync: tracks=${audio.trackMimes} using=${audio.description} decoded " +
+                "${"%.1f".format(Locale.US, (result?.levels?.size ?: 0) * SubtitleAligner.FRAME_S)} s"
+        )
+        return result
+    }
 
+    /** PCM out of compressed audio samples, into a [WindowMeter]. */
+    private interface PcmDecoder {
+        fun feed(data: ByteArray, offset: Int, size: Int, timeUs: Long)
+        fun finish()
+        fun release()
+    }
+
+    /** Picks the first decodable audio track once the header is read, and feeds its samples to a decoder. */
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    private class AudioCollector(private val window: WindowMeter, private val startUs: Long) :
+        androidx.media3.extractor.ExtractorOutput {
+        private val formats = ArrayList<androidx.media3.common.Format?>()
+        private var seekMap: androidx.media3.extractor.SeekMap? = null
+        private var chosen = -1
+        private var seeked = false
+        var decoder: PcmDecoder? = null
+            private set
+        var noDecoder = false
+            private set
+        var description = "none"
+            private set
+        val trackMimes get() = formats.map { it?.sampleMimeType }
+
+        override fun track(id: Int, type: Int): androidx.media3.extractor.TrackOutput {
+            if (type != androidx.media3.common.C.TRACK_TYPE_AUDIO) return androidx.media3.extractor.DiscardingTrackOutput()
+            val index = formats.size
+            formats.add(null)
+            return SampleTrack(index)
+        }
+
+        override fun seekMap(seekMap: androidx.media3.extractor.SeekMap) {
+            this.seekMap = seekMap
+        }
+
+        override fun endTracks() {
+            if (decoder != null || noDecoder) return
             val codecs = MediaCodecList(MediaCodecList.REGULAR_CODECS)
             val ffmpeg = try { androidx.media3.decoder.ffmpeg.FfmpegLibrary.isAvailable() } catch (_: Throwable) { false }
-            var platformTrack = -1
-            var ffmpegTrack = -1
-            for (i in 0 until extractor.trackCount) {
-                val format = extractor.getTrackFormat(i)
-                val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
-                if (!mime.startsWith("audio/")) continue
-                val platform = try { codecs.findDecoderForFormat(format) != null } catch (_: Exception) { false }
-                if (platform && platformTrack < 0) platformTrack = i
-                if (!platform && ffmpegTrack < 0 && ffmpeg &&
-                    androidx.media3.decoder.ffmpeg.FfmpegLibrary.supportsFormat(mime)) ffmpegTrack = i
+            for ((i, format) in formats.withIndex()) {
+                format ?: continue
+                val mediaFormat = androidx.media3.common.util.MediaFormatUtil.createMediaFormatFromFormat(format)
+                val name = try { codecs.findDecoderForFormat(mediaFormat) } catch (_: Exception) { null }
+                if (name != null) {
+                    chosen = i
+                    decoder = MediaCodecPcm(mediaFormat, name, window)
+                    description = "${format.sampleMimeType} via $name"
+                    return
+                }
+            }
+            if (ffmpeg) {
+                for ((i, format) in formats.withIndex()) {
+                    format ?: continue
+                    if (!androidx.media3.decoder.ffmpeg.FfmpegLibrary.supportsFormat(format.sampleMimeType ?: continue)) continue
+                    chosen = i
+                    decoder = FfmpegPcm(format, window)
+                    description = "${format.sampleMimeType} via ffmpeg"
+                    return
+                }
+            }
+            noDecoder = true
+        }
+
+        /** Once the header and seek map are in, jump straight to the window instead of decoding up to it. */
+        fun seekRequest(): androidx.media3.extractor.SeekPoint? {
+            val map = seekMap ?: return null
+            if (seeked || decoder == null) return null
+            seeked = true
+            return if (startUs > 0 && map.isSeekable) map.getSeekPoints(startUs).first else null
+        }
+
+        private inner class SampleTrack(private val index: Int) : androidx.media3.extractor.TrackOutput {
+            private var buffer = ByteArray(16 * 1024)
+            private var length = 0
+
+            override fun format(format: androidx.media3.common.Format) {
+                formats[index] = format
             }
 
-            val startUs = (windowStartS * 1_000_000).toLong().coerceAtLeast(0L)
-            val window = WindowMeter(startUs, startUs + (durationS * 1_000_000).toLong())
-            val track = if (platformTrack >= 0) platformTrack else ffmpegTrack
-            if (track < 0) {
-                android.util.Log.w(NAME, "auto-sync: no decodable audio track")
-                return null
+            private fun ensure(extra: Int) {
+                if (length + extra > buffer.size) buffer = buffer.copyOf(maxOf(buffer.size * 2, length + extra))
             }
-            val format = extractor.getTrackFormat(track)
-            extractor.selectTrack(track)
-            extractor.seekTo(startUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
-            if (track == platformTrack) decodeWithMediaCodec(extractor, format, codecs, window)
-            else decodeWithFfmpeg(extractor, format, window)
 
-            val result = window.result(windowStartS)
-            android.util.Log.i(
-                NAME, "auto-sync: ${format.getString(MediaFormat.KEY_MIME)} via " +
-                    "${if (track == platformTrack) "platform" else "ffmpeg"} decoded " +
-                    "${"%.1f".format(Locale.US, (result?.levels?.size ?: 0) * SubtitleAligner.FRAME_S)} s"
-            )
-            return result
-        } finally {
-            try { extractor.release() } catch (_: Exception) {}
-            try { pfd?.close() } catch (_: Exception) {}
+            override fun sampleData(input: androidx.media3.common.DataReader, length: Int, allowEndOfInput: Boolean, sampleDataPart: Int): Int {
+                ensure(length)
+                val read = input.read(buffer, this.length, length)
+                if (read == androidx.media3.common.C.RESULT_END_OF_INPUT) {
+                    if (allowEndOfInput) return androidx.media3.common.C.RESULT_END_OF_INPUT
+                    throw java.io.EOFException()
+                }
+                this.length += read
+                return read
+            }
+
+            override fun sampleData(data: androidx.media3.common.util.ParsableByteArray, length: Int, sampleDataPart: Int) {
+                ensure(length)
+                data.readBytes(buffer, this.length, length)
+                this.length += length
+            }
+
+            override fun sampleMetadata(timeUs: Long, flags: Int, size: Int, offset: Int, cryptoData: androidx.media3.extractor.TrackOutput.CryptoData?) {
+                val end = length - offset
+                val start = end - size
+                if (index == chosen && start >= 0 && !window.done) decoder?.feed(buffer, start, size, timeUs)
+                System.arraycopy(buffer, end, buffer, 0, length - end)
+                length -= end
+            }
         }
     }
 
-    private fun decodeWithMediaCodec(extractor: MediaExtractor, format: MediaFormat, codecs: MediaCodecList, window: WindowMeter) {
-        val codec = MediaCodec.createByCodecName(codecs.findDecoderForFormat(format))
-        try {
-            codec.configure(format, null, null, 0)
-            codec.start()
-            var rate = format.getIntegerOr(MediaFormat.KEY_SAMPLE_RATE, 44100)
-            var channels = format.getIntegerOr(MediaFormat.KEY_CHANNEL_COUNT, 2)
-            var encoding = format.getIntegerOr(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
-            val info = MediaCodec.BufferInfo()
-            var inputDone = false
-            var idle = 0
-            while (!window.done && idle < 400) {
-                if (!inputDone) {
-                    val inIndex = codec.dequeueInputBuffer(5_000)
-                    if (inIndex >= 0) {
-                        val size = extractor.readSampleData(codec.getInputBuffer(inIndex)!!, 0)
-                        if (size < 0) {
-                            codec.queueInputBuffer(inIndex, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                            inputDone = true
-                        } else {
-                            codec.queueInputBuffer(inIndex, 0, size, extractor.sampleTime, 0)
-                            extractor.advance()
-                        }
-                    }
+    private class MediaCodecPcm(format: MediaFormat, name: String, private val window: WindowMeter) : PcmDecoder {
+        private val codec = MediaCodec.createByCodecName(name).apply {
+            configure(format, null, null, 0)
+            start()
+        }
+        private val info = MediaCodec.BufferInfo()
+        private var rate = format.getIntegerOr(MediaFormat.KEY_SAMPLE_RATE, 44100)
+        private var channels = format.getIntegerOr(MediaFormat.KEY_CHANNEL_COUNT, 2)
+        private var encoding = AudioFormat.ENCODING_PCM_16BIT
+        private var ended = false
+
+        override fun feed(data: ByteArray, offset: Int, size: Int, timeUs: Long) {
+            queue(timeUs) { it.put(data, offset, size); size }
+        }
+
+        private fun queue(timeUs: Long, flags: Int = 0, write: (java.nio.ByteBuffer) -> Int) {
+            repeat(400) {
+                val index = codec.dequeueInputBuffer(10_000)
+                if (index >= 0) {
+                    val size = write(codec.getInputBuffer(index)!!)
+                    codec.queueInputBuffer(index, 0, size, timeUs, flags)
+                    drain(0)
+                    return
                 }
-                val outIndex = codec.dequeueOutputBuffer(info, 5_000)
+                drain(0)
+            }
+        }
+
+        /** Pull every ready output; with a timeout, wait for more until end of stream. */
+        private fun drain(timeoutUs: Long) {
+            var idle = 0
+            while (!ended) {
+                val index = codec.dequeueOutputBuffer(info, timeoutUs)
                 when {
-                    outIndex >= 0 -> {
+                    index >= 0 -> {
                         idle = 0
-                        val out = codec.getOutputBuffer(outIndex)
+                        val out = codec.getOutputBuffer(index)
                         if (out != null && info.size > 0) {
                             out.position(info.offset)
                             out.limit(info.offset + info.size)
                             window.add(info.presentationTimeUs, out.slice(), channels, rate, encoding == AudioFormat.ENCODING_PCM_FLOAT)
                         }
-                        codec.releaseOutputBuffer(outIndex, false)
-                        if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) return
+                        codec.releaseOutputBuffer(index, false)
+                        if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) ended = true
                     }
-                    outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                        idle = 0
+                    index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
                         val f = codec.outputFormat
                         rate = f.getIntegerOr(MediaFormat.KEY_SAMPLE_RATE, rate)
                         channels = f.getIntegerOr(MediaFormat.KEY_CHANNEL_COUNT, channels)
                         encoding = f.getIntegerOr(MediaFormat.KEY_PCM_ENCODING, encoding)
                     }
-                    else -> idle++
+                    timeoutUs == 0L -> return
+                    ++idle > 100 -> return
                 }
             }
-        } finally {
+        }
+
+        override fun finish() {
+            queue(0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM) { 0 }
+            drain(10_000)
+        }
+
+        override fun release() {
             try { codec.stop() } catch (_: Exception) {}
             try { codec.release() } catch (_: Exception) {}
         }
     }
 
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-    private fun decodeWithFfmpeg(extractor: MediaExtractor, format: MediaFormat, window: WindowMeter) {
-        val mime = format.getString(MediaFormat.KEY_MIME)!!
-        val init = ArrayList<ByteArray>()
-        for (key in arrayOf("csd-0", "csd-1", "csd-2")) {
-            format.getByteBuffer(key)?.let { b -> ByteArray(b.remaining()).also { b.duplicate().get(it) }.let(init::add) }
+    private class FfmpegPcm(format: androidx.media3.common.Format, private val window: WindowMeter) : PcmDecoder {
+        private val decoder = androidx.media3.decoder.ffmpeg.FfmpegAudioDecoder(
+            format, 16, 16, format.maxInputSize.takeIf { it > 0 } ?: (64 * 1024), /* outputFloat = */ false
+        )
+        private var ended = false
+
+        override fun feed(data: ByteArray, offset: Int, size: Int, timeUs: Long) {
+            val input = obtainInput() ?: return
+            input.ensureSpaceForWrite(size)
+            input.data!!.put(data, offset, size)
+            input.timeUs = timeUs
+            input.flip()
+            decoder.queueInputBuffer(input)
+            drain()
         }
-        val media3Format = androidx.media3.common.Format.Builder()
-            .setSampleMimeType(mime)
-            .setChannelCount(format.getIntegerOr(MediaFormat.KEY_CHANNEL_COUNT, 2))
-            .setSampleRate(format.getIntegerOr(MediaFormat.KEY_SAMPLE_RATE, 48000))
-            .setInitializationData(init)
-            .build()
-        val maxInput = format.getIntegerOr(MediaFormat.KEY_MAX_INPUT_SIZE, 64 * 1024)
-        val decoder = androidx.media3.decoder.ffmpeg.FfmpegAudioDecoder(media3Format, 16, 16, maxInput, /* outputFloat = */ false)
-        try {
-            var inputDone = false
-            var idle = 0
-            while (!window.done && idle < 400) {
-                var progressed = false
-                if (!inputDone) {
-                    val input = decoder.dequeueInputBuffer()
-                    if (input != null) {
-                        val sampleSize = extractor.sampleSize
-                        if (sampleSize < 0) {
-                            input.addFlag(androidx.media3.common.C.BUFFER_FLAG_END_OF_STREAM)
-                            inputDone = true
-                        } else {
-                            input.ensureSpaceForWrite(sampleSize.toInt())
-                            val data = input.data!!
-                            val size = extractor.readSampleData(data, data.position())
-                            data.position(data.position() + size.coerceAtLeast(0))
-                            input.timeUs = extractor.sampleTime
-                            extractor.advance()
-                        }
-                        input.flip()
-                        decoder.queueInputBuffer(input)
-                        progressed = true
-                    }
-                }
-                val output = decoder.dequeueOutputBuffer()
-                if (output != null) {
-                    progressed = true
-                    if (output.isEndOfStream) {
-                        output.release()
-                        return
-                    }
-                    output.data?.let { window.add(output.timeUs, it, decoder.channelCount, decoder.sampleRate, false) }
-                    output.release()
-                }
-                if (progressed) idle = 0 else { idle++; Thread.sleep(5) }
+
+        private fun obtainInput(): androidx.media3.decoder.DecoderInputBuffer? {
+            repeat(400) {
+                decoder.dequeueInputBuffer()?.let { return it }
+                drain()
+                Thread.sleep(2)
             }
-        } finally {
-            decoder.release()
+            return null
         }
+
+        private fun drain() {
+            while (!ended) {
+                val out = decoder.dequeueOutputBuffer() ?: return
+                if (out.isEndOfStream) {
+                    ended = true
+                } else {
+                    out.data?.let { window.add(out.timeUs, it, decoder.channelCount, decoder.sampleRate, false) }
+                }
+                out.release()
+            }
+        }
+
+        override fun finish() {
+            val input = obtainInput() ?: return
+            input.addFlag(androidx.media3.common.C.BUFFER_FLAG_END_OF_STREAM)
+            decoder.queueInputBuffer(input)
+            repeat(400) {
+                drain()
+                if (ended) return
+                Thread.sleep(5)
+            }
+        }
+
+        override fun release() = decoder.release()
     }
 
-    private fun MediaFormat.getIntegerOr(key: String, fallback: Int) =
-        if (containsKey(key)) getInteger(key) else fallback
 
     /**
      * Decodes audio directly from [videoPath] using MediaExtractor and MediaCodec, and aligns
@@ -492,3 +579,6 @@ class SubtitleSyncModule(context: ReactApplicationContext) : ReactContextBaseJav
     }
 
 }
+
+private fun MediaFormat.getIntegerOr(key: String, fallback: Int) =
+    if (containsKey(key)) getInteger(key) else fallback
