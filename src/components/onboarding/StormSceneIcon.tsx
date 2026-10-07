@@ -9,6 +9,7 @@ import Animated, {
     withTiming, withSequence, withRepeat,
     Easing, cancelAnimation, interpolate,
 } from 'react-native-reanimated';
+import { SUBTITLE_FONT_FAMILY } from '@/store/appStore';
 
 // ─── Animated SVG primitives ──────────────────────────────────────────────────
 const AnimatedRect = Animated.createAnimatedComponent(Rect);
@@ -765,7 +766,7 @@ const styles = StyleSheet.create({
         color: '#ffffffff',
         fontSize: 10,
         fontWeight: '600',
-        fontFamily: 'NetflixSans-Medium',
+        fontFamily: SUBTITLE_FONT_FAMILY,
         textTransform: 'uppercase',
         letterSpacing: 0.8,
     },

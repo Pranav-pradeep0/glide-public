@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef } from 'react';
 import { useColorScheme } from 'react-native';
-import { DEFAULT_APP_SETTINGS, DEFAULT_HAPTIC_SETTINGS, useAppStore } from '../store/appStore';
+import { DEFAULT_APP_SETTINGS, DEFAULT_HAPTIC_SETTINGS, SUBTITLE_FONT_FAMILY, useAppStore } from '../store/appStore';
 import { storage } from '@/storage/storage';
 import { AppSettings } from '@/types';
 
@@ -62,5 +62,9 @@ function migrateSettings(settings: AppSettings): AppSettings {
         subtitlePositionLandscape: typeof merged.subtitlePositionLandscape === 'number'
             ? merged.subtitlePositionLandscape
             : 0.42,
+        // Netflix Sans was removed (not licensed for redistribution).
+        subtitleFontFamily: merged.subtitleFontFamily?.startsWith('NetflixSans')
+            ? SUBTITLE_FONT_FAMILY
+            : merged.subtitleFontFamily,
     };
 }

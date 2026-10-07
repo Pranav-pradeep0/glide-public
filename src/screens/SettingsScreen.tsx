@@ -10,7 +10,7 @@ import {
     useWindowDimensions,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
-import { DEFAULT_APP_SETTINGS, useAppStore } from '../store/appStore';
+import { DEFAULT_APP_SETTINGS, SUBTITLE_FONT_FAMILY, useAppStore } from '../store/appStore';
 import { useVideoHistoryStore } from '../store/videoHistoryStore';
 import { useTheme } from '../hooks/useTheme';
 import { SUBTITLE_COLORS } from '../utils/constants';
@@ -132,14 +132,8 @@ const SubtitlePreviewSection = React.memo(({ fontSizeSV, settings }: {
 }) => {
     const animatedStyle = useAnimatedStyle(() => ({ fontSize: fontSizeSV.value }));
 
-    let fontFamily = settings.subtitleFontFamily || 'System';
-    let fontWeight = String(settings.subtitleFontWeight) as any;
-    // Netflix Sans ships as separate files per weight.
-    if (fontFamily === 'NetflixSans-Medium') {
-        const weightNum = Number(settings.subtitleFontWeight);
-        fontFamily = weightNum >= 700 ? 'NetflixSans-Bold' : weightNum <= 300 ? 'NetflixSans-Light' : 'NetflixSans-Medium';
-        fontWeight = 'normal';
-    }
+    const fontFamily = settings.subtitleFontFamily || 'System';
+    const fontWeight = String(settings.subtitleFontWeight) as any;
     const outlined = settings.subtitleEdgeStyle !== 'none';
     const boxColor = settings.subtitleBackgroundColor === 'transparent'
         ? 'transparent'
@@ -186,6 +180,7 @@ export default function SettingsScreen() {
         setBrightnessMode,
         setPipBrightnessMode,
         setSubtitleFontWeight,
+        setSubtitleFontFamily,
         setSubtitleOutlineWidth,
         setSubtitleBackgroundColor,
         setSubtitleBackgroundOpacity,
@@ -553,6 +548,21 @@ export default function SettingsScreen() {
                 <SectionLabel title="Subtitles" />
                 <ListGroup>
                     <SubtitlePreviewSection fontSizeSV={fontSizeSV} settings={settings} />
+                    <ChipRow title="Font">
+                        <View style={styles.chips}>
+                            {[
+                                { key: SUBTITLE_FONT_FAMILY, label: 'Atkinson Hyperlegible' },
+                                { key: 'sans-serif', label: 'System' },
+                            ].map((opt) => (
+                                <Chip
+                                    key={opt.key}
+                                    label={opt.label}
+                                    selected={settings.subtitleFontFamily === opt.key}
+                                    onPress={() => setSubtitleFontFamily(opt.key)}
+                                />
+                            ))}
+                        </View>
+                    </ChipRow>
                     <FontSizeSliderControl fontSizeSV={fontSizeSV} onFinalChange={setSubtitleFontSize} />
                     <SliderRow
                         title="Weight"

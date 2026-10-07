@@ -42,5 +42,8 @@ class MainApplication : Application(), ReactApplication {
     super.onCreate()
     // Replaces SoLoader.init plus the New Architecture entry point load().
     loadReactNative(this)
+    // Subtitle font. An XML family (res/font) so fontWeight and italic pick real faces.
+    com.facebook.react.common.assets.ReactFontManager.getInstance()
+        .addCustomFont(this, "AtkinsonHyperlegibleNext", R.font.atkinson_hyperlegible_next)
   }
 }

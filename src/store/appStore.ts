@@ -22,6 +22,9 @@ const INITIAL_UPDATE_INSTALL: UpdateInstallState = {
     cachedApk: null,
 };
 
+// Registered in MainApplication from res/font/atkinson_hyperlegible_next.xml.
+export const SUBTITLE_FONT_FAMILY = 'AtkinsonHyperlegibleNext';
+
 // Default haptic settings
 export const DEFAULT_HAPTIC_SETTINGS: HapticSettings = {
     enabled: true,
@@ -39,7 +42,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     subtitleBackgroundColor: 'transparent',
     subtitleBackgroundOpacity: 0.5,
     subtitleEdgeStyle: 'outline',
-    subtitleFontFamily: 'NetflixSans-Medium',
+    subtitleFontFamily: SUBTITLE_FONT_FAMILY,
     subtitlePositionPortrait: 0.38,
     subtitlePositionLandscape: 0.38,
     hasCompletedOnboarding: false,
@@ -214,7 +217,7 @@ export const useAppStore = create<AppStore>((set) => ({
                 subtitleBackgroundColor: 'transparent',
                 subtitleBackgroundOpacity: 0.5,
                 subtitleEdgeStyle: 'outline',
-                subtitleFontFamily: 'NetflixSans-Medium',
+                subtitleFontFamily: SUBTITLE_FONT_FAMILY,
                 subtitlePositionPortrait: 0.38,
                 subtitlePositionLandscape: 0.38,
             },

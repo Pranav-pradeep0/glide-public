@@ -33,22 +33,8 @@ export const PlayerSubtitleOverlay: React.FC<PlayerSubtitleOverlayProps> = React
     const subtitlePositionPortrait = useAppStore((s) => s.settings.subtitlePositionPortrait);
 
     const subtitleSettings = useMemo<SubtitleSettings>(() => {
-        let fontFamily = subtitleFontFamily || Platform.select({ android: 'Roboto', ios: 'System', default: 'System' });
-        let fontWeight: SubtitleSettings['fontWeight'] = String(subtitleFontWeight) as any;
-
-        if (fontFamily === 'NetflixSans-Medium') {
-            const weightNum = Number(subtitleFontWeight);
-            if (weightNum >= 700) {
-                fontFamily = 'NetflixSans-Bold';
-                fontWeight = 'normal';
-            } else if (weightNum <= 300) {
-                fontFamily = 'NetflixSans-Light';
-                fontWeight = 'normal';
-            } else {
-                fontFamily = 'NetflixSans-Medium';
-                fontWeight = 'normal';
-            }
-        }
+        const fontFamily = subtitleFontFamily || Platform.select({ android: 'Roboto', ios: 'System', default: 'System' });
+        const fontWeight = String(subtitleFontWeight) as SubtitleSettings['fontWeight'];
 
         return {
             fontSize: subtitleFontSize,
