@@ -82,15 +82,23 @@
 
       <!-- Media3 owns the notification, media buttons and lock-screen controls, derived
            from the real ExoPlayer. No adapter, and no notification code in the view.
-           Permissions are declared above, on the app itself. -->
+           Permissions are declared above, on the app itself. Exported, with the browser
+           actions, so Android Auto and other media controllers can bind to the music
+           library session. -->
       <service
         android:name="com.glide.app.player.GlidePlayerService"
-        android:exported="false"
+        android:exported="true"
         android:foregroundServiceType="mediaPlayback">
         <intent-filter>
+            <action android:name="androidx.media3.session.MediaLibraryService" />
             <action android:name="androidx.media3.session.MediaSessionService" />
+            <action android:name="android.media.browse.MediaBrowserService" />
         </intent-filter>
       </service>
+
+      <meta-data
+        android:name="com.google.android.gms.car.application"
+        android:resource="@xml/automotive_app_desc" />
 
       <activity
         android:name=".VideoPlayerActivity"
