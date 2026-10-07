@@ -141,8 +141,11 @@ const SeekBar: React.FC<SeekBarProps> = ({
         const h = 4 + 4 * grow.value;
         return { height: h, borderRadius: h / 2 };
     });
+    // Scaled, not shifted by the measured width: trackWidth only updates in onLayout, a
+    // frame after a rotation resizes the bar, and a shift by the old width showed the
+    // difference as a white block.
     const fillStyle = useAnimatedStyle(() => ({
-        transform: [{ translateX: (progress.value - 1) * trackWidth.value }],
+        transform: [{ scaleX: progress.value }],
     }));
     const thumbStyle = useAnimatedStyle(() => {
         const size = 14 + 6 * grow.value;
@@ -708,7 +711,7 @@ const styles = StyleSheet.create({
     endGroup: { flexDirection: 'row' },
     seekBar: { height: 28, justifyContent: 'center' },
     track: { backgroundColor: 'rgba(255,255,255,0.28)', overflow: 'hidden' },
-    fill: { ...StyleSheet.absoluteFill, backgroundColor: colors.primary },
+    fill: { ...StyleSheet.absoluteFill, backgroundColor: colors.primary, transformOrigin: 'left' },
     loading: { position: 'absolute', top: 0, bottom: 0, width: '30%', backgroundColor: colors.primary },
     // A tick taller than the track, outlined so it reads on both the played and unplayed parts.
     dot: {
