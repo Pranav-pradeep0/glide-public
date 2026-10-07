@@ -1,6 +1,9 @@
 package com.glide.app.player
 
 import android.graphics.Bitmap
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.media.audiofx.Equalizer
 import android.media.audiofx.LoudnessEnhancer
 import android.os.Handler
@@ -85,6 +88,18 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
     private var equalizer: Equalizer? = null
     private var volumeBoostPercent = 100
     private var loudnessEnhancer: LoudnessEnhancer? = null
+    private val audioManager = reactContext.getSystemService(AudioManager::class.java)
+
+    /**
+     * Re-checks the boost the instant an output appears or disappears, in native, so
+     * unplugging headphones mid-boost never reaches the speaker boosted -- not even for the
+     * time it takes the route event to get through JS.
+     */
+    private val outputWatcher = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>) = applyVolumeBoost()
+        override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>) = applyVolumeBoost()
+    }
+    private var outputWatcherRegistered = false
     private var audioDelayMs = 0
     private var audioDelayProcessor: AudioDelayProcessor? = null
 
@@ -417,6 +432,19 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
     }
 
     private fun applyVolumeBoost() {
+        // Never on the phone's speaker. Unknown counts as speaker. Forgetting the level too
+        // means plugging headphones back in does not bring the boost back by itself.
+        if (volumeBoostPercent > 100 &&
+            com.glide.app.AudioControlModule.getInstance()?.isOnSpeaker() != false) {
+            volumeBoostPercent = 100
+        }
+        if (volumeBoostPercent > 100 && !outputWatcherRegistered) {
+            audioManager?.registerAudioDeviceCallback(outputWatcher, progressHandler)
+            outputWatcherRegistered = true
+        } else if (volumeBoostPercent <= 100 && outputWatcherRegistered) {
+            audioManager?.unregisterAudioDeviceCallback(outputWatcher)
+            outputWatcherRegistered = false
+        }
         if (volumeBoostPercent <= 100) {
             loudnessEnhancer?.release()
             loudnessEnhancer = null
@@ -709,6 +737,10 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
 
     fun cleanUpResources() {
         reactContext.removeLifecycleEventListener(this)
+        if (outputWatcherRegistered) {
+            audioManager?.unregisterAudioDeviceCallback(outputWatcher)
+            outputWatcherRegistered = false
+        }
         pipController.detach()
         releasePlayer()
     }

@@ -141,8 +141,8 @@ export function useAudioController(
                     return;
                 }
 
-                // Boosted, and the system stream is still at max: a volume-up press (or a
-                // re-report) must not knock the boost back down to 100%.
+                // Boosted, and the system stream is still at max: a re-report of the max
+                // must not knock the boost back down to 100%.
                 if (newVolume >= 100 && lastSetVolumeRef.current > 100) {
                     return;
                 }
@@ -247,6 +247,27 @@ export function useAudioController(
     const setVolume = useCallback((val: number) => {
         applyVolume(val / 100);
     }, [applyVolume]);
+
+    // Volume keys: native consumes them and reports direction + one system step. Stepping
+    // here, through applyVolume, lets them walk the whole 0-200% the gesture can, with the
+    // same route clamp -- so the speaker still stops at 100%.
+    useEffect(() => {
+        const subscription: EmitterSubscription = DeviceEventEmitter.addListener(
+            'onVolumeKey',
+            ({ direction, stepPercent }: { direction: number; stepPercent: number }) => {
+                if (isGestureActiveRef.current || !(stepPercent > 0)) { return; }
+                const route = audioRouteRef.current;
+                const max = route.type === 'speaker' ? 100 : route.maxVolume;
+                const index = Math.round(lastSetVolumeRef.current / stepPercent) + direction;
+                const next = Math.max(0, Math.min(max, index * stepPercent));
+                applyVolume(next / 100);
+                const applied = lastSetVolumeRef.current;
+                currentVolumeShared.value = applied / 100;
+                onHardwareVolumeChangeRef.current?.(applied);
+            }
+        );
+        return () => subscription.remove();
+    }, [applyVolume, currentVolumeShared]);
 
     // Called when gesture ends - syncs React state
     const onGestureEnd = useCallback(() => {

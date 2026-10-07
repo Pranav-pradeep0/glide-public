@@ -84,6 +84,7 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
     // Event names
     private static final String EVENT_VOLUME_CHANGE = "onVolumeChange";
     private static final String EVENT_ROUTE_CHANGE = "onAudioRouteChange";
+    private static final String EVENT_VOLUME_KEY = "onVolumeKey";
 
     // Timing constants
     private static final long APP_CHANGE_DEBOUNCE_MS = 200;
@@ -854,9 +855,11 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
     // =========================================================================
 
     /**
-     * Steps the music stream silently and reports it to JS, so the player's own volume HUD
-     * shows instead of the system one. Shared by every Activity that hosts the player --
-     * MainActivity and VideoPlayerActivity (videos opened from other apps).
+     * Hands a volume key press to JS instead of the system, so the player's own HUD shows
+     * and the keys walk the whole 0-200% range: past the top of the system stream they step
+     * the boost. JS owns that range (and caps the speaker at 100%), so native only reports
+     * the direction and one system step in percent. Shared by every Activity that hosts the
+     * player -- MainActivity and VideoPlayerActivity (videos opened from other apps).
      *
      * @return true if the key was consumed
      */
@@ -866,23 +869,28 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
             return false;
         }
         // Only while the video player is open and listening.
-        if (!isListening || audioManager == null) {
+        if (!isListening || audioManager == null || !reactContext.hasActiveReactInstance()) {
             return false;
         }
-        try {
-            int maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
-            int currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
-            int step = Math.max(1, maxVolume / 15);
-            int newVolume = keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP
-                    ? Math.min(currentVolume + step, maxVolume)
-                    : Math.max(currentVolume - step, 0);
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, newVolume, 0);
-            handleHardwareVolumeChange();
-            return true;
-        } catch (Exception e) {
-            Log.e(TAG, "Volume key handling failed", e);
+        int maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+        if (maxVolume <= 0) {
             return false;
         }
+        int step = Math.max(1, maxVolume / 15);
+        WritableMap params = Arguments.createMap();
+        params.putInt("direction", keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP ? 1 : -1);
+        params.putDouble("stepPercent", step * 100.0 / maxVolume);
+        sendEvent(EVENT_VOLUME_KEY, params);
+        return true;
+    }
+
+    /**
+     * Whether audio is coming out of the phone's own speaker right now, read fresh rather
+     * than from the listener's cached route. The player asks this before applying any boost
+     * above 100%, which a phone speaker must never get.
+     */
+    public boolean isOnSpeaker() {
+        return ROUTE_SPEAKER.equals(detectCurrentRoute());
     }
 
     // =========================================================================
