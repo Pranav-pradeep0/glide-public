@@ -59,17 +59,39 @@ internal object SubtitleAligner {
 
     /** 16-bit mono PCM to speech-band loudness in dB, one value per [FRAME_S]. */
     fun speechLevels(pcm: ShortArray, sampleRate: Int): FloatArray {
-        val hp = Biquad(sampleRate, 300.0, highPass = true)
-        val lp = Biquad(sampleRate, 3000.0, highPass = false)
-        val frame = (sampleRate * FRAME_S).roundToInt()
-        return FloatArray(pcm.size / frame) { f ->
-            var energy = 0.0
-            for (i in f * frame until (f + 1) * frame) {
-                val x = lp.process(hp.process(pcm[i] / 32768.0))
-                energy += x * x
+        val meter = SpeechMeter(sampleRate)
+        for (s in pcm) meter.add(s / 32768.0)
+        return meter.levels()
+    }
+
+    /**
+     * [speechLevels] one sample at a time, at the source's own sample rate. The decoder feeds
+     * this directly, so no audio is buffered and nothing is resampled: decimating 48 kHz to
+     * 8 kHz without a low-pass folded music and effects above 4 kHz into the speech band and
+     * left every alignment "unsure".
+     */
+    class SpeechMeter(sampleRate: Int) {
+        private val hp = Biquad(sampleRate, 300.0, highPass = true)
+        private val lp = Biquad(sampleRate, 3000.0, highPass = false)
+        private val frame = (sampleRate * FRAME_S).roundToInt().coerceAtLeast(1)
+        private var energy = 0.0
+        private var count = 0
+        private var levels = FloatArray(1024)
+        private var size = 0
+
+        /** One mono sample in [-1, 1]. */
+        fun add(sample: Double) {
+            val x = lp.process(hp.process(sample))
+            energy += x * x
+            if (++count == frame) {
+                if (size == levels.size) levels = levels.copyOf(size * 2)
+                levels[size++] = (10 * log10(energy / frame + 1e-10)).toFloat()
+                energy = 0.0
+                count = 0
             }
-            (10 * log10(energy / frame + 1e-10)).toFloat()
         }
+
+        fun levels(): FloatArray = levels.copyOf(size)
     }
 
     /**

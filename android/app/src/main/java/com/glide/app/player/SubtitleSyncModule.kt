@@ -35,17 +35,18 @@ class SubtitleSyncModule(context: ReactApplicationContext) : ReactContextBaseJav
 
     override fun getName() = NAME
 
-    private data class DecodedAudio(
-        val pcm: ShortArray,
-        val sampleRate: Int,
+    /** Speech-band loudness of the window ([SubtitleAligner.FRAME_S] apart) and where it starts. */
+    private data class DecodedLevels(
+        val levels: FloatArray,
         val actualStartS: Double
     )
 
     /**
-     * Decodes an audio window of up to [durationS] starting at [windowStartS] into 16-bit mono PCM,
-     * isolating the dialogue/center channel.
+     * Decodes up to [durationS] of audio from [windowStartS] and measures its speech-band
+     * loudness as it goes, at the source sample rate, using the dialogue (centre) channel of
+     * 5.1/7.1 audio and the average of the channels otherwise. Holds no PCM.
      */
-    private fun decodeAudioWindow(videoPath: String, windowStartS: Double, durationS: Double = 300.0): DecodedAudio? {
+    private fun decodeAudioWindow(videoPath: String, windowStartS: Double, durationS: Double = 300.0): DecodedLevels? {
         val context = reactApplicationContext
         val uri = Uri.parse(videoPath)
         var pfd: ParcelFileDescriptor? = null
@@ -125,8 +126,8 @@ class SubtitleSyncModule(context: ReactApplicationContext) : ReactContextBaseJav
             var noOutputCount = 0
             val maxNoOutputCount = 200
 
-            val chunks = ArrayList<ShortArray>()
-            var totalShorts = 0
+            var meter: SubtitleAligner.SpeechMeter? = null
+            var meterRate = 0
             var actualStartUs: Long? = null
 
             while (!isEOS && noOutputCount < maxNoOutputCount) {
@@ -190,33 +191,41 @@ class SubtitleSyncModule(context: ReactApplicationContext) : ReactContextBaseJav
                                     actualStartUs = pts + (startFrame * 1_000_000L) / sampleRate
                                 }
 
-                                val chunk = ShortArray(framesToExtract)
-                                if (isFloat) {
-                                    val floatBuf = outputBuffer.asFloatBuffer()
-                                    for (f in 0 until framesToExtract) {
-                                        val frameIdx = startFrame + f
-                                        val sFloat: Float = when {
-                                            channelCount >= 3 -> floatBuf.get(frameIdx * channelCount + 2) // center
-                                            channelCount == 2 -> (floatBuf.get(frameIdx * 2) + floatBuf.get(frameIdx * 2 + 1)) / 2f
-                                            else -> floatBuf.get(frameIdx)
-                                        }
-                                        chunk[f] = (sFloat.coerceIn(-1.0f, 1.0f) * 32767f).toInt().toShort()
-                                    }
+                                // The meter is built for the rate of the first audio it sees; a
+                                // later rate change would mis-time it, so that ends the window.
+                                val m = meter ?: SubtitleAligner.SpeechMeter(sampleRate).also {
+                                    meter = it
+                                    meterRate = sampleRate
+                                }
+                                if (sampleRate != meterRate) {
+                                    isEOS = true
                                 } else {
-                                    val shortBuf = outputBuffer.asShortBuffer()
-                                    for (f in 0 until framesToExtract) {
-                                        val frameIdx = startFrame + f
-                                        val sShort: Short = when {
-                                            channelCount >= 3 -> shortBuf.get(frameIdx * channelCount + 2) // center
-                                            channelCount == 2 -> ((shortBuf.get(frameIdx * 2).toInt() + shortBuf.get(frameIdx * 2 + 1).toInt()) / 2).toShort()
-                                            else -> shortBuf.get(frameIdx)
+                                    // 5.1 and 7.1 carry dialogue on the centre channel (index 2).
+                                    val centre = channelCount == 6 || channelCount == 8
+                                    if (isFloat) {
+                                        val buf = outputBuffer.asFloatBuffer()
+                                        for (f in startFrame until endFrame) {
+                                            val base = f * channelCount
+                                            val s = if (centre) buf.get(base + 2).toDouble() else {
+                                                var sum = 0.0
+                                                for (c in 0 until channelCount) sum += buf.get(base + c)
+                                                sum / channelCount
+                                            }
+                                            m.add(s.coerceIn(-1.0, 1.0))
                                         }
-                                        chunk[f] = sShort
+                                    } else {
+                                        val buf = outputBuffer.asShortBuffer()
+                                        for (f in startFrame until endFrame) {
+                                            val base = f * channelCount
+                                            val s = if (centre) buf.get(base + 2) / 32768.0 else {
+                                                var sum = 0.0
+                                                for (c in 0 until channelCount) sum += buf.get(base + c)
+                                                sum / channelCount / 32768.0
+                                            }
+                                            m.add(s)
+                                        }
                                     }
                                 }
-
-                                chunks.add(chunk)
-                                totalShorts += framesToExtract
                             }
 
                             if (endFrame < totalFrames || pts + durationUs >= windowEndUs) {
@@ -244,44 +253,10 @@ class SubtitleSyncModule(context: ReactApplicationContext) : ReactContextBaseJav
                 }
             }
 
-            if (totalShorts == 0 || sampleRate <= 0) {
-                return null
-            }
-
-            val targetRate = 8000
-            val pcm: ShortArray
-            val finalRate: Int
-            if (sampleRate > targetRate) {
-                val ratio = sampleRate.toDouble() / targetRate
-                val targetSize = (totalShorts / ratio).toInt()
-                pcm = ShortArray(targetSize)
-                var currentShortIdx = 0
-                var chunkIdx = 0
-                for (i in 0 until targetSize) {
-                    val targetSrcIdx = (i * ratio).toInt()
-                    while (chunkIdx < chunks.size && currentShortIdx + chunks[chunkIdx].size <= targetSrcIdx) {
-                        currentShortIdx += chunks[chunkIdx].size
-                        chunkIdx++
-                    }
-                    if (chunkIdx < chunks.size) {
-                        pcm[i] = chunks[chunkIdx][targetSrcIdx - currentShortIdx]
-                    }
-                }
-                chunks.clear()
-                finalRate = targetRate
-            } else {
-                pcm = ShortArray(totalShorts)
-                var offset = 0
-                for (chunk in chunks) {
-                    System.arraycopy(chunk, 0, pcm, offset, chunk.size)
-                    offset += chunk.size
-                }
-                chunks.clear()
-                finalRate = sampleRate
-            }
-
+            val levels = meter?.levels() ?: return null
+            if (levels.isEmpty()) return null
             val actualStartS = (actualStartUs ?: (windowStartS * 1_000_000).toLong()) / 1_000_000.0
-            return DecodedAudio(pcm, finalRate, actualStartS)
+            return DecodedLevels(levels, actualStartS)
         } finally {
             try { codec?.stop() } catch (_: Exception) {}
             try { codec?.release() } catch (_: Exception) {}
@@ -304,8 +279,7 @@ class SubtitleSyncModule(context: ReactApplicationContext) : ReactContextBaseJav
                 val s = DoubleArray(starts.size()) { starts.getDouble(it) }
                 val e = DoubleArray(ends.size()) { ends.getDouble(it) }
 
-                val levels = SubtitleAligner.speechLevels(decoded.pcm, decoded.sampleRate)
-                val result = SubtitleAligner.align(levels, decoded.actualStartS, s, e)
+                val result = SubtitleAligner.align(decoded.levels, decoded.actualStartS, s, e)
                     ?: return@thread promise.resolve(null)
 
                 promise.resolve(Arguments.createMap().apply {
