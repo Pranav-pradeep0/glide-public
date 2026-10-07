@@ -2,6 +2,7 @@ package com.glide.app.player
 
 import android.media.AudioFormat
 import android.media.MediaCodec
+import android.media.MediaCodecList
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
@@ -64,26 +65,35 @@ class SubtitleSyncModule(context: ReactApplicationContext) : ReactContextBaseJav
                 extractor.setDataSource(cleanPath)
             }
 
+            // The first audio track the device can actually decode. Films often lead with
+            // AC-3, DTS or TrueHD, which most phones have no platform decoder for (playback
+            // reaches them through the FFmpeg extension, MediaCodec cannot); a stereo AAC or
+            // commentary track further down carries the same speech timing.
+            val codecs = MediaCodecList(MediaCodecList.REGULAR_CODECS)
             var audioTrackIndex = -1
             var audioFormat: MediaFormat? = null
+            var decoderName: String? = null
             for (i in 0 until extractor.trackCount) {
                 val format = extractor.getTrackFormat(i)
                 val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
-                if (mime.startsWith("audio/")) {
+                if (!mime.startsWith("audio/")) continue
+                val name = try { codecs.findDecoderForFormat(format) } catch (_: Exception) { null }
+                if (name != null) {
                     audioTrackIndex = i
                     audioFormat = format
+                    decoderName = name
                     break
                 }
             }
 
-            if (audioTrackIndex == -1 || audioFormat == null) {
+            if (audioTrackIndex == -1 || audioFormat == null || decoderName == null) {
+                // No decodable audio: resolves as "could not sync", not as an error.
                 return null
             }
 
             extractor.selectTrack(audioTrackIndex)
-            val mime = audioFormat.getString(MediaFormat.KEY_MIME) ?: return null
 
-            codec = MediaCodec.createDecoderByType(mime)
+            codec = MediaCodec.createByCodecName(decoderName)
             codec.configure(audioFormat, null, null, 0)
             codec.start()
 
