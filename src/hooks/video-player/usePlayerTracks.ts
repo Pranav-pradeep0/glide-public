@@ -6,7 +6,6 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { SubtitleParser } from '@/utils/SubtitleParser';
 import { SubtitleExtractor, SubtitleTrack } from '@/utils/SubtitleExtractor';
 import { SubtitleCue } from '@/types';
 import {
@@ -16,7 +15,7 @@ import {
 } from './types';
 import { findMatchingAudioTrack } from '@/utils/languages';
 import { SubtitleCueStore } from '@/services/SubtitleCueStore';
-import type { BitmapCue } from '@/components/VideoPlayer/GlidePlayer';
+import { useSubtitleCueStore } from '@/store/subtitleCueStore';
 
 // ============================================================================
 // TYPES
@@ -81,10 +80,6 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
 
 
     const [subtitleCues, setSubtitleCues] = useState<SubtitleCue[]>([]);
-    const [currentSubtitleCue, setCurrentSubtitleCue] = useState<SubtitleCue | null>(null);
-
-    /** Bitmap (PGS/VobSub) cues currently on screen, straight from the native player. */
-    const [bitmapCues, setBitmapCues] = useState<BitmapCue[]>([]);
 
     /**
      * Which subtitle track the native player should decode, as an **ordinal among subtitle
@@ -99,23 +94,14 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
             return -1;
         }
         const ordinal = subtitleTracks.findIndex(t => t.index === selectedSubtitleTrackIndex);
-        if (ordinal < 0 || !subtitleTracks[ordinal]?.isBitmap) {
+        if (ordinal < 0) {
             return -1;
         }
-        return ordinal;
-    }, [selectedSubtitleTrackIndex, subtitleTracks]);
-
-    // Native keeps sending cues for whatever it last decoded; clear them the moment the
-    // selection stops being a bitmap track, or a stale image would sit on screen.
-    useEffect(() => {
-        if (nativeTextTrackOrdinal < 0) {
-            setBitmapCues([]);
+        if (subtitleTracks[ordinal]?.isBitmap || subtitleCues.length === 0) {
+            return ordinal;
         }
-    }, [nativeTextTrackOrdinal]);
-
-    const handleBitmapCues = useCallback((event: { cues: BitmapCue[] }) => {
-        setBitmapCues(event?.cues ?? []);
-    }, []);
+        return -1;
+    }, [selectedSubtitleTrackIndex, subtitleTracks, subtitleCues]);
 
     // External subtitles
     const [externalSubtitles, setExternalSubtitles] = useState<ExternalSubtitle[]>([]);
@@ -196,6 +182,13 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
         };
     }, [videoPath]);
 
+    const setSubtitleTracksFromPlayer = useCallback((tracks: SubtitleTrack[]) => {
+        if (tracks && tracks.length > 0) {
+            setSubtitleTracks(tracks);
+            setSubtitleTracksReady(true);
+        }
+    }, []);
+
     // Extract and parse selected subtitle track
     useEffect(() => {
         let mounted = true;
@@ -204,7 +197,6 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
             // No subtitle selected
             if (selectedSubtitleTrackIndex === null) {
                 setSubtitleCues([]);
-                setCurrentSubtitleCue(null);
                 return;
             }
 
@@ -214,14 +206,13 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
                 return;
             }
 
-            // Bitmap subtitles (PGS, VobSub) are decoded by ExoPlayer and arrive as cue
-            // images through onBitmapCues; the overlay draws them. ffmpeg cannot give us
-            // text for them, so the extraction path below is skipped entirely.
+            // Bitmap subtitles (PGS, VobSub) are decoded and rendered natively by Media3's
+            // SubtitleView over the video surface. ffmpeg cannot give us text for them, so
+            // the extraction path below is skipped entirely.
             const selectedTrack = subtitleTracks.find(t => t.index === selectedSubtitleTrackIndex);
             if (selectedTrack && selectedTrack.isBitmap) {
                 if (__DEV__) {console.log(`[usePlayerTracks] Bitmap subtitle (${selectedTrack.codec}) — rendering natively`);}
                 setSubtitleCues([]);
-                setCurrentSubtitleCue(null);
                 return;
             }
 
@@ -236,7 +227,6 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
                     }
                 } else if (mounted) {
                     setSubtitleCues([]);
-                    setCurrentSubtitleCue(null);
                 }
             } catch (error) {
                 if (__DEV__) {
@@ -244,7 +234,6 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
                 }
                 if (mounted) {
                     setSubtitleCues([]);
-                    setCurrentSubtitleCue(null);
                 }
             }
         };
@@ -255,30 +244,6 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
             mounted = false;
         };
     }, [selectedSubtitleTrackIndex, videoPath, subtitleTracks]);
-
-    // Track current subtitle cue based on playback time
-    useEffect(() => {
-        if (subtitleCues.length === 0) {
-            setCurrentSubtitleCue(null);
-            return;
-        }
-
-        const interval = setInterval(() => {
-            // Apply subtitle delay offset (convert ms to seconds)
-            const effectiveTime = currentTimeRef.current - (subtitleDelay / 1000);
-
-            const cue = SubtitleParser.findActiveCue(subtitleCues, effectiveTime);
-            setCurrentSubtitleCue(prevCue => {
-                // Only update if cue actually changed
-                if (prevCue?.text === cue?.text && prevCue?.startTime === cue?.startTime) {
-                    return prevCue;
-                }
-                return cue;
-            });
-        }, 250); // 4x/sec is sufficient for subtitle display, saves battery
-
-        return () => clearInterval(interval);
-    }, [subtitleCues, currentTimeRef, subtitleDelay]);
 
     // Cleanup on unmount
     useEffect(() => {
@@ -378,10 +343,8 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
         subtitleTracksReady,
         selectedSubtitleTrackIndex,
         subtitleCues,
-        currentSubtitleCue,
-        bitmapCues,
+        currentSubtitleCue: useSubtitleCueStore.getState().currentCue,
         nativeTextTrackOrdinal,
-        handleBitmapCues,
         selectSubtitleTrack,
 
         // External
@@ -399,17 +362,20 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
 
         // For parent to set audio tracks from VLC
         setAudioTracksFromVLC,
+        setSubtitleTracksFromPlayer,
         // For drift correction updates
         setSubtitleCues,
     }), [
         audioTracks, selectedAudioTrackId, selectAudioTrack,
-        subtitleTracks, subtitleTracksReady, selectedSubtitleTrackIndex, subtitleCues, currentSubtitleCue, selectSubtitleTrack,
+        subtitleTracks, subtitleTracksReady, selectedSubtitleTrackIndex, subtitleCues, selectSubtitleTrack,
         externalSubtitles, currentExternalName, loadExternalCues, loadSDHForHaptics,
         hapticCues,
         audioTracksForSelector, subtitleTracksForSelector,
         setAudioTracksFromVLC,
+        setSubtitleTracksFromPlayer,
     ]) as UsePlayerTracksReturn & {
         setAudioTracksFromVLC: typeof setAudioTracksFromVLC,
+        setSubtitleTracksFromPlayer: typeof setSubtitleTracksFromPlayer,
         setSubtitleCues: typeof setSubtitleCues
     };
 }

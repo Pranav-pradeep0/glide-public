@@ -3,7 +3,7 @@
  * Shared types for all video player hooks
  */
 
-import type { BitmapCue, GlidePlayerRef, PlayerResizeMode } from '@/components/VideoPlayer/GlidePlayer';
+import type { GlidePlayerRef, PlayerResizeMode } from '@/components/VideoPlayer/GlidePlayer';
 import { SharedValue } from 'react-native-reanimated';
 import { SubtitleCue, VideoBookmark } from '@/types';
 
@@ -41,6 +41,7 @@ export interface VLCLoadData {
     videoSize?: { height: number; width: number };
     audioTracks?: Array<{ id: number; name: string }>;
     textTracks?: Array<{ id: number; name: string }>;
+    subtitleTracks?: Array<{ id: number; name: string; language?: string; isDefault?: boolean }>;
 }
 
 export interface VLCProgressData {
@@ -348,10 +349,8 @@ export interface UsePlayerTracksReturn {
     selectedSubtitleTrackIndex: number | null;
     subtitleCues: SubtitleCue[];
     currentSubtitleCue: SubtitleCue | null;
-    bitmapCues: BitmapCue[];
     /** Ordinal among subtitle streams for the native player; -1 disables text output. */
     nativeTextTrackOrdinal: number;
-    handleBitmapCues: (event: { cues: BitmapCue[] }) => void;
     selectSubtitleTrack: (trackIndex: number | null) => void;
 
     // External subtitles

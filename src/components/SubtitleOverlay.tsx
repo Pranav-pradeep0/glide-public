@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect } from 'react';
-import { Image, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { StyleSheet, View, useWindowDimensions } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
     useSharedValue,
@@ -8,7 +8,6 @@ import Animated, {
     runOnJS,
 } from 'react-native-reanimated';
 import type { SubtitleCue } from '@/types';
-import type { BitmapCue } from '@/components/VideoPlayer/GlidePlayer';
 import { FormattedSubtitleText } from '@/utils/SubtitleHtmlParser';
 
 
@@ -31,8 +30,6 @@ export interface SubtitleSettings {
 
 interface SubtitleOverlayProps {
     currentCue: SubtitleCue | null;
-    /** Bitmap (PGS/VobSub) cues from the native player. Drawn instead of text. */
-    bitmapCues?: BitmapCue[];
     settings: SubtitleSettings;
     onPositionChange?: (yOffset: number) => void;
     onFontSizeChange?: (fontSize: number) => void;
@@ -41,7 +38,6 @@ interface SubtitleOverlayProps {
 
 export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = React.memo(({
     currentCue,
-    bitmapCues,
     settings,
     onPositionChange,
     onFontSizeChange,
@@ -273,47 +269,6 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = React.memo(({
                 .toString(16)
                 .padStart(2, '0')}`;
 
-    /**
-     * Bitmap subtitles (PGS/VobSub) are pictures, not text, so none of the styling below
-     * applies to them — no font, colour, outline or background. They are drawn where the
-     * source says, using media3's viewport fractions, and only fall back to bottom-centre
-     * when the source left the geometry unset (-1).
-     *
-     * They also bypass the drag-to-reposition gesture: the position is baked into the image
-     * by the authoring, and moving it would misalign it with the picture it belongs to.
-     */
-    if (bitmapCues && bitmapCues.length > 0) {
-        return (
-            <View style={styles.container} pointerEvents="none">
-                {bitmapCues.map((cue, i) => {
-                    const hasGeometry = cue.position >= 0 && cue.line >= 0;
-                    const aspect = cue.height > 0 ? cue.width / cue.height : 1;
-                    return (
-                        <Image
-                            key={`${i}-${cue.line}-${cue.position}`}
-                            source={{ uri: `data:image/png;base64,${cue.png}` }}
-                            resizeMode="contain"
-                            style={
-                                hasGeometry
-                                    ? {
-                                        position: 'absolute',
-                                        left: `${cue.position * 100}%`,
-                                        top: `${cue.line * 100}%`,
-                                        width: cue.size > 0 ? `${cue.size * 100}%` : undefined,
-                                        height: cue.bitmapHeight > 0
-                                            ? `${cue.bitmapHeight * 100}%`
-                                            : undefined,
-                                        aspectRatio: cue.bitmapHeight > 0 ? undefined : aspect,
-                                    }
-                                    : styles.bitmapFallback
-                            }
-                        />
-                    );
-                })}
-            </View>
-        );
-    }
-
     return (
         <GestureDetector gesture={composedGesture}>
             <Animated.View
@@ -371,14 +326,6 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = React.memo(({
 
 
 const styles = StyleSheet.create({
-    /** Used when a bitmap cue arrives with no geometry: full width, sitting near the bottom. */
-    bitmapFallback: {
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        bottom: '8%',
-        height: '20%',
-    },
     container: {
         position: 'absolute',
         left: 0,

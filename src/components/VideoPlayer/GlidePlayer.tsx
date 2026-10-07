@@ -42,21 +42,6 @@ export interface PlayerSource {
     [key: string]: any;
 }
 
-/**
- * A bitmap subtitle cue. Geometry is media3's, as fractions of the viewport; -1 means the
- * source did not specify it and the overlay should fall back to bottom-centre.
- */
-export interface BitmapCue {
-    /** Base64 PNG. */
-    png: string;
-    line: number;
-    position: number;
-    size: number;
-    bitmapHeight: number;
-    width: number;
-    height: number;
-}
-
 export interface GlidePlayerRef {
     seek: (fraction: number) => void;
     previewSeek: (fraction: number) => void;
@@ -98,8 +83,7 @@ export interface GlidePlayerProps extends ViewProps {
     onStopped?: (event: any) => void;
     onSeek?: (event: any) => void;
     onLoadStart?: (event: any) => void;
-    /** Bitmap subtitle cues, already PNG-encoded. Empty array clears them. */
-    onBitmapCues?: (event: { cues: BitmapCue[] }) => void;
+    onCues?: (event: any) => void;
 }
 
 const GlidePlayer = forwardRef<GlidePlayerRef, GlidePlayerProps>((props, ref) => {
@@ -146,7 +130,7 @@ const GlidePlayer = forwardRef<GlidePlayerRef, GlidePlayerProps>((props, ref) =>
 
     const {
         onLoad, onProgress, onEnd, onError, onBuffering, onPlaying, onPaused, onStopped,
-        onSeek, onLoadStart, onBitmapCues, source: _source, ...forwarded
+        onSeek, onLoadStart, onCues, source: _source, ...forwarded
     } = props;
 
     return (
@@ -168,7 +152,7 @@ const GlidePlayer = forwardRef<GlidePlayerRef, GlidePlayerProps>((props, ref) =>
             onVideoPaused={unwrap(onPaused)}
             onVideoStopped={unwrap(onStopped)}
             onVideoSeek={unwrap(onSeek)}
-            onVideoBitmapCues={unwrap(onBitmapCues)}
+            onCues={unwrap(onCues)}
         />
     );
 });

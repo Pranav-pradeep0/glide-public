@@ -43,6 +43,7 @@ const initialPlayerState: PlayerState = {
 interface UsePlayerCoreOptions {
     videoPath: string;
     onAudioTracksLoaded?: (tracks: Array<{ id: number; name: string }>) => void;
+    onSubtitleTracksLoaded?: (tracks: any[]) => void;
     onPlaybackPositionRestore?: (position: number) => void;
     getResumePosition?: () => number | null;
     repeat?: boolean;
@@ -58,6 +59,7 @@ interface UsePlayerCoreOptions {
 export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreReturn {
     const {
         onAudioTracksLoaded,
+        onSubtitleTracksLoaded,
         getResumePosition,
         repeat = false,
         sleepTimer = null,
@@ -390,6 +392,10 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
             onAudioTracksLoaded(tracks);
         }
 
+        if (data.subtitleTracks && data.subtitleTracks.length > 0 && onSubtitleTracksLoaded) {
+            onSubtitleTracksLoaded(data.subtitleTracks);
+        }
+
         const resumeTime = resumePosRef.current;
         if (resumeTime !== null) {
             resumePosRef.current = null;
@@ -411,7 +417,7 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
             lastSyncPosition.value = validResumeTime;
             lastSyncTimestamp.value = Date.now();
         }
-    }, [onAudioTracksLoaded, durationShared, currentTimeShared, lastSyncPosition,
+    }, [onAudioTracksLoaded, onSubtitleTracksLoaded, durationShared, currentTimeShared, lastSyncPosition,
         lastSyncTimestamp]);
 
     /**

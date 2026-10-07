@@ -1,6 +1,5 @@
 package com.glide.app.player
 
-import android.graphics.Bitmap
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
@@ -8,7 +7,6 @@ import android.media.audiofx.Equalizer
 import android.media.audiofx.LoudnessEnhancer
 import android.os.Handler
 import android.os.Looper
-import android.util.Base64
 import android.util.Log
 import android.view.SurfaceView
 import android.widget.FrameLayout
@@ -31,6 +29,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.ui.SubtitleView
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.LifecycleEventListener
 import com.facebook.react.bridge.ReadableArray
@@ -39,7 +38,6 @@ import com.facebook.react.bridge.WritableMap
 import com.facebook.react.uimanager.ThemedReactContext
 import com.facebook.react.uimanager.UIManagerHelper
 import com.facebook.react.uimanager.events.Event
-import java.io.ByteArrayOutputStream
 import kotlin.math.abs
 import kotlin.math.log10
 import kotlin.math.roundToLong
@@ -51,8 +49,8 @@ import kotlin.math.roundToLong
  * playback, audio tracks, colour enhancement, the equalizer, the six resize modes, PiP and
  * the media session.
  *
- * Subtitles are split on purpose: bitmap cues (PGS/VobSub) come from ExoPlayer through
- * onCues and are drawn by the JS overlay, while text cues stay on the ffmpeg extraction
+ * Subtitles: bitmap cues (PGS/VobSub) are decoded by ExoPlayer and rendered natively by
+ * SubtitleView over the video surface, while text cues stay on the ffmpeg extraction
  * path because haptics and negative subtitle delay both need the whole cue list upfront.
  * Audio delay is an AudioDelayProcessor in the sink (D1 revisited: users asked for it).
  *
@@ -67,6 +65,10 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
     FrameLayout(reactContext), LifecycleEventListener {
 
     private val surfaceView = SurfaceView(reactContext)
+    private val subtitleView = SubtitleView(reactContext).apply {
+        setUserDefaultStyle()
+        setUserDefaultTextSize()
+    }
     private var player: ExoPlayer? = null
 
     private val progressHandler = Handler(Looper.getMainLooper())
@@ -142,7 +144,6 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
      */
     private val textTracks = mutableListOf<Pair<TrackGroup, Int>>()
     private var pendingTextTrack: Int? = null
-    private var lastBitmapCueSignature: String? = null
 
     private var videoWidth = 0
     private var videoHeight = 0
@@ -168,6 +169,7 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
 
     init {
         addView(surfaceView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        addView(subtitleView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         reactContext.addLifecycleEventListener(this)
         pipController.attach()
     }
@@ -206,6 +208,7 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
     private fun layoutSurface(w: Int, h: Int) {
         if (videoWidth <= 0 || videoHeight <= 0 || w <= 0 || h <= 0) {
             surfaceView.layout(0, 0, w, h)
+            subtitleView.layout(0, 0, w, h)
             return
         }
 
@@ -228,6 +231,7 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
         val x = (w - childW) / 2
         val y = (h - childH) / 2
         surfaceView.layout(x, y, x + childW, y + childH)
+        subtitleView.layout(x, y, x + childW, y + childH)
 
         // Logged whenever the result changes, never per pass: the absence of this line
         // after a mode change is what exposed the requestLayout() problem above, so it has
@@ -319,7 +323,7 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
                 .clearOverridesOfType(C.TRACK_TYPE_TEXT)
                 .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
                 .build()
-            emitBitmapCues(emptyList())
+            subtitleView.setCues(emptyList())
             return
         }
 
@@ -678,7 +682,6 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
         // Re-applied once the new player lists its tracks (onTracksChanged).
         pendingAudioTrack = pendingAudioTrack ?: chosenAudioTrack
         pendingTextTrack = pendingTextTrack ?: chosenTextTrack
-        lastBitmapCueSignature = null
         p.setVideoSurfaceView(surfaceView)
         p.addListener(listener)
         p.playbackParameters = PlaybackParameters(rateProp)
@@ -719,6 +722,7 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
 
     private fun releasePlayer() {
         progressHandler.removeCallbacks(progressTick)
+        subtitleView.setCues(emptyList())
         equalizer?.release()
         equalizer = null
         loudnessEnhancer?.release()
@@ -873,10 +877,21 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
         }
 
         override fun onCues(cueGroup: androidx.media3.common.text.CueGroup) {
-            // Only bitmap cues. Text cues arrive here too when a text track is selected, but
-            // nothing selects one -- text comes from the ffmpeg extraction path.
-            val bitmaps = cueGroup.cues.filter { it.bitmap != null }
-            emitBitmapCues(bitmaps)
+            subtitleView.setCues(cueGroup.cues)
+            val cueArray = Arguments.createArray()
+            for (cue in cueGroup.cues) {
+                val text = cue.text?.toString() ?: ""
+                if (text.isNotEmpty()) {
+                    cueArray.pushMap(Arguments.createMap().apply {
+                        putString("text", text)
+                    })
+                }
+            }
+            val params = Arguments.createMap().apply {
+                putArray("cues", cueArray)
+                putDouble("presentationTimeUs", cueGroup.presentationTimeUs.toDouble())
+            }
+            emit(EVENT_CUES, params)
         }
 
         override fun onVideoSizeChanged(videoSize: VideoSize) {
@@ -975,6 +990,32 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
             })
         }
         info.putArray("audioTracks", trackArray)
+        val subTrackArray = Arguments.createArray()
+        textTracks.forEachIndexed { id, (group, index) ->
+            val format = group.getFormat(index)
+            val mime = format.sampleMimeType ?: ""
+            val isBitmap = mime.contains("pgs") || mime.contains("vobsub") || mime.contains("dvd")
+            val codec = when {
+                mime.contains("subrip") || mime.contains("srt") -> "srt"
+                mime.contains("pgs") -> "pgs"
+                mime.contains("ssa") || mime.contains("ass") -> "ass"
+                mime.contains("vtt") -> "webvtt"
+                mime.contains("tx3g") || mime.contains("quicktime") -> "mov_text"
+                else -> mime.substringAfterLast("/")
+            }
+            val lang = format.language ?: "und"
+            val title = format.label ?: if (lang != "und") lang else "Subtitle ${id + 1}"
+            subTrackArray.pushMap(Arguments.createMap().apply {
+                putInt("id", id)
+                putInt("index", id)
+                putString("name", title)
+                putString("title", title)
+                putString("language", lang)
+                putString("codec", codec)
+                putBoolean("isBitmap", isBitmap)
+            })
+        }
+        info.putArray("subtitleTracks", subTrackArray)
         if (videoWidth > 0 && videoHeight > 0) {
             info.putMap("videoSize", Arguments.createMap().apply {
                 putInt("width", videoWidth)
@@ -1002,48 +1043,6 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
             language?.let { "[$it]" }
         ).joinToString(" - ")
     }
-
-    /**
-     * Bitmap subtitle cues, PNG-encoded and base64'd for the JS overlay.
-     *
-     * ponytail: base64 over the bridge, not a cache file. A PGS cue is mostly transparent
-     * and compresses to a few tens of KB, and cues change every few seconds, so the copy is
-     * cheap and there is no file to clean up. If a source ever produces large or rapid cues,
-     * write PNGs to cacheDir and send file:// URIs instead.
-     *
-     * Geometry is passed through as media3 reports it -- fractions of the viewport -- so the
-     * overlay can place the image without knowing anything about the codec. DIMEN_UNSET is
-     * sent as -1 and the overlay falls back to bottom-centre.
-     */
-    private fun emitBitmapCues(cues: List<androidx.media3.common.text.Cue>) {
-        // Cues repeat every frame while one is on screen; only tell JS when it changes.
-        val signature = cues.joinToString("|") {
-            "${System.identityHashCode(it.bitmap)}:${it.line}:${it.position}:${it.size}"
-        }
-        if (signature == lastBitmapCueSignature) return
-        lastBitmapCueSignature = signature
-
-        val array = Arguments.createArray()
-        for (cue in cues) {
-            val bitmap = cue.bitmap ?: continue
-            val png = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, png)
-            array.pushMap(Arguments.createMap().apply {
-                putString("png", Base64.encodeToString(png.toByteArray(), Base64.NO_WRAP))
-                putDouble("line", dimen(cue.line))
-                putDouble("position", dimen(cue.position))
-                putDouble("size", dimen(cue.size))
-                putDouble("bitmapHeight", dimen(cue.bitmapHeight))
-                putInt("width", bitmap.width)
-                putInt("height", bitmap.height)
-            })
-        }
-        Log.w(TAG, "bitmap cues=${cues.size}")
-        emit(EVENT_BITMAP_CUES, Arguments.createMap().apply { putArray("cues", array) })
-    }
-
-    private fun dimen(value: Float): Double =
-        if (value == Cue.DIMEN_UNSET) -1.0 else value.toDouble()
 
     private fun emitBuffering(buffering: Boolean) {
         if (lastBuffering == buffering) return
@@ -1125,12 +1124,12 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
         const val EVENT_STOPPED = "onVideoStopped"
         const val EVENT_BUFFERING = "onVideoBuffering"
         const val EVENT_ERROR = "onVideoError"
-        const val EVENT_BITMAP_CUES = "onVideoBitmapCues"
+        const val EVENT_CUES = "onCues"
 
         val EVENTS = arrayOf(
             EVENT_LOAD_START, EVENT_LOAD, EVENT_PROGRESS, EVENT_SEEK, EVENT_END,
             EVENT_PLAYING, EVENT_PAUSED, EVENT_STOPPED, EVENT_BUFFERING, EVENT_ERROR,
-            EVENT_BITMAP_CUES
+            EVENT_CUES
         )
     }
 }

@@ -7,7 +7,6 @@ import {
     BackHandler,
     AppStateStatus,
     AppState,
-    Platform,
     NativeModules,
 } from 'react-native';
 import { GestureDetector } from 'react-native-gesture-handler';
@@ -18,7 +17,8 @@ import { SystemBars } from 'react-native-edge-to-edge';
 import type { PlayerResizeMode } from '@/components/VideoPlayer/GlidePlayer';
 
 // Native Modules
-const { AudioControlModule } = NativeModules;
+const { DisplayBrightnessModule, AudioControlModule } = NativeModules;
+const BrightnessModule = DisplayBrightnessModule || AudioControlModule;
 
 import { finishCurrentActivity, usePipModeListener } from '@/native/PipModule';
 
@@ -31,7 +31,7 @@ import { SnackbarHost } from '@/components/ui';
 import { BookmarkPanel } from '@/components/VideoPlayer/BookmarkPanel';
 import { QuickSettingsPanel } from '@/components/VideoPlayer/QuickSettingsPanel';
 import { PlaylistPanel } from '@/components/VideoPlayer/PlaylistPanel';
-import { SubtitleOverlay, SubtitleSettings } from '@/components/SubtitleOverlay';
+import { PlayerSubtitleOverlay } from '@/components/VideoPlayer/PlayerSubtitleOverlay';
 import { TrackSelector } from '@/components/TrackSelector';
 import { FloatingSyncPanel } from '@/components/FloatingSyncPanel';
 import { useSubtitleAutoSync } from '@/hooks/video-player/useSubtitleAutoSync';
@@ -63,6 +63,7 @@ import { VideoOrientationService } from '@/services/VideoOrientationService';
 import { NavigationService } from '@/services/NavigationService';
 import { useVideoHistoryStore } from '@/store/videoHistoryStore';
 import { useAppStore } from '@/store/appStore';
+import { useSubtitleCueStore } from '@/store/subtitleCueStore';
 
 // Types
 import { SubtitleCue, VideoFile } from '@/types';
@@ -139,8 +140,16 @@ export default function VideoPlayerScreen({ route }: Props) {
     const incrementViewCount = useVideoHistoryStore(state => state.incrementViewCount);
     const persistNow = useVideoHistoryStore(state => state.persistNow);
 
-    // Global settings
-    const { settings, updateSettings, setSubtitlePosition } = useAppStore();
+    // Fine-grained global settings selectors
+    const brightnessMode = useAppStore(state => state.settings.brightnessMode);
+    const globalBrightness = useAppStore(state => state.settings.globalBrightness);
+    const pipBrightnessMode = useAppStore(state => state.settings.pipBrightnessMode);
+    const defaultAudioLanguage = useAppStore(state => state.settings.defaultAudioLanguage);
+    const seekDuration = useAppStore(state => state.settings.seekDuration);
+    const autoPlayNext = useAppStore(state => state.settings.autoPlayNext);
+    const shakeThreshold = useAppStore(state => state.settings.shakeThreshold);
+    const showSeekButtons = useAppStore(state => state.settings.showSeekButtons);
+    const updateSettings = useAppStore(state => state.updateSettings);
 
     // Track if view has been counted
     const hasIncrementedView = useRef(false);
@@ -164,10 +173,10 @@ export default function VideoPlayerScreen({ route }: Props) {
     }, []);
 
     const handleBrightnessSave = useCallback((val: number) => {
-        if (settings.brightnessMode === 'global') {
+        if (brightnessMode === 'global') {
             updateSettings({ globalBrightness: val });
         }
-    }, [settings.brightnessMode, updateSettings]);
+    }, [brightnessMode, updateSettings]);
 
     // Inactivity tracking for Recap
     const lastPauseTimeRef = useRef<number | null>(null);
@@ -298,11 +307,11 @@ export default function VideoPlayerScreen({ route }: Props) {
 
     // Determine initial brightness based on mode
     const startBrightness = useMemo(() => {
-        if (settings.brightnessMode === 'global') {
-            return settings.globalBrightness;
+        if (brightnessMode === 'global') {
+            return globalBrightness;
         }
         return initialVideoBrightness;
-    }, [settings.brightnessMode, settings.globalBrightness, initialVideoBrightness]);
+    }, [brightnessMode, globalBrightness, initialVideoBrightness]);
 
     // Calculate resume state upfront to avoid flash
     const shouldResume = useMemo(() => {
@@ -361,6 +370,9 @@ export default function VideoPlayerScreen({ route }: Props) {
         onAudioTracksLoaded: (tracks) => {
             (tracksHook as any).setAudioTracksFromVLC?.(tracks);
         },
+        onSubtitleTracksLoaded: (tracks) => {
+            (tracksHook as any).setSubtitleTracksFromPlayer?.(tracks);
+        },
         initialPaused: false,
         playbackRate: effectivePlaybackRate,
     });
@@ -382,21 +394,21 @@ export default function VideoPlayerScreen({ route }: Props) {
             ui.hideControls();
 
             // Handle brightness for PiP
-            if (settings.pipBrightnessMode === 'system') {
+            if (pipBrightnessMode === 'system') {
                 // Determine if we need to switch to system brightness
                 // If brightness was modified, revert to system (-1)
-                AudioControlModule.resetBrightness?.();
+                BrightnessModule?.resetBrightness?.();
             }
         } else {
             // Exiting PiP - restore player brightness if needed
-            if (settings.pipBrightnessMode === 'system' && brightnessRef.current !== undefined) {
+            if (pipBrightnessMode === 'system' && brightnessRef.current !== undefined) {
                 // Convert 0-1 brightness to 0-1 float for setBrightness
                 // brightnessRef.current is already 0-1
-                AudioControlModule.setBrightness?.(brightnessRef.current);
+                BrightnessModule?.setBrightness?.(brightnessRef.current);
             }
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isInPipMode, settings.pipBrightnessMode]);
+    }, [isInPipMode, pipBrightnessMode]);
 
     // Gestures hook
     const gestures = usePlayerGestures({
@@ -420,7 +432,7 @@ export default function VideoPlayerScreen({ route }: Props) {
         initialAudioTrackId: initialAudioTrackId,
         initialSubtitleTrackIndex: initialSubtitleTrackIndex,
         subtitleDelay: settingsHook.settings.subtitleDelay,
-        defaultAudioLanguage: settings.defaultAudioLanguage,
+        defaultAudioLanguage: defaultAudioLanguage,
     });
 
     // Bookmarks hook (needs player for seek)
@@ -473,7 +485,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                 settingsHook.settings.audioDelay,
                 settingsHook.settings.subtitleDelay,
                 // Only save brightness to history if in video mode
-                settings.brightnessMode === 'video' ? brightnessRef.current : undefined
+                brightnessMode === 'video' ? brightnessRef.current : undefined
             );
         }
     }, [
@@ -486,7 +498,7 @@ export default function VideoPlayerScreen({ route }: Props) {
         tracksHook.selectedSubtitleTrackIndex,
         settingsHook.settings.audioDelay,
         settingsHook.settings.subtitleDelay,
-        settings.brightnessMode,
+        brightnessMode,
         resumePosition,
     ]);
 
@@ -507,18 +519,14 @@ export default function VideoPlayerScreen({ route }: Props) {
     }, [savePlaybackProgress, persistNow]);
 
     // ========================================================================
-    // HAPTIC FEEDBACK
-    // ========================================================================
-
-    // ========================================================================
-    // HAPTIC FEEDBACK
+    // HAPTIC FEEDBACK & SUBTITLE SYNC (UNIFIED TIMER)
     // ========================================================================
 
     useHapticFeedback({
         enabled: playMode === 'with-haptics' && hapticsEnabled,
         currentTimeRef: player.currentTimeRef,
-        // Use displayed subtitles if available (WYSIWYG), otherwise fallback to pre-loaded haptic cues
-        subtitleCues: tracksHook.subtitleCues.length > 0 ? tracksHook.subtitleCues : tracksHook.hapticCues,
+        subtitleCues: tracksHook.subtitleCues,
+        hapticCues: tracksHook.hapticCues,
         isPlaying: player.state.isPlaying,
         subtitleDelay: settingsHook.settings.subtitleDelay,
     });
@@ -543,49 +551,6 @@ export default function VideoPlayerScreen({ route }: Props) {
         };
     }, [isLandscape, insets.bottom]);
 
-    const subtitleSettings = useMemo<SubtitleSettings>(() => {
-        let fontFamily = settings.subtitleFontFamily || Platform.select({ android: 'Roboto', ios: 'System', default: 'System' });
-        let fontWeight: SubtitleSettings['fontWeight'] = String(settings.subtitleFontWeight) as any;
-
-        if (fontFamily === 'NetflixSans-Medium') {
-
-            const weightNum = Number(settings.subtitleFontWeight);
-
-            if (weightNum >= 700) {
-                fontFamily = 'NetflixSans-Bold';
-                fontWeight = 'normal';
-            } else if (weightNum <= 300) {
-                fontFamily = 'NetflixSans-Light';
-                fontWeight = 'normal';
-            } else {
-                fontFamily = 'NetflixSans-Medium';
-                fontWeight = 'normal';
-            }
-        }
-
-        return {
-            fontSize: settings.subtitleFontSize,
-            fontColor: settings.subtitleColor,
-            fontWeight: fontWeight,
-            fontFamily: fontFamily,
-            backgroundColor: settings.subtitleBackgroundColor,
-            backgroundOpacity: settings.subtitleBackgroundColor === 'transparent' ? 0 : settings.subtitleBackgroundOpacity,
-            // If edge style is outline or dropShadow, use black, else transparent
-            outlineColor: settings.subtitleEdgeStyle !== 'none' ? '#000000' : 'transparent',
-            // Use outlineWidth from settings when outline is enabled
-            outlineWidth: settings.subtitleEdgeStyle === 'none' ? 0 : settings.subtitleOutlineWidth,
-            position: 'bottom',
-            positionOffsetRatio: isLandscape
-                ? settings.subtitlePositionLandscape ?? 0.42
-                : settings.subtitlePositionPortrait ?? 0.42,
-        };
-    }, [settings, isLandscape]);
-
-    const handleSubtitlePositionChange = useCallback((yOffset: number) => {
-        const orientation = isLandscape ? 'landscape' : 'portrait';
-        setSubtitlePosition(orientation, yOffset / height);
-    }, [height, isLandscape, setSubtitlePosition]);
-
     const shouldShowBuffer = useMemo(() =>
         player.state.isVideoLoaded && player.state.isBuffering && !player.state.isSeeking,
         [player.state.isVideoLoaded, player.state.isBuffering, player.state.isSeeking]
@@ -596,6 +561,8 @@ export default function VideoPlayerScreen({ route }: Props) {
     // ========================================================================
 
     const handleGoBack = useCallback(() => {
+        const BrightnessMod = NativeModules.DisplayBrightnessModule || NativeModules.AudioControlModule;
+        BrightnessMod?.resetBrightnessSync?.();
         forceSave();
         player.stop();
         VideoOrientationService.release();
@@ -683,7 +650,7 @@ export default function VideoPlayerScreen({ route }: Props) {
             ? gestures.sharedValues.seekTime.value
             : player.currentTimeRef.current;
 
-        const seekTime = settings.seekDuration || 30;
+        const seekTime = seekDuration || 30;
         const newTime = Math.max(0, baseTime - seekTime);
 
         // Set start time for difference display - false means don't reset if already seeking
@@ -699,7 +666,7 @@ export default function VideoPlayerScreen({ route }: Props) {
         hud.showSeekHUD(newTime, 'backward', null, false);
         ui.showControls();
         ui.scheduleAutoHide();
-    }, [player, hud, gestures, ui, settings.seekDuration]);
+    }, [player, hud, gestures, ui, seekDuration]);
 
     const handleJumpForward = useCallback(() => {
         // If HUD is already showing seek, use its value as base for accumulation
@@ -708,7 +675,7 @@ export default function VideoPlayerScreen({ route }: Props) {
             ? gestures.sharedValues.seekTime.value
             : player.currentTimeRef.current;
 
-        const seekTime = settings.seekDuration || 30;
+        const seekTime = seekDuration || 30;
         const newTime = Math.min(player.state.duration, baseTime + seekTime);
 
         // Set start time for difference display - false means don't reset if already seeking
@@ -722,7 +689,7 @@ export default function VideoPlayerScreen({ route }: Props) {
         hud.showSeekHUD(newTime, 'forward', null, false);
         ui.showControls();
         ui.scheduleAutoHide();
-    }, [player, hud, gestures, ui, settings.seekDuration]);
+    }, [player, hud, gestures, ui, seekDuration]);
 
     // ========================================================================
     // QUICK SETTINGS HANDLERS (Memoized)
@@ -873,11 +840,11 @@ export default function VideoPlayerScreen({ route }: Props) {
         if (autoPlayTimerRef.current) { clearTimeout(autoPlayTimerRef.current); }
         autoPlayTimerRef.current = setTimeout(() => {
             autoPlayTimerRef.current = null;
-            if (settings.autoPlayNext && hasNext) {
+            if (autoPlayNext && hasNext) {
                 handleNext();
             }
         }, 500);
-    }, [player, settings.autoPlayNext, hasNext, handleNext]);
+    }, [player, autoPlayNext, hasNext, handleNext]);
 
     // AI Recap Logic - shows modal immediately with skeleton loading
     // Use a ref to get fresh subtitle cues during polling
@@ -1064,7 +1031,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                     tracksHook.selectedSubtitleTrackIndex ?? undefined,
                     settingsHook.settings.audioDelay,
                     settingsHook.settings.subtitleDelay,
-                    settings.brightnessMode === 'video' ? brightnessRef.current : undefined
+                    brightnessMode === 'video' ? brightnessRef.current : undefined
                 );
                 persistNow();
             }
@@ -1089,7 +1056,7 @@ export default function VideoPlayerScreen({ route }: Props) {
         tracksHook.selectedSubtitleTrackIndex,
         settingsHook.settings.audioDelay,
         settingsHook.settings.subtitleDelay,
-        settings.brightnessMode,
+        brightnessMode,
         persistNow,
     ]);
 
@@ -1128,7 +1095,11 @@ export default function VideoPlayerScreen({ route }: Props) {
             if (nextState === 'active' && wasBackgrounded && !isInPipMode) {
                 const brightnessToRestore = brightnessRef.current;
                 if (brightnessToRestore !== undefined) {
-                    AudioControlModule.setBrightnessSync?.(brightnessToRestore);
+                    if (BrightnessModule?.setBrightnessSync) {
+                        BrightnessModule.setBrightnessSync(brightnessToRestore);
+                    } else {
+                        BrightnessModule?.setBrightness?.(brightnessToRestore);
+                    }
                 }
             }
 
@@ -1166,6 +1137,8 @@ export default function VideoPlayerScreen({ route }: Props) {
     // Cleanup on unmount
     useEffect(() => {
         return () => {
+            const BrightnessMod = NativeModules.DisplayBrightnessModule || NativeModules.AudioControlModule;
+            BrightnessMod?.resetBrightnessSync?.();
             player.videoRef.current?.stopPlayer();
             const isNetwork = NavigationService.isNetworkStream(videoPath);
             if (!isNetwork) {
@@ -1214,6 +1187,24 @@ export default function VideoPlayerScreen({ route }: Props) {
 
     const bookmarkTimes = useMemo(() => bookmarksHook.bookmarks.map(b => b.timestamp), [bookmarksHook.bookmarks]);
 
+    const handleCues = useCallback((event: any) => {
+        const rawCues = event?.cues;
+        if (Array.isArray(rawCues) && rawCues.length > 0) {
+            const text = rawCues.map((c: any) => c.text).filter(Boolean).join('\n');
+            if (text) {
+                const now = player.currentTimeRef.current;
+                useSubtitleCueStore.getState().setCurrentCue({
+                    index: 0,
+                    text,
+                    startTime: now,
+                    endTime: now + 2,
+                });
+                return;
+            }
+        }
+        useSubtitleCueStore.getState().clearCue();
+    }, [player.currentTimeRef]);
+
     // System bars
     useEffect(() => {
         SystemBars.setHidden(!ui.state.controlsVisible);
@@ -1248,7 +1239,6 @@ export default function VideoPlayerScreen({ route }: Props) {
                         videoEnhancementStrength={settingsHook.settings.videoEnhancementStrength}
                         audioTrack={tracksHook.selectedAudioTrackId}
                         textTrack={tracksHook.nativeTextTrackOrdinal}
-                        onBitmapCues={tracksHook.handleBitmapCues}
                         title={videoName}
                         artist={albumName || 'Glide'}
                         animatedStyle={gestures.videoAnimatedStyle}
@@ -1264,6 +1254,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                         onPaused={player.handlePaused}
                         onStopped={player.handleStopped}
                         onSeek={player.handleSeek}
+                        onCues={handleCues}
                     />
                 </View>
             </GestureDetector>
@@ -1273,7 +1264,7 @@ export default function VideoPlayerScreen({ route }: Props) {
             {shakeEnabled && (
                 <ShakeDetector
                     onShake={handleShakeAction}
-                    shakeThreshold={settings.shakeThreshold}
+                    shakeThreshold={shakeThreshold}
                     isLocked={ui.state.locked}
                     isSeeking={player.state.isSeeking}
                     isInPip={isInPipMode}
@@ -1375,8 +1366,8 @@ export default function VideoPlayerScreen({ route }: Props) {
                     onToggleResizeMode={handleToggleResizeMode}
                     resizeMode={settingsHook.settings.resizeMode}
                     onEnterPip={handleEnterPip}
-                    showSeekButtons={settings.showSeekButtons}
-                    seekDuration={settings.seekDuration}
+                    showSeekButtons={showSeekButtons}
+                    seekDuration={seekDuration}
                 />
             )}
 
@@ -1416,7 +1407,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                     onToggleShake={() => setShakeEnabled(prev => !prev)}
                     shakeAction={shakeAction}
                     onSelectShakeAction={setShakeAction}
-                    seekDuration={settings.seekDuration}
+                    seekDuration={seekDuration}
                     videoEnhancement={settingsHook.settings.videoEnhancement}
                     onToggleVideoEnhancement={settingsHook.toggleVideoEnhancement}
                     videoEnhancementStrength={settingsHook.settings.videoEnhancementStrength}
@@ -1498,12 +1489,7 @@ export default function VideoPlayerScreen({ route }: Props) {
 
             {/* Subtitle overlay */}
             {!pipPresentationActive && (
-                <SubtitleOverlay
-                    currentCue={tracksHook.currentSubtitleCue}
-                    bitmapCues={tracksHook.bitmapCues}
-                    settings={subtitleSettings}
-                    onPositionChange={handleSubtitlePositionChange}
-                />
+                <PlayerSubtitleOverlay isLandscape={isLandscape} />
             )}
 
             {/* Bookmark panel */}

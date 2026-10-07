@@ -9,7 +9,6 @@ import React, { memo, forwardRef, useMemo, useCallback } from 'react';
 import { StyleSheet } from 'react-native';
 import Animated, { AnimatedStyle } from 'react-native-reanimated';
 import GlidePlayer, {
-    BitmapCue,
     GlidePlayerRef,
     PlayerResizeMode,
     PlayerSource,
@@ -74,7 +73,7 @@ interface AnimatedVideoViewProps {
     onPaused: () => void;
     onStopped: () => void;
     onSeek: (data: VLCSeekEvent) => void;
-    onBitmapCues?: (event: { cues: BitmapCue[] }) => void;
+    onCues?: (event: any) => void;
 }
 
 // ============================================================================
@@ -112,7 +111,7 @@ const AnimatedVideoView = forwardRef<GlidePlayerRef, AnimatedVideoViewProps>(
             onPaused,
             onStopped,
             onSeek,
-            onBitmapCues,
+            onCues,
         } = props;
 
         /**
@@ -153,7 +152,6 @@ const AnimatedVideoView = forwardRef<GlidePlayerRef, AnimatedVideoViewProps>(
                     style={styles.video}
                     audioTrack={audioTrack}
                     textTrack={textTrack}
-                    onBitmapCues={onBitmapCues}
                     muted={muted}
                     resizeMode={resizeMode}
                     repeat={repeat}
@@ -172,6 +170,7 @@ const AnimatedVideoView = forwardRef<GlidePlayerRef, AnimatedVideoViewProps>(
                     onPaused={onPaused}
                     onStopped={onStopped}
                     onSeek={onSeek}
+                    onCues={onCues}
                     playInBackground={playInBackground}
                     pipEnabled={pipEnabled}
                 />
