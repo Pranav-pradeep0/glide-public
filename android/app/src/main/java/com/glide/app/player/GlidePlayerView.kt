@@ -49,9 +49,10 @@ import kotlin.math.roundToLong
  * playback, audio tracks, colour enhancement, the equalizer, the six resize modes, PiP and
  * the media session.
  *
- * Subtitles: bitmap cues (PGS/VobSub) are decoded by ExoPlayer and rendered natively by
- * SubtitleView over the video surface, while text cues stay on the ffmpeg extraction
- * path because haptics and negative subtitle delay both need the whole cue list upfront.
+ * Subtitles: ExoPlayer decodes embedded tracks. Bitmap cues (PGS/VobSub) are drawn here by
+ * SubtitleView; text cues are sent to JS (onCues) and drawn by the overlay in the user's
+ * style. Downloaded and sidecar subtitle files are parsed in JS as a full cue list, which
+ * is what haptics and subtitle delay need -- embedded text cues arrive only as they play.
  * Audio delay is an AudioDelayProcessor in the sink (D1 revisited: users asked for it).
  *
  * What is *not* here is the point. There is no audio-focus subsystem (ExoPlayer owns it),
@@ -231,7 +232,10 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
         val x = (w - childW) / 2
         val y = (h - childH) / 2
         surfaceView.layout(x, y, x + childW, y + childH)
-        subtitleView.layout(x, y, x + childW, y + childH)
+        // Subtitles go on the part of the video that is actually on screen. Laid out over the
+        // whole cropped frame, a cue near the bottom of the video landed in the clipped-off
+        // strip in cover, none and scale-down, and was never seen.
+        subtitleView.layout(maxOf(x, 0), maxOf(y, 0), minOf(x + childW, w), minOf(y + childH, h))
 
         // Logged whenever the result changes, never per pass: the absence of this line
         // after a mode change is what exposed the requestLayout() problem above, so it has
@@ -304,10 +308,8 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
      * Select a subtitle track by its ordinal among the container's subtitle streams, or -1
      * to disable text output entirely.
      *
-     * Only ever set for **bitmap** subtitles (PGS/VobSub). Text subtitles are extracted by
-     * ffmpeg and rendered from a full cue list in JS, because haptics and negative subtitle
-     * delay both need every cue upfront — something `onCues` cannot provide, since it
-     * streams cues as playback reaches them.
+     * Set for embedded tracks (bitmap and text). Subtitle files JS parsed itself pass -1:
+     * they are rendered from a full cue list in JS, which haptics and subtitle delay need.
      */
     fun setTextTrack(ordinal: Int) {
         chosenTextTrack = ordinal
@@ -877,7 +879,10 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
         }
 
         override fun onCues(cueGroup: androidx.media3.common.text.CueGroup) {
-            subtitleView.setCues(cueGroup.cues)
+            // Native draws picture subtitles only. Text cues go to JS below and are drawn
+            // there, in the user's subtitle style; handing them to SubtitleView as well put
+            // every line on screen twice.
+            subtitleView.setCues(cueGroup.cues.filter { it.bitmap != null })
             val cueArray = Arguments.createArray()
             for (cue in cueGroup.cues) {
                 val text = cue.text?.toString() ?: ""
