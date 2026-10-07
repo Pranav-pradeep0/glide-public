@@ -3,7 +3,6 @@ package com.glide.app.player
 import android.content.ContentUris
 import android.content.Context
 import android.graphics.Bitmap
-import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
@@ -162,22 +161,9 @@ class MediaStoreVideoModule(private val reactContext: ReactApplicationContext) :
                     } catch (_: Throwable) {}
                 }
 
-                // 3. Fallback to MediaMetadataRetriever
-                if (bitmap == null) {
-                    val retriever = MediaMetadataRetriever()
-                    try {
-                        if (contentUri != null) {
-                            retriever.setDataSource(context, contentUri)
-                        } else {
-                            retriever.setDataSource(videoUriOrPath)
-                        }
-                        bitmap = retriever.frameAtTime
-                    } catch (_: Throwable) {}
-                    finally {
-                        try { retriever.release() } catch (_: Throwable) {}
-                    }
-                }
-
+                // No system thumbnail (a file MediaStore has not indexed): return null and let
+                // ThumbnailService pick a frame. Its scan skips black opening frames; grabbing
+                // frame 0 here would short-circuit that and cache a black thumbnail forever.
                 if (bitmap != null) {
                     val tempFile = File(cacheDir, "${cacheKey}.tmp_${System.nanoTime()}")
                     try {
@@ -280,7 +266,7 @@ class MediaStoreVideoModule(private val reactContext: ReactApplicationContext) :
                             else -> "0"
                         }
 
-                        val dateModifiedMs = if (dateModifiedSec > 0) dateModifiedSec * 1000L else System.currentTimeMillis()
+                        val dateModifiedMs = if (dateModifiedSec > 0) dateModifiedSec * 1000L else 0L
 
                         // Update or insert bucket
                         val bucket = bucketsMap[bucketId]
@@ -417,7 +403,7 @@ class MediaStoreVideoModule(private val reactContext: ReactApplicationContext) :
                             else -> "Videos"
                         }
 
-                        val dateModifiedMs = if (dateModifiedSec > 0) dateModifiedSec * 1000L else System.currentTimeMillis()
+                        val dateModifiedMs = if (dateModifiedSec > 0) dateModifiedSec * 1000L else 0L
 
                         val videoMap = Arguments.createMap().apply {
                             putString("id", videoId.toString())
