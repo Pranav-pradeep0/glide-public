@@ -241,6 +241,17 @@ class AudioMediaServiceClass {
             return { artworkUri: null, primaryColor: null, secondaryColor: null, onPrimaryColor: null };
         }
     }
+
+    async getEmbeddedLyrics(songUri?: string, filePath?: string): Promise<string | null> {
+        if (Platform.OS !== 'android' || !this.module?.getEmbeddedLyrics) {
+            return null;
+        }
+        try {
+            return await this.module.getEmbeddedLyrics(songUri ?? null, filePath ?? null);
+        } catch {
+            return null;
+        }
+    }
 }
 
 export const AudioMediaService = new AudioMediaServiceClass();

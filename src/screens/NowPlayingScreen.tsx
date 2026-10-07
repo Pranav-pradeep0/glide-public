@@ -169,23 +169,29 @@ export default function NowPlayingScreen() {
 
     // Lyrics state
     const [lyrics, setLyrics] = useState<LyricLine[] | null>(null);
+    const [isLyricsLoading, setIsLyricsLoading] = useState(false);
+    const currentTrackId = currentTrack?.id;
 
-    // Load lyrics when currentTrack changes
+    // Load lyrics when currentTrack id changes
     useEffect(() => {
         if (!currentTrack) {
             setLyrics(null);
+            setIsLyricsLoading(false);
             return;
         }
         let isMounted = true;
-        LyricsService.getLyricsForTrack(currentTrack.id, currentTrack.path).then((data) => {
+        setLyrics(null);
+        setIsLyricsLoading(true);
+        LyricsService.getLyricsForTrack(currentTrack).then((data) => {
             if (isMounted) {
                 setLyrics(data);
+                setIsLyricsLoading(false);
             }
         });
         return () => {
             isMounted = false;
         };
-    }, [currentTrack?.id, currentTrack?.path]);
+    }, [currentTrackId]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const handlePickLyrics = useCallback(async () => {
         if (!currentTrack) return;
@@ -547,6 +553,7 @@ export default function NowPlayingScreen() {
                                     lyrics={lyrics}
                                     artSize={artSize}
                                     accentColor={accentColor}
+                                    isLoading={isLyricsLoading}
                                     onPickLyrics={handlePickLyrics}
                                 />
                             ) : (

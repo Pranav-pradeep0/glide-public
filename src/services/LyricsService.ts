@@ -2,9 +2,21 @@ import { Platform } from 'react-native';
 import * as RNFS from '@dr.pogodin/react-native-fs';
 import { pick } from '@react-native-documents/picker';
 import { createMMKV } from 'react-native-mmkv';
-import { LyricLine } from '@/types';
+import { AudioTrack, LyricLine } from '@/types';
+import { useAppStore } from '@/store/appStore';
+import { AudioMediaService } from './AudioMediaService';
 
 const lyricsMMKV = createMMKV({ id: 'glide_lyrics_cache_v1' });
+
+export interface LyricsTrackInfo {
+    id: string;
+    path?: string;
+    uri?: string;
+    title?: string;
+    artist?: string;
+    album?: string;
+    duration?: number;
+}
 
 /**
  * Parses LRC format strings into an array of time-indexed lines.
@@ -44,27 +56,77 @@ export function parseLrc(content: string): LyricLine[] {
     return result;
 }
 
+/**
+ * Splits plain text lyrics without time tags into displayable lines.
+ * Lines have time: -1 to mark them as unsynced.
+ */
+export function parsePlainLyrics(content: string): LyricLine[] {
+    const lines = content.split(/\r?\n/);
+    const result: LyricLine[] = [];
+    for (const rawLine of lines) {
+        const text = rawLine.trim();
+        if (text) {
+            result.push({ time: -1, text });
+        }
+    }
+    return result;
+}
+
+/**
+ * Returns true if lyrics contain valid timestamps (> 0).
+ */
+export function isLyricsSynced(lyrics: LyricLine[] | null): boolean {
+    if (!lyrics || lyrics.length === 0) return false;
+    return lyrics.some((l) => l.time > 0);
+}
+
 export class LyricsServiceClass {
     private cache = new Map<string, LyricLine[] | null>();
 
-    async getLyricsForTrack(trackId: string, filePath?: string): Promise<LyricLine[] | null> {
-        if (!trackId && !filePath) return null;
-        const cacheKey = trackId || filePath || '';
+    async getLyricsForTrack(
+        trackOrId: string | AudioTrack | LyricsTrackInfo,
+        filePath?: string
+    ): Promise<LyricLine[] | null> {
+        if (!trackOrId && !filePath) return null;
+
+        let trackId = '';
+        let path = filePath;
+        let uri: string | undefined;
+        let title: string | undefined;
+        let artist: string | undefined;
+        let album: string | undefined;
+        let duration: number | undefined;
+
+        if (typeof trackOrId === 'string') {
+            trackId = trackOrId;
+        } else if (trackOrId) {
+            trackId = trackOrId.id;
+            path = trackOrId.path ?? filePath;
+            uri = trackOrId.uri;
+            title = trackOrId.title;
+            artist = trackOrId.artist;
+            album = trackOrId.album;
+            duration = trackOrId.duration;
+        }
+
+        const cacheKey = trackId || path || uri || '';
+        if (!cacheKey) return null;
 
         // 1. In-memory cache
         if (this.cache.has(cacheKey)) {
             return this.cache.get(cacheKey) ?? null;
         }
 
-        // 2. Persistent storage (saved via document picker)
+        // 2. Persistent storage (MMKV cache)
         if (trackId) {
             try {
                 const storedLrc = lyricsMMKV.getString(`lyrics_${trackId}`);
                 if (storedLrc) {
                     const parsed = parseLrc(storedLrc);
-                    if (parsed.length > 0) {
-                        this.cache.set(cacheKey, parsed);
-                        return parsed;
+                    const finalLines = parsed.length > 0 ? parsed : parsePlainLyrics(storedLrc);
+                    if (finalLines.length > 0) {
+                        this.cache.set(cacheKey, finalLines);
+                        return finalLines;
                     }
                 }
             } catch {
@@ -72,31 +134,177 @@ export class LyricsServiceClass {
             }
         }
 
-        // 3. Fallback to reading companion .lrc file next to audio (works on Android <= 10 or accessible paths)
-        if (filePath) {
+        // 3. Companion .lrc file beside audio file
+        if (path) {
             try {
-                const lrcPath = filePath.replace(/\.[^/.]+$/, '.lrc');
+                const lrcPath = path.replace(/\.[^/.]+$/, '.lrc');
                 const exists = await RNFS.exists(lrcPath);
                 if (exists) {
                     const rawContent = await RNFS.readFile(lrcPath, 'utf8');
                     const parsed = parseLrc(rawContent);
-                    const finalResult = parsed.length > 0 ? parsed : null;
-                    if (finalResult && trackId) {
-                        try {
-                            lyricsMMKV.set(`lyrics_${trackId}`, rawContent);
-                        } catch {
-                            // ignore
+                    const finalResult = parsed.length > 0 ? parsed : parsePlainLyrics(rawContent);
+                    if (finalResult.length > 0) {
+                        if (trackId) {
+                            try { lyricsMMKV.set(`lyrics_${trackId}`, rawContent); } catch { /* ignore */ }
                         }
+                        this.cache.set(cacheKey, finalResult);
+                        return finalResult;
                     }
-                    this.cache.set(cacheKey, finalResult);
-                    return finalResult;
                 }
             } catch {
                 // Ignore filesystem errors
             }
         }
 
-        this.cache.set(cacheKey, null);
+        // 4. Embedded lyrics (ID3v2 USLT/SYLT, FLAC VORBIS_COMMENT, MP4 ©lyr)
+        try {
+            const embedded = await AudioMediaService.getEmbeddedLyrics(uri, path);
+            if (embedded && embedded.trim().length > 0) {
+                const parsed = parseLrc(embedded);
+                const finalResult = parsed.length > 0 ? parsed : parsePlainLyrics(embedded);
+                if (finalResult.length > 0) {
+                    if (trackId) {
+                        try { lyricsMMKV.set(`lyrics_${trackId}`, embedded); } catch { /* ignore */ }
+                    }
+                    this.cache.set(cacheKey, finalResult);
+                    return finalResult;
+                }
+            }
+        } catch {
+            // Ignore native metadata errors
+        }
+
+        // 5. LRCLIB online provider
+        const onlineLyricsEnabled = useAppStore.getState().settings.onlineLyricsEnabled;
+        if (onlineLyricsEnabled && title && artist && artist !== '<unknown>' && !artist.startsWith('Unknown')) {
+            try {
+                const fetched = await this.fetchFromLrclib(title, artist, album, duration);
+                if (fetched) {
+                    const parsed = parseLrc(fetched);
+                    const finalResult = parsed.length > 0 ? parsed : parsePlainLyrics(fetched);
+                    if (finalResult.length > 0) {
+                        if (trackId) {
+                            try { lyricsMMKV.set(`lyrics_${trackId}`, fetched); } catch { /* ignore */ }
+                        }
+                        this.cache.set(cacheKey, finalResult);
+                        return finalResult;
+                    }
+                }
+            } catch {
+                // Ignore network errors
+            }
+        }
+
+        // Only remember "not found" in memory cache if online lookup was enabled, so enabling
+        // the toggle later in settings re-attempts lookup without needing an app restart.
+        if (onlineLyricsEnabled) {
+            this.cache.set(cacheKey, null);
+        }
+        return null;
+    }
+
+    private async fetchFromLrclib(
+        title: string,
+        artist: string,
+        album?: string,
+        duration?: number
+    ): Promise<string | null> {
+        // Strip extraneous info like (feat. ...), [Remastered], etc. for cleaner matches
+        const cleanTitle = title.replace(/\s*[\(\[][^()\[\]]*\b(feat|ft|remaster|version|mix)\b[^()\[\]]*[\)\]]/gi, '').trim();
+        const cleanArtist = artist.replace(/\s*[\(\[][^()\[\]]*[\)\]]/g, '').trim();
+
+        const headers = {
+            'User-Agent': 'Glide-Music-Player (https://github.com/Pranav-pradeep0/glide)',
+        };
+
+        // 1. Try exact match
+        const queryParams = new URLSearchParams({
+            artist_name: cleanArtist,
+            track_name: cleanTitle,
+        });
+        if (album && album !== '<unknown>') {
+            queryParams.append('album_name', album);
+        }
+        if (duration && duration > 0) {
+            queryParams.append('duration', Math.round(duration).toString());
+        }
+
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 6000);
+            const response = await fetch(`https://lrclib.net/api/get?${queryParams.toString()}`, {
+                headers,
+                signal: controller.signal,
+            });
+            clearTimeout(timeout);
+
+            if (response.ok) {
+                const data = await response.json();
+                if (data.syncedLyrics && data.syncedLyrics.trim().length > 0) {
+                    return data.syncedLyrics;
+                }
+                if (data.plainLyrics && data.plainLyrics.trim().length > 0) {
+                    return data.plainLyrics;
+                }
+            }
+        } catch {
+            // Fall through to search
+        }
+
+        // 2. Fallback search
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 6000);
+            const searchQuery = `${cleanArtist} ${cleanTitle}`.trim();
+            const response = await fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(searchQuery)}`, {
+                headers,
+                signal: controller.signal,
+            });
+            clearTimeout(timeout);
+
+            if (response.ok) {
+                const results = await response.json();
+                if (Array.isArray(results) && results.length > 0) {
+                    const normTargetArtist = cleanArtist.toLowerCase().replace(/[^\p{L}\p{N}\p{M}]/gu, '');
+                    // Only accept search candidates that match artist roughly and duration within 4 seconds.
+                    // Reject candidates if either candidate or track has no duration.
+                    const validCandidates = results.filter((item) => {
+                        if (!item) return false;
+
+                        // Reject if either side lacks a valid positive duration
+                        if (!duration || duration <= 0 || typeof item.duration !== 'number' || item.duration <= 0) {
+                            return false;
+                        }
+                        if (Math.abs(item.duration - duration) > 4) {
+                            return false;
+                        }
+
+                        // Artist match using Unicode letter/number/mark normalisation
+                        const normItemArtist = String(item.artistName || '').toLowerCase().replace(/[^\p{L}\p{N}\p{M}]/gu, '');
+                        if (!normTargetArtist || !normItemArtist) {
+                            return false;
+                        }
+                        if (!normItemArtist.includes(normTargetArtist) && !normTargetArtist.includes(normItemArtist)) {
+                            return false;
+                        }
+                        return true;
+                    });
+
+                    if (validCandidates.length > 0) {
+                        const best = validCandidates.find(item => item?.syncedLyrics?.trim()?.length > 0) || validCandidates[0];
+                        if (best?.syncedLyrics?.trim()) {
+                            return best.syncedLyrics;
+                        }
+                        if (best?.plainLyrics?.trim()) {
+                            return best.plainLyrics;
+                        }
+                    }
+                }
+            }
+        } catch {
+            // Search failed
+        }
+
         return null;
     }
 
@@ -114,7 +322,6 @@ export class LyricsServiceClass {
             let targetPath = file.uri;
 
             if (Platform.OS === 'android' && targetPath.startsWith('content://')) {
-                // Set before the copy so a partial copy is cleaned up too.
                 tempCachePath = `${RNFS.CachesDirectoryPath}/picked_lyrics_${Date.now()}.lrc`;
                 await RNFS.copyFile(targetPath, tempCachePath);
                 targetPath = tempCachePath;
@@ -122,13 +329,14 @@ export class LyricsServiceClass {
 
             const rawContent = await RNFS.readFile(targetPath, 'utf8');
             const parsed = parseLrc(rawContent);
+            const finalResult = parsed.length > 0 ? parsed : parsePlainLyrics(rawContent);
 
-            if (parsed.length > 0) {
+            if (finalResult.length > 0) {
                 if (trackId) {
                     lyricsMMKV.set(`lyrics_${trackId}`, rawContent);
                 }
-                this.cache.set(trackId, parsed);
-                return parsed;
+                this.cache.set(trackId, finalResult);
+                return finalResult;
             }
             return null;
         } catch (err) {

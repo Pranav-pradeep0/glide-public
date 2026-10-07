@@ -424,4 +424,16 @@ class MediaStoreAudioModule(private val reactContext: ReactApplicationContext) :
             }
         }
     }
+
+    @ReactMethod
+    fun getEmbeddedLyrics(songUriStr: String?, filePath: String?, promise: Promise) {
+        artExecutor.execute {
+            try {
+                val lyrics = EmbeddedLyricsReader.extractLyrics(reactContext, songUriStr, filePath)
+                promise.resolve(lyrics)
+            } catch (e: Exception) {
+                promise.resolve(null)
+            }
+        }
+    }
 }
