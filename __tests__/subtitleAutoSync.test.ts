@@ -1,8 +1,5 @@
 import { describe, expect, it, jest } from '@jest/globals';
 
-// The FFmpeg-backed extractor is native; these tests cover the decisions around it.
-jest.mock('../src/utils/AudioExtractor', () => ({ AudioExtractor: {} }));
-
 import { chooseWindow, interpret, isSpeechCue, WINDOW_S } from '../src/services/SubtitleAutoSync';
 import { SubtitleCue } from '../src/types';
 

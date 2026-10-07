@@ -153,10 +153,6 @@
       "version": "^8.6.3",
       "integrated": false
     },
-    "react-native-ffmpeg-kit": {
-      "version": "^6.1.2",
-      "integrated": false
-    },
     "react-native-gesture-handler": {
       "version": "^2.29.0",
       "integrated": false

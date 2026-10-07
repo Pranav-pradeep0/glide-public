@@ -1,8 +1,7 @@
 // src/components/VideoOptionsBottomSheet.tsx
 import React, { useMemo, useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Image, NativeModules } from 'react-native';
 import Feather from '@react-native-vector-icons/feather';
-import { FFprobeKit } from 'react-native-ffmpeg-kit';
 import { useTheme } from '@/hooks/useTheme';
 import { VideoFile, VideoHistoryEntry } from '@/types';
 import { formatDuration, formatFileSize } from '@/utils/formatUtils';
@@ -68,63 +67,33 @@ export const VideoOptionsBottomSheet: React.FC<VideoOptionsProps> = ({
         let cancelled = false;
         setExtendedMeta({ loading: true });
 
-        FFprobeKit.getMediaInformation(path).then((session) => {
-            const information = session.getMediaInformation();
-            if (cancelled) {return;}
-            if (!information) {
-                setExtendedMeta({ loading: false });
-                return;
-            }
-
-            let videoInfo = '';
-            let audioInfo = '';
-            const subtitleTracks: { lang: string; codec: string }[] = [];
-
-            information.getStreams().forEach((stream: any) => {
-                if (stream.getType() === 'video') {
-                    // r_frame_rate is a fraction like "30000/1001" or a plain number.
-                    const rFrameRate: string | undefined = stream.getRealFrameRate();
-                    let fps = '';
-                    if (rFrameRate) {
-                        const [num, den] = rFrameRate.split('/');
-                        fps = `${(parseFloat(num) / (den ? parseFloat(den) : 1)).toFixed(0)} fps`;
-                    }
-                    videoInfo = [String(stream.getCodec() ?? '').toUpperCase(), fps].filter(Boolean).join(' · ');
-                } else if (stream.getType() === 'audio') {
-                    const rate = stream.getSampleRate() ? `${parseInt(stream.getSampleRate(), 10) / 1000} kHz` : '';
-                    audioInfo = [String(stream.getCodec() ?? '').toUpperCase(), rate].filter(Boolean).join(' · ');
-                } else if (stream.getType() === 'subtitle') {
-                    const codec = String(stream.getCodec() ?? '');
-                    const tags = stream.getTags();
-                    subtitleTracks.push({
-                        lang: tags && tags.language ? tags.language.toUpperCase() : 'UND',
-                        codec: (SUBTITLE_CODEC_NAMES[codec] ?? codec).toUpperCase(),
-                    });
+        const syncModule = NativeModules.SubtitleSyncModule;
+        if (syncModule?.getVideoMetadata) {
+            syncModule.getVideoMetadata(path).then((data: any) => {
+                if (cancelled) {return;}
+                if (!data) {
+                    setExtendedMeta({ loading: false });
+                    return;
                 }
+
+                const subtitlesList = data.subtitles as { lang: string; codec: string }[] | undefined;
+                const subtitles = subtitlesList && subtitlesList.length > 0
+                    ? `${[...new Set(subtitlesList.map(t => t.lang))].join(', ')} · ${[...new Set(subtitlesList.map(t => t.codec))].join(' / ')}`
+                    : undefined;
+
+                setExtendedMeta({
+                    bitrate: data.bitrate || undefined,
+                    video: data.video || undefined,
+                    audio: data.audio || undefined,
+                    subtitles,
+                    loading: false,
+                });
+            }).catch(() => {
+                if (!cancelled) {setExtendedMeta({ loading: false });}
             });
-
-            let bitrate = '';
-            const bitrateVal = information.getBitrate();
-            if (bitrateVal) {
-                const bps = parseInt(bitrateVal, 10);
-                bitrate = bps > 1000000 ? `${(bps / 1000000).toFixed(1)} Mbps` : `${(bps / 1000).toFixed(0)} Kbps`;
-            }
-
-            // "ENG, JPN · SRT / PGS"
-            const subtitles = subtitleTracks.length > 0
-                ? `${[...new Set(subtitleTracks.map(t => t.lang))].join(', ')} · ${[...new Set(subtitleTracks.map(t => t.codec))].join(' / ')}`
-                : undefined;
-
-            setExtendedMeta({
-                bitrate: bitrate || undefined,
-                video: videoInfo || undefined,
-                audio: audioInfo || undefined,
-                subtitles,
-                loading: false,
-            });
-        }).catch(() => {
-            if (!cancelled) {setExtendedMeta({ loading: false });}
-        });
+        } else {
+            setExtendedMeta({ loading: false });
+        }
 
         return () => { cancelled = true; };
     }, [visible, path]);

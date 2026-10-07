@@ -31,18 +31,6 @@ allprojects {
             dirs "$rootDir/libs"
         }
     }
-    
-    configurations.all {
-        resolutionStrategy {
-            dependencySubstitution {
-                substitute module('com.arthenica:ffmpeg-kit-https') using project(':ffmpeg-lib')
-                substitute module('com.arthenica:ffmpeg-kit-min') using project(':ffmpeg-lib')
-                substitute module('com.arthenica:ffmpeg-kit-min-gpl') using project(':ffmpeg-lib')
-                substitute module('com.arthenica:ffmpeg-kit-full') using project(':ffmpeg-lib')
-                substitute module('com.arthenica:ffmpeg-kit-full-gpl') using project(':ffmpeg-lib')
-            }
-        }
-    }
 }
 
 // Third-party native modules pin their own compileSdk, and a stale one now fails the

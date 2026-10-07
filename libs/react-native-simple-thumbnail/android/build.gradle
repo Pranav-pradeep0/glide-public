@@ -25,6 +25,4 @@ dependencies {
     implementation 'com.facebook.react:react-android'
     // Kotlin's stdlib comes from the Kotlin plugin the root project applies. Pinning it
     // here meant a second, older stdlib fighting the one everything else compiles against.
-    // FFmpegKit is provided by the app; see tracker section 11 for owning it in one place.
-    compileOnly files("$rootDir/ffmpeg-lib/ffmpeg-kit-minimal.aar")
 }

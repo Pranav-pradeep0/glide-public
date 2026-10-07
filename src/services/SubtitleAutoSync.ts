@@ -6,7 +6,6 @@
 
 import { NativeModules } from 'react-native';
 import { SubtitleCue } from '../types';
-import { AudioExtractor } from '../utils/AudioExtractor';
 
 /** Audio analysed per run. Minutes of evidence, not seconds, is what makes this robust. */
 export const WINDOW_S = 300;
@@ -90,26 +89,28 @@ export class SubtitleAutoSync {
         const windowStart = chooseWindow(speech, positionS);
         if (windowStart === null) {return { kind: 'too-few-cues' };}
 
-        // 8 kHz covers the 300-3000 Hz speech band and keeps a 5.1 clip near 29 MB.
-        const wav = await AudioExtractor.extractAudioChunk(videoPath, windowStart, WINDOW_S, { mono: false, sampleRate: 8000 });
-        if (!wav) {return { kind: 'failed' };}
-        try {
-            const alignment: NativeAlignment | null = await NativeModules.SubtitleSyncModule.align(
-                wav,
-                windowStart,
-                speech.map(c => c.startTime),
-                speech.map(c => c.endTime),
-            );
-            // Logged in release too: this is the evidence for tuning the confidence thresholds.
-            console.log(`[SubtitleAutoSync] window=${windowStart.toFixed(0)}s cues=${speech.length} ` +
-                (alignment ? `delay=${alignment.delayMs.toFixed(0)}ms ratio=${alignment.ratio.toFixed(4)} ` +
-                    `z=${alignment.peakZ.toFixed(1)} runnerUp=${alignment.runnerUp.toFixed(2)}` : 'no alignment'));
-            return interpret(alignment);
-        } catch (error) {
-            console.warn('[SubtitleAutoSync] Alignment failed:', error);
-            return { kind: 'failed' };
-        } finally {
-            await AudioExtractor.cleanup();
+        const starts = speech.map(c => c.startTime);
+        const ends = speech.map(c => c.endTime);
+
+        if (NativeModules.SubtitleSyncModule?.alignVideo) {
+            try {
+                const alignment: NativeAlignment | null = await NativeModules.SubtitleSyncModule.alignVideo(
+                    videoPath,
+                    windowStart,
+                    starts,
+                    ends,
+                );
+                // Logged in release too: this is the evidence for tuning the confidence thresholds.
+                console.log(`[SubtitleAutoSync] window=${windowStart.toFixed(0)}s cues=${speech.length} ` +
+                    (alignment ? `delay=${alignment.delayMs.toFixed(0)}ms ratio=${alignment.ratio.toFixed(4)} ` +
+                        `z=${alignment.peakZ.toFixed(1)} runnerUp=${alignment.runnerUp.toFixed(2)}` : 'no alignment'));
+                return interpret(alignment);
+            } catch (error) {
+                console.warn('[SubtitleAutoSync] Alignment failed:', error);
+                return { kind: 'failed' };
+            }
         }
+
+        return { kind: 'failed' };
     }
 }
