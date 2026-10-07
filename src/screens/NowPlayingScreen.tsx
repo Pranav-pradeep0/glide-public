@@ -13,7 +13,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import Feather from '@react-native-vector-icons/feather';
-import Slider from '@react-native-community/slider';
+import { NowPlayingProgressBar } from '@/components/NowPlayingProgressBar';
+import { NowPlayingLyrics } from '@/components/NowPlayingLyrics';
 import LinearGradient from 'react-native-linear-gradient';
 import Animated, {
     Extrapolation,
@@ -37,7 +38,7 @@ import { useFavoritesStore } from '@/store/favoritesStore';
 import { useTheme } from '@/hooks/useTheme';
 import { useAlbumPalette } from '@/hooks/useAlbumArt';
 import { LyricsService } from '@/services/LyricsService';
-import { Button, Chip, IconButton, ListGroup, ListRow, Sheet, Touchable } from '@/components/ui';
+import { Chip, IconButton, ListGroup, ListRow, Sheet, Touchable } from '@/components/ui';
 import { metrics, motion, type } from '@/theme/theme';
 import { formatDuration } from '@/utils/formatUtils';
 import { EQUALIZER_PRESETS } from '@/config/equalizerPresets';
@@ -48,6 +49,77 @@ interface QueueItem {
     track: AudioTrack;
     index: number;
 }
+
+const SleepTimerContent = React.memo(({ onClose }: { onClose: () => void }) => {
+    const sleepTimerMode = useAudioStore((s) => s.sleepTimerMode);
+    const sleepTimerRemaining = useAudioStore((s) => s.sleepTimerRemaining);
+    const setSleepTimer = useAudioStore((s) => s.setSleepTimer);
+
+    return (
+        <ListGroup inset style={styles.sleepTimerGroup}>
+            <ListRow
+                title="Off"
+                selected={sleepTimerMode === 'off'}
+                onPress={() => {
+                    setSleepTimer('off');
+                    onClose();
+                }}
+            />
+            <ListRow
+                title="15 minutes"
+                selected={sleepTimerMode === 'time' && Math.round(sleepTimerRemaining / 60) === 15}
+                value={sleepTimerMode === 'time' && Math.round(sleepTimerRemaining / 60) === 15 ? `${Math.ceil(sleepTimerRemaining / 60)}m left` : undefined}
+                onPress={() => {
+                    setSleepTimer(15);
+                    onClose();
+                }}
+            />
+            <ListRow
+                title="30 minutes"
+                selected={sleepTimerMode === 'time' && Math.round(sleepTimerRemaining / 60) === 30}
+                value={sleepTimerMode === 'time' && Math.round(sleepTimerRemaining / 60) === 30 ? `${Math.ceil(sleepTimerRemaining / 60)}m left` : undefined}
+                onPress={() => {
+                    setSleepTimer(30);
+                    onClose();
+                }}
+            />
+            <ListRow
+                title="45 minutes"
+                selected={sleepTimerMode === 'time' && Math.round(sleepTimerRemaining / 60) === 45}
+                value={sleepTimerMode === 'time' && Math.round(sleepTimerRemaining / 60) === 45 ? `${Math.ceil(sleepTimerRemaining / 60)}m left` : undefined}
+                onPress={() => {
+                    setSleepTimer(45);
+                    onClose();
+                }}
+            />
+            <ListRow
+                title="60 minutes"
+                selected={sleepTimerMode === 'time' && Math.round(sleepTimerRemaining / 60) === 60}
+                value={sleepTimerMode === 'time' && Math.round(sleepTimerRemaining / 60) === 60 ? `${Math.ceil(sleepTimerRemaining / 60)}m left` : undefined}
+                onPress={() => {
+                    setSleepTimer(60);
+                    onClose();
+                }}
+            />
+            <ListRow
+                title="At the end of this song"
+                selected={sleepTimerMode === 'end_of_track'}
+                onPress={() => {
+                    setSleepTimer('end_of_track');
+                    onClose();
+                }}
+            />
+        </ListGroup>
+    );
+});
+
+const SleepTimerSheet = React.memo(({ visible, onClose }: { visible: boolean; onClose: () => void }) => {
+    return (
+        <Sheet visible={visible} onClose={onClose} title="Sleep Timer">
+            {visible ? <SleepTimerContent onClose={onClose} /> : null}
+        </Sheet>
+    );
+});
 
 export default function NowPlayingScreen() {
     const { colors, dark } = useTheme();
@@ -60,15 +132,12 @@ export default function NowPlayingScreen() {
     const currentIndex = useAudioStore((s) => s.currentIndex);
     const isPlaying = useAudioStore((s) => s.isPlaying);
     const isBuffering = useAudioStore((s) => s.isBuffering);
-    const position = useAudioStore((s) => s.position);
-    const duration = useAudioStore((s) => s.duration);
     const shuffle = useAudioStore((s) => s.shuffle);
     const repeatMode = useAudioStore((s) => s.repeatMode);
     const equalizerPreset = useAudioStore((s) => s.equalizerPreset);
     const shuffledIndices = useAudioStore((s) => s.shuffledIndices);
     const queueSource = useAudioStore((s) => s.queueSource);
-    const sleepTimerMode = useAudioStore((s) => s.sleepTimerMode);
-    const sleepTimerRemaining = useAudioStore((s) => s.sleepTimerRemaining);
+    const isSleepTimerActive = useAudioStore((s) => s.sleepTimerMode !== 'off');
 
     const togglePlayPause = useAudioStore((s) => s.togglePlayPause);
     const skipNext = useAudioStore((s) => s.skipNext);
@@ -76,11 +145,9 @@ export default function NowPlayingScreen() {
     const skipToIndex = useAudioStore((s) => s.skipToIndex);
     const toggleShuffle = useAudioStore((s) => s.toggleShuffle);
     const toggleRepeatMode = useAudioStore((s) => s.toggleRepeatMode);
-    const seekTo = useAudioStore((s) => s.seekTo);
     const setEqualizerPreset = useAudioStore((s) => s.setEqualizerPreset);
     const removeFromQueue = useAudioStore((s) => s.removeFromQueue);
     const moveQueueItem = useAudioStore((s) => s.moveQueueItem);
-    const setSleepTimer = useAudioStore((s) => s.setSleepTimer);
 
     // Favorites
     const isFavorite = useFavoritesStore((s) => (currentTrack ? s.isFavorite(currentTrack.id) : false));
@@ -94,10 +161,6 @@ export default function NowPlayingScreen() {
     const artworkUri = currentTrack?.artworkUri || fetchedArt;
     const accentColor = primaryColor || colors.primary;
 
-    // Local seek slider state
-    const [isSeeking, setIsSeeking] = useState(false);
-    const [seekValue, setSeekValue] = useState(0);
-
     // View toggles and sheets
     const [showQueue, setShowQueue] = useState(false);
     const [showEqualizer, setShowEqualizer] = useState(false);
@@ -106,7 +169,6 @@ export default function NowPlayingScreen() {
 
     // Lyrics state
     const [lyrics, setLyrics] = useState<LyricLine[] | null>(null);
-    const lyricsListRef = useRef<FlatList<LyricLine>>(null);
 
     // Load lyrics when currentTrack changes
     useEffect(() => {
@@ -132,19 +194,6 @@ export default function NowPlayingScreen() {
             setLyrics(loaded);
         }
     }, [currentTrack]);
-
-    const handleSlidingStart = useCallback((val: number) => {
-        setIsSeeking(true);
-        setSeekValue(val);
-    }, []);
-
-    const handleSlidingComplete = useCallback(
-        (val: number) => {
-            setIsSeeking(false);
-            seekTo(val);
-        },
-        [seekTo]
-    );
 
     const handleSelectPreset = useCallback(
         (presetId: string) => {
@@ -375,9 +424,6 @@ export default function NowPlayingScreen() {
         };
     });
 
-    const currentPosition = isSeeking ? seekValue : position;
-    const effectiveDuration = duration > 0 ? duration : currentTrack?.duration ?? 0;
-
     // Ordered queue items (reflects shuffle sequence if active)
     const displayQueue: QueueItem[] = useMemo(() => {
         if (shuffle && shuffledIndices.length === queue.length) {
@@ -391,31 +437,6 @@ export default function NowPlayingScreen() {
         const idx = displayQueue.findIndex((item) => item.index === currentIndex);
         return idx >= 0 ? idx : 0;
     }, [displayQueue, currentIndex]);
-
-    // Active lyric line index
-    const activeLyricIndex = useMemo(() => {
-        if (!lyrics || lyrics.length === 0) return -1;
-        let active = -1;
-        for (let i = 0; i < lyrics.length; i++) {
-            if (lyrics[i].time <= currentPosition) {
-                active = i;
-            } else {
-                break;
-            }
-        }
-        return active;
-    }, [lyrics, currentPosition]);
-
-    // Auto-scroll lyrics cleanly centered without height drift
-    useEffect(() => {
-        if (showLyrics && activeLyricIndex >= 0 && lyricsListRef.current) {
-            lyricsListRef.current.scrollToIndex({
-                index: activeLyricIndex,
-                viewPosition: 0.5,
-                animated: true,
-            });
-        }
-    }, [activeLyricIndex, showLyrics]);
 
     if (!currentTrack) {
         return (
@@ -504,7 +525,7 @@ export default function NowPlayingScreen() {
                             <IconButton
                                 icon="moon"
                                 onPress={() => setShowSleepTimer(true)}
-                                active={sleepTimerMode !== 'off'}
+                                active={isSleepTimerActive}
                                 accessibilityLabel="Sleep timer"
                                 iconSize={20}
                             />
@@ -522,59 +543,12 @@ export default function NowPlayingScreen() {
                         {/* Artwork / Lyrics Interactive Area */}
                         <View style={styles.artArea}>
                             {showLyrics ? (
-                                <View style={[styles.lyricsBox, { height: artSize, backgroundColor: colors.fill }]}>
-                                    {lyrics && lyrics.length > 0 ? (
-                                        <FlatList
-                                            ref={lyricsListRef}
-                                            data={lyrics}
-                                            keyExtractor={(line, idx) => `${line.time}-${idx}`}
-                                            showsVerticalScrollIndicator={false}
-                                            contentContainerStyle={styles.lyricsContent}
-                                            onScrollToIndexFailed={(info) => {
-                                                lyricsListRef.current?.scrollToOffset({
-                                                    offset: Math.max(0, info.averageItemLength * info.index - artSize / 2),
-                                                    animated: true,
-                                                });
-                                            }}
-                                            renderItem={({ item: line, index: idx }) => {
-                                                const isActive = idx === activeLyricIndex;
-                                                return (
-                                                    <Touchable
-                                                        onPress={() => seekTo(line.time)}
-                                                        style={styles.lyricRow}
-                                                        scaleTo={0.98}
-                                                    >
-                                                        <Text
-                                                            style={[
-                                                                type.body,
-                                                                styles.lyricText,
-                                                                isActive
-                                                                    ? { color: accentColor, fontWeight: '700', fontSize: 18 }
-                                                                    : { color: colors.textSecondary },
-                                                            ]}
-                                                        >
-                                                            {line.text}
-                                                        </Text>
-                                                    </Touchable>
-                                                );
-                                            }}
-                                        />
-                                    ) : (
-                                        <View style={styles.emptyLyricsWrap}>
-                                            <Feather name="file-text" size={32} color={colors.textTertiary} />
-                                            <Text style={[type.caption, { color: colors.textSecondary, textAlign: 'center' }]}>
-                                                No lyrics found (.lrc file)
-                                            </Text>
-                                            <Button
-                                                label="Load lyrics…"
-                                                icon="upload"
-                                                variant="secondary"
-                                                size="md"
-                                                onPress={handlePickLyrics}
-                                            />
-                                        </View>
-                                    )}
-                                </View>
+                                <NowPlayingLyrics
+                                    lyrics={lyrics}
+                                    artSize={artSize}
+                                    accentColor={accentColor}
+                                    onPickLyrics={handlePickLyrics}
+                                />
                             ) : (
                                 // Holds the cover's place in the layout; the cover itself is the
                                 // morphing layer below, drawn over this rect.
@@ -608,28 +582,10 @@ export default function NowPlayingScreen() {
                         </View>
 
                         {/* Scrubber / Slider Tinted with cover's accent */}
-                        <View style={styles.scrubberArea}>
-                            <Slider
-                                style={styles.slider}
-                                value={currentPosition}
-                                minimumValue={0}
-                                maximumValue={effectiveDuration > 0 ? effectiveDuration : 1}
-                                onSlidingStart={handleSlidingStart}
-                                onValueChange={(val) => setSeekValue(val)}
-                                onSlidingComplete={handleSlidingComplete}
-                                minimumTrackTintColor={accentColor}
-                                maximumTrackTintColor={colors.fillStrong}
-                                thumbTintColor={accentColor}
-                            />
-                            <View style={styles.timeRow}>
-                                <Text style={[type.caption, styles.timeText, { color: colors.textSecondary }]}>
-                                    {formatDuration(currentPosition)}
-                                </Text>
-                                <Text style={[type.caption, styles.timeText, { color: colors.textSecondary }]}>
-                                    {formatDuration(effectiveDuration)}
-                                </Text>
-                            </View>
-                        </View>
+                        <NowPlayingProgressBar
+                            accentColor={accentColor}
+                            trackDuration={currentTrack.duration}
+                        />
 
                         {/* Controls Row */}
                         <View style={styles.controlsArea}>
@@ -820,66 +776,10 @@ export default function NowPlayingScreen() {
                     </Sheet>
 
                     {/* Sleep Timer Bottom Sheet */}
-                    <Sheet
+                    <SleepTimerSheet
                         visible={showSleepTimer}
                         onClose={() => setShowSleepTimer(false)}
-                        title="Sleep Timer"
-                    >
-                        <ListGroup inset style={styles.sleepTimerGroup}>
-                            <ListRow
-                                title="Off"
-                                selected={sleepTimerMode === 'off'}
-                                onPress={() => {
-                                    setSleepTimer('off');
-                                    setShowSleepTimer(false);
-                                }}
-                            />
-                            <ListRow
-                                title="15 minutes"
-                                selected={sleepTimerMode === 'time' && Math.round(sleepTimerRemaining / 60) === 15}
-                                value={sleepTimerMode === 'time' && Math.round(sleepTimerRemaining / 60) === 15 ? `${Math.ceil(sleepTimerRemaining / 60)}m left` : undefined}
-                                onPress={() => {
-                                    setSleepTimer(15);
-                                    setShowSleepTimer(false);
-                                }}
-                            />
-                            <ListRow
-                                title="30 minutes"
-                                selected={sleepTimerMode === 'time' && Math.round(sleepTimerRemaining / 60) === 30}
-                                value={sleepTimerMode === 'time' && Math.round(sleepTimerRemaining / 60) === 30 ? `${Math.ceil(sleepTimerRemaining / 60)}m left` : undefined}
-                                onPress={() => {
-                                    setSleepTimer(30);
-                                    setShowSleepTimer(false);
-                                }}
-                            />
-                            <ListRow
-                                title="45 minutes"
-                                selected={sleepTimerMode === 'time' && Math.round(sleepTimerRemaining / 60) === 45}
-                                value={sleepTimerMode === 'time' && Math.round(sleepTimerRemaining / 60) === 45 ? `${Math.ceil(sleepTimerRemaining / 60)}m left` : undefined}
-                                onPress={() => {
-                                    setSleepTimer(45);
-                                    setShowSleepTimer(false);
-                                }}
-                            />
-                            <ListRow
-                                title="60 minutes"
-                                selected={sleepTimerMode === 'time' && Math.round(sleepTimerRemaining / 60) === 60}
-                                value={sleepTimerMode === 'time' && Math.round(sleepTimerRemaining / 60) === 60 ? `${Math.ceil(sleepTimerRemaining / 60)}m left` : undefined}
-                                onPress={() => {
-                                    setSleepTimer(60);
-                                    setShowSleepTimer(false);
-                                }}
-                            />
-                            <ListRow
-                                title="At the end of this song"
-                                selected={sleepTimerMode === 'end_of_track'}
-                                onPress={() => {
-                                    setSleepTimer('end_of_track');
-                                    setShowSleepTimer(false);
-                                }}
-                            />
-                        </ListGroup>
-                    </Sheet>
+                    />
 
                     {/* Equalizer Bottom Sheet */}
                     <Sheet visible={showEqualizer} onClose={() => setShowEqualizer(false)} title="Equalizer Presets">

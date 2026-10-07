@@ -42,14 +42,25 @@ export function miniCardColor(dark: boolean, raisedSurface: string, coverDark: s
  */
 export const playerExpansion = makeMutable(0);
 
+const MiniPlayerProgressBar = React.memo(() => {
+    const { colors } = useTheme();
+    const position = useAudioStore((s) => s.position);
+    const duration = useAudioStore((s) => s.duration);
+    const progress = duration > 0 ? Math.min(1, Math.max(0, position / duration)) : 0;
+
+    return (
+        <View style={[styles.progressTrack, { backgroundColor: colors.fillStrong }]}>
+            <View style={[styles.progressBar, { width: `${progress * 100}%`, backgroundColor: colors.text }]} />
+        </View>
+    );
+});
+
 export function MiniPlayer() {
     const { colors, dark } = useTheme();
     const navigation = useNavigation<NavigationProp>();
     const currentTrack = useAudioStore((s) => s.currentTrack);
     const isPlaying = useAudioStore((s) => s.isPlaying);
     const isBuffering = useAudioStore((s) => s.isBuffering);
-    const position = useAudioStore((s) => s.position);
-    const duration = useAudioStore((s) => s.duration);
     const togglePlayPause = useAudioStore((s) => s.togglePlayPause);
     const skipNext = useAudioStore((s) => s.skipNext);
     const skipPrevious = useAudioStore((s) => s.skipPrevious);
@@ -112,8 +123,6 @@ export function MiniPlayer() {
     if (!currentTrack) {
         return null;
     }
-
-    const progress = duration > 0 ? Math.min(1, Math.max(0, position / duration)) : 0;
 
     return (
         <View
@@ -178,9 +187,7 @@ export function MiniPlayer() {
             </GestureDetector>
 
             {/* Progress along the card's bottom edge */}
-            <View style={[styles.progressTrack, { backgroundColor: colors.fillStrong }]}>
-                <View style={[styles.progressBar, { width: `${progress * 100}%`, backgroundColor: colors.text }]} />
-            </View>
+            <MiniPlayerProgressBar />
         </View>
     );
 }
@@ -198,15 +205,12 @@ export function MiniPlayerReplica() {
     const currentTrack = useAudioStore((s) => s.currentTrack);
     const isPlaying = useAudioStore((s) => s.isPlaying);
     const isBuffering = useAudioStore((s) => s.isBuffering);
-    const position = useAudioStore((s) => s.position);
-    const duration = useAudioStore((s) => s.duration);
     const palette = useAlbumPalette(currentTrack?.albumId, currentTrack?.uri);
 
     if (!currentTrack) {
         return null;
     }
 
-    const progress = duration > 0 ? Math.min(1, Math.max(0, position / duration)) : 0;
     const cardColor = miniCardColor(dark, colors.cardElevated, palette.secondaryColor);
 
     return (
@@ -236,9 +240,7 @@ export function MiniPlayerReplica() {
                     <IconButton icon="skip-forward" onPress={noop} accessibilityLabel="" iconSize={20} />
                 </View>
             </View>
-            <View style={[styles.progressTrack, { backgroundColor: colors.fillStrong }]}>
-                <View style={[styles.progressBar, { width: `${progress * 100}%`, backgroundColor: colors.text }]} />
-            </View>
+            <MiniPlayerProgressBar />
         </View>
     );
 }
