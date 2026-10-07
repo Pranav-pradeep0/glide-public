@@ -30,12 +30,13 @@ export function describeAutoSync(result: AutoSyncResult): string {
     switch (result.kind) {
         case 'synced': {
             if (Math.abs(result.delayMs) < 100) {return 'Subtitles are in sync';}
-            const s = (result.delayMs / 1000).toFixed(2);
-            return `Subtitles synced ${result.delayMs > 0 ? '+' : ''}${s} s`;
+            const s = (Math.abs(result.delayMs) / 1000).toFixed(2);
+            return `Synced: subtitles now show ${s} s ${result.delayMs > 0 ? 'later' : 'earlier'}`;
         }
         case 'drift': return 'This subtitle was made for a different frame rate. Try another one.';
         case 'unsure': return 'Couldn’t sync confidently here. Try Pick a line.';
         case 'too-few-cues': return 'Not enough dialogue nearby to sync';
+        case 'no-audio': return 'Couldn’t read this video’s audio to sync';
         case 'failed': return 'Auto sync failed';
     }
 }

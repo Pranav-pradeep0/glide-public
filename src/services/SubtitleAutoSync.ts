@@ -24,6 +24,7 @@ export type AutoSyncResult =
     | { kind: 'drift' }
     | { kind: 'unsure' }
     | { kind: 'too-few-cues' }
+    | { kind: 'no-audio' }
     | { kind: 'failed' };
 
 interface NativeAlignment {
@@ -105,9 +106,9 @@ export class SubtitleAutoSync {
                     (alignment ? `delay=${alignment.delayMs.toFixed(0)}ms ratio=${alignment.ratio.toFixed(4)} ` +
                         `z=${alignment.peakZ.toFixed(1)} runnerUp=${alignment.runnerUp.toFixed(2)}` : 'no alignment'));
                 return interpret(alignment);
-            } catch (error) {
+            } catch (error: any) {
                 console.warn('[SubtitleAutoSync] Alignment failed:', error);
-                return { kind: 'failed' };
+                return { kind: error?.code === 'E_NO_AUDIO' ? 'no-audio' : 'failed' };
             }
         }
 

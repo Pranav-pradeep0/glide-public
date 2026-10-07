@@ -42,228 +42,243 @@ class SubtitleSyncModule(context: ReactApplicationContext) : ReactContextBaseJav
     )
 
     /**
-     * Decodes up to [durationS] of audio from [windowStartS] and measures its speech-band
-     * loudness as it goes, at the source sample rate, using the dialogue (centre) channel of
-     * 5.1/7.1 audio and the average of the channels otherwise. Holds no PCM.
+     * Turns decoded PCM into speech-band loudness for the window [startUs, endUs), at the
+     * source sample rate, using the dialogue (centre) channel of 5.1/7.1 and the average of
+     * the channels otherwise. Holds no PCM. Shared by both decoders below.
      */
+    private class WindowMeter(private val startUs: Long, private val endUs: Long) {
+        private var meter: SubtitleAligner.SpeechMeter? = null
+        private var meterRate = 0
+        var actualStartUs: Long? = null
+            private set
+        /** The window is covered, or the stream changed rate; stop decoding. */
+        var done = false
+            private set
+
+        /** [data] holds interleaved PCM from its position to its limit, starting at [ptsUs]. */
+        fun add(ptsUs: Long, data: java.nio.ByteBuffer, channels: Int, rate: Int, isFloat: Boolean) {
+            if (done || channels <= 0 || rate <= 0) return
+            data.order(ByteOrder.LITTLE_ENDIAN)
+            val frames = data.remaining() / (channels * if (isFloat) 4 else 2)
+            val durUs = frames * 1_000_000L / rate
+            if (ptsUs >= endUs) { done = true; return }
+            if (ptsUs + durUs <= startUs) return
+            val first = if (ptsUs < startUs) ((startUs - ptsUs) * rate / 1_000_000L).toInt().coerceIn(0, frames) else 0
+            val last = if (ptsUs + durUs > endUs) ((endUs - ptsUs) * rate / 1_000_000L).toInt().coerceIn(first, frames) else frames
+            if (last <= first) return
+
+            // A meter is built for one rate; a later change would mis-time it, so it ends the window.
+            val m = meter ?: SubtitleAligner.SpeechMeter(rate).also { meter = it; meterRate = rate }
+            if (rate != meterRate) { done = true; return }
+            if (actualStartUs == null) actualStartUs = ptsUs + first * 1_000_000L / rate
+
+            val centre = channels == 6 || channels == 8
+            if (isFloat) {
+                val buf = data.asFloatBuffer()
+                for (f in first until last) {
+                    val base = f * channels
+                    val s = if (centre) buf.get(base + 2).toDouble() else {
+                        var sum = 0.0
+                        for (c in 0 until channels) sum += buf.get(base + c)
+                        sum / channels
+                    }
+                    m.add(s.coerceIn(-1.0, 1.0))
+                }
+            } else {
+                val buf = data.asShortBuffer()
+                for (f in first until last) {
+                    val base = f * channels
+                    val s = if (centre) buf.get(base + 2) / 32768.0 else {
+                        var sum = 0.0
+                        for (c in 0 until channels) sum += buf.get(base + c)
+                        sum / channels / 32768.0
+                    }
+                    m.add(s)
+                }
+            }
+            if (last < frames || ptsUs + durUs >= endUs) done = true
+        }
+
+        fun result(fallbackStartS: Double): DecodedLevels? {
+            val levels = meter?.levels()?.takeIf { it.isNotEmpty() } ?: return null
+            return DecodedLevels(levels, (actualStartUs?.let { it / 1_000_000.0 }) ?: fallbackStartS)
+        }
+    }
+
+    /**
+     * Decodes up to [durationS] of audio from [windowStartS] and measures its speech-band
+     * loudness. Platform decoders first; failing that, the Media3 FFmpeg extension the player
+     * already ships, for the AC-3, E-AC-3, DTS and TrueHD soundtracks most phones cannot
+     * decode -- often a film's only audio, and what ffmpeg-kit used to cover here.
+     */
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     private fun decodeAudioWindow(videoPath: String, windowStartS: Double, durationS: Double = 300.0): DecodedLevels? {
         val context = reactApplicationContext
         val uri = Uri.parse(videoPath)
         var pfd: ParcelFileDescriptor? = null
         val extractor = MediaExtractor()
-        var codec: MediaCodec? = null
-
         try {
             if (videoPath.startsWith("content://")) {
                 pfd = context.contentResolver.openFileDescriptor(uri, "r")
-                if (pfd != null) {
-                    extractor.setDataSource(pfd.fileDescriptor)
-                } else {
-                    extractor.setDataSource(context, uri, null)
-                }
+                if (pfd != null) extractor.setDataSource(pfd.fileDescriptor) else extractor.setDataSource(context, uri, null)
             } else {
                 val cleanPath = if (videoPath.startsWith("file://")) uri.path ?: videoPath.removePrefix("file://") else videoPath
                 extractor.setDataSource(cleanPath)
             }
 
-            // The first audio track the device can actually decode. Films often lead with
-            // AC-3, DTS or TrueHD, which most phones have no platform decoder for (playback
-            // reaches them through the FFmpeg extension, MediaCodec cannot); a stereo AAC or
-            // commentary track further down carries the same speech timing.
             val codecs = MediaCodecList(MediaCodecList.REGULAR_CODECS)
-            var audioTrackIndex = -1
-            var audioFormat: MediaFormat? = null
-            var decoderName: String? = null
+            val ffmpeg = try { androidx.media3.decoder.ffmpeg.FfmpegLibrary.isAvailable() } catch (_: Throwable) { false }
+            var platformTrack = -1
+            var ffmpegTrack = -1
             for (i in 0 until extractor.trackCount) {
                 val format = extractor.getTrackFormat(i)
-                val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
+                val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
                 if (!mime.startsWith("audio/")) continue
-                val name = try { codecs.findDecoderForFormat(format) } catch (_: Exception) { null }
-                if (name != null) {
-                    audioTrackIndex = i
-                    audioFormat = format
-                    decoderName = name
-                    break
-                }
+                val platform = try { codecs.findDecoderForFormat(format) != null } catch (_: Exception) { false }
+                if (platform && platformTrack < 0) platformTrack = i
+                if (!platform && ffmpegTrack < 0 && ffmpeg &&
+                    androidx.media3.decoder.ffmpeg.FfmpegLibrary.supportsFormat(mime)) ffmpegTrack = i
             }
 
-            if (audioTrackIndex == -1 || audioFormat == null || decoderName == null) {
-                // No decodable audio: resolves as "could not sync", not as an error.
+            val startUs = (windowStartS * 1_000_000).toLong().coerceAtLeast(0L)
+            val window = WindowMeter(startUs, startUs + (durationS * 1_000_000).toLong())
+            val track = if (platformTrack >= 0) platformTrack else ffmpegTrack
+            if (track < 0) {
+                android.util.Log.w(NAME, "auto-sync: no decodable audio track")
                 return null
             }
+            val format = extractor.getTrackFormat(track)
+            extractor.selectTrack(track)
+            extractor.seekTo(startUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+            if (track == platformTrack) decodeWithMediaCodec(extractor, format, codecs, window)
+            else decodeWithFfmpeg(extractor, format, window)
 
-            extractor.selectTrack(audioTrackIndex)
-
-            codec = MediaCodec.createByCodecName(decoderName)
-            codec.configure(audioFormat, null, null, 0)
-            codec.start()
-
-            val windowStartUs = (windowStartS * 1_000_000).toLong().coerceAtLeast(0L)
-            val windowEndUs = windowStartUs + (durationS * 1_000_000).toLong()
-
-            extractor.seekTo(windowStartUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
-
-            var sampleRate = if (audioFormat.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
-                audioFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
-            } else {
-                44100
-            }
-            var channelCount = if (audioFormat.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
-                audioFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-            } else {
-                2
-            }
-            var pcmEncoding = if (audioFormat.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
-                audioFormat.getInteger(MediaFormat.KEY_PCM_ENCODING)
-            } else {
-                AudioFormat.ENCODING_PCM_16BIT
-            }
-
-            val bufferInfo = MediaCodec.BufferInfo()
-            val kTimeoutUs = 5000L
-            var sawInputEOS = false
-            var isEOS = false
-            var noOutputCount = 0
-            val maxNoOutputCount = 200
-
-            var meter: SubtitleAligner.SpeechMeter? = null
-            var meterRate = 0
-            var actualStartUs: Long? = null
-
-            while (!isEOS && noOutputCount < maxNoOutputCount) {
-                if (!sawInputEOS) {
-                    val inputIndex = codec.dequeueInputBuffer(kTimeoutUs)
-                    if (inputIndex >= 0) {
-                        val inputBuffer = codec.getInputBuffer(inputIndex)
-                        if (inputBuffer != null) {
-                            val sampleSize = extractor.readSampleData(inputBuffer, 0)
-                            if (sampleSize < 0) {
-                                codec.queueInputBuffer(inputIndex, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                                sawInputEOS = true
-                            } else {
-                                val sampleTime = extractor.sampleTime
-                                if (sampleTime > windowEndUs + 2_000_000L) {
-                                    codec.queueInputBuffer(inputIndex, 0, sampleSize, sampleTime, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                                    sawInputEOS = true
-                                } else {
-                                    codec.queueInputBuffer(inputIndex, 0, sampleSize, sampleTime, 0)
-                                    extractor.advance()
-                                }
-                            }
-                        }
-                    }
-                }
-
-                val outputIndex = codec.dequeueOutputBuffer(bufferInfo, kTimeoutUs)
-                if (outputIndex >= 0) {
-                    noOutputCount = 0
-                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                        isEOS = true
-                    }
-                    val outputBuffer = codec.getOutputBuffer(outputIndex)
-                    if (outputBuffer != null && bufferInfo.size > 0 && channelCount > 0 && sampleRate > 0) {
-                        outputBuffer.position(bufferInfo.offset)
-                        outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
-                        outputBuffer.order(ByteOrder.LITTLE_ENDIAN)
-
-                        val pts = bufferInfo.presentationTimeUs
-                        val isFloat = (pcmEncoding == AudioFormat.ENCODING_PCM_FLOAT)
-                        val bytesPerSample = if (isFloat) 4 else 2
-                        val bytesPerFrame = channelCount * bytesPerSample
-                        val totalFrames = bufferInfo.size / bytesPerFrame
-                        val durationUs = (totalFrames * 1_000_000L) / sampleRate
-
-                        if (pts + durationUs > windowStartUs && pts < windowEndUs) {
-                            val startFrame = if (pts < windowStartUs) {
-                                (((windowStartUs - pts) * sampleRate) / 1_000_000L).toInt().coerceIn(0, totalFrames)
-                            } else {
-                                0
-                            }
-                            val endFrame = if (pts + durationUs > windowEndUs) {
-                                (((windowEndUs - pts) * sampleRate) / 1_000_000L).toInt().coerceIn(startFrame, totalFrames)
-                            } else {
-                                totalFrames
-                            }
-                            val framesToExtract = endFrame - startFrame
-
-                            if (framesToExtract > 0) {
-                                if (actualStartUs == null) {
-                                    actualStartUs = pts + (startFrame * 1_000_000L) / sampleRate
-                                }
-
-                                // The meter is built for the rate of the first audio it sees; a
-                                // later rate change would mis-time it, so that ends the window.
-                                val m = meter ?: SubtitleAligner.SpeechMeter(sampleRate).also {
-                                    meter = it
-                                    meterRate = sampleRate
-                                }
-                                if (sampleRate != meterRate) {
-                                    isEOS = true
-                                } else {
-                                    // 5.1 and 7.1 carry dialogue on the centre channel (index 2).
-                                    val centre = channelCount == 6 || channelCount == 8
-                                    if (isFloat) {
-                                        val buf = outputBuffer.asFloatBuffer()
-                                        for (f in startFrame until endFrame) {
-                                            val base = f * channelCount
-                                            val s = if (centre) buf.get(base + 2).toDouble() else {
-                                                var sum = 0.0
-                                                for (c in 0 until channelCount) sum += buf.get(base + c)
-                                                sum / channelCount
-                                            }
-                                            m.add(s.coerceIn(-1.0, 1.0))
-                                        }
-                                    } else {
-                                        val buf = outputBuffer.asShortBuffer()
-                                        for (f in startFrame until endFrame) {
-                                            val base = f * channelCount
-                                            val s = if (centre) buf.get(base + 2) / 32768.0 else {
-                                                var sum = 0.0
-                                                for (c in 0 until channelCount) sum += buf.get(base + c)
-                                                sum / channelCount / 32768.0
-                                            }
-                                            m.add(s)
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (endFrame < totalFrames || pts + durationUs >= windowEndUs) {
-                                isEOS = true
-                            }
-                        } else if (pts >= windowEndUs) {
-                            isEOS = true
-                        }
-                    }
-                    codec.releaseOutputBuffer(outputIndex, false)
-                } else if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                    noOutputCount = 0
-                    val newFormat = codec.outputFormat
-                    if (newFormat.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
-                        sampleRate = newFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
-                    }
-                    if (newFormat.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
-                        channelCount = newFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-                    }
-                    if (newFormat.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
-                        pcmEncoding = newFormat.getInteger(MediaFormat.KEY_PCM_ENCODING)
-                    }
-                } else if (outputIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                    noOutputCount++
-                }
-            }
-
-            val levels = meter?.levels() ?: return null
-            if (levels.isEmpty()) return null
-            val actualStartS = (actualStartUs ?: (windowStartS * 1_000_000).toLong()) / 1_000_000.0
-            return DecodedLevels(levels, actualStartS)
+            val result = window.result(windowStartS)
+            android.util.Log.i(
+                NAME, "auto-sync: ${format.getString(MediaFormat.KEY_MIME)} via " +
+                    "${if (track == platformTrack) "platform" else "ffmpeg"} decoded " +
+                    "${"%.1f".format(Locale.US, (result?.levels?.size ?: 0) * SubtitleAligner.FRAME_S)} s"
+            )
+            return result
         } finally {
-            try { codec?.stop() } catch (_: Exception) {}
-            try { codec?.release() } catch (_: Exception) {}
             try { extractor.release() } catch (_: Exception) {}
             try { pfd?.close() } catch (_: Exception) {}
         }
     }
+
+    private fun decodeWithMediaCodec(extractor: MediaExtractor, format: MediaFormat, codecs: MediaCodecList, window: WindowMeter) {
+        val codec = MediaCodec.createByCodecName(codecs.findDecoderForFormat(format))
+        try {
+            codec.configure(format, null, null, 0)
+            codec.start()
+            var rate = format.getIntegerOr(MediaFormat.KEY_SAMPLE_RATE, 44100)
+            var channels = format.getIntegerOr(MediaFormat.KEY_CHANNEL_COUNT, 2)
+            var encoding = format.getIntegerOr(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
+            val info = MediaCodec.BufferInfo()
+            var inputDone = false
+            var idle = 0
+            while (!window.done && idle < 400) {
+                if (!inputDone) {
+                    val inIndex = codec.dequeueInputBuffer(5_000)
+                    if (inIndex >= 0) {
+                        val size = extractor.readSampleData(codec.getInputBuffer(inIndex)!!, 0)
+                        if (size < 0) {
+                            codec.queueInputBuffer(inIndex, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            inputDone = true
+                        } else {
+                            codec.queueInputBuffer(inIndex, 0, size, extractor.sampleTime, 0)
+                            extractor.advance()
+                        }
+                    }
+                }
+                val outIndex = codec.dequeueOutputBuffer(info, 5_000)
+                when {
+                    outIndex >= 0 -> {
+                        idle = 0
+                        val out = codec.getOutputBuffer(outIndex)
+                        if (out != null && info.size > 0) {
+                            out.position(info.offset)
+                            out.limit(info.offset + info.size)
+                            window.add(info.presentationTimeUs, out.slice(), channels, rate, encoding == AudioFormat.ENCODING_PCM_FLOAT)
+                        }
+                        codec.releaseOutputBuffer(outIndex, false)
+                        if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) return
+                    }
+                    outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        idle = 0
+                        val f = codec.outputFormat
+                        rate = f.getIntegerOr(MediaFormat.KEY_SAMPLE_RATE, rate)
+                        channels = f.getIntegerOr(MediaFormat.KEY_CHANNEL_COUNT, channels)
+                        encoding = f.getIntegerOr(MediaFormat.KEY_PCM_ENCODING, encoding)
+                    }
+                    else -> idle++
+                }
+            }
+        } finally {
+            try { codec.stop() } catch (_: Exception) {}
+            try { codec.release() } catch (_: Exception) {}
+        }
+    }
+
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    private fun decodeWithFfmpeg(extractor: MediaExtractor, format: MediaFormat, window: WindowMeter) {
+        val mime = format.getString(MediaFormat.KEY_MIME)!!
+        val init = ArrayList<ByteArray>()
+        for (key in arrayOf("csd-0", "csd-1", "csd-2")) {
+            format.getByteBuffer(key)?.let { b -> ByteArray(b.remaining()).also { b.duplicate().get(it) }.let(init::add) }
+        }
+        val media3Format = androidx.media3.common.Format.Builder()
+            .setSampleMimeType(mime)
+            .setChannelCount(format.getIntegerOr(MediaFormat.KEY_CHANNEL_COUNT, 2))
+            .setSampleRate(format.getIntegerOr(MediaFormat.KEY_SAMPLE_RATE, 48000))
+            .setInitializationData(init)
+            .build()
+        val maxInput = format.getIntegerOr(MediaFormat.KEY_MAX_INPUT_SIZE, 64 * 1024)
+        val decoder = androidx.media3.decoder.ffmpeg.FfmpegAudioDecoder(media3Format, 16, 16, maxInput, /* outputFloat = */ false)
+        try {
+            var inputDone = false
+            var idle = 0
+            while (!window.done && idle < 400) {
+                var progressed = false
+                if (!inputDone) {
+                    val input = decoder.dequeueInputBuffer()
+                    if (input != null) {
+                        val sampleSize = extractor.sampleSize
+                        if (sampleSize < 0) {
+                            input.addFlag(androidx.media3.common.C.BUFFER_FLAG_END_OF_STREAM)
+                            inputDone = true
+                        } else {
+                            input.ensureSpaceForWrite(sampleSize.toInt())
+                            val data = input.data!!
+                            val size = extractor.readSampleData(data, data.position())
+                            data.position(data.position() + size.coerceAtLeast(0))
+                            input.timeUs = extractor.sampleTime
+                            extractor.advance()
+                        }
+                        input.flip()
+                        decoder.queueInputBuffer(input)
+                        progressed = true
+                    }
+                }
+                val output = decoder.dequeueOutputBuffer()
+                if (output != null) {
+                    progressed = true
+                    if (output.isEndOfStream) {
+                        output.release()
+                        return
+                    }
+                    output.data?.let { window.add(output.timeUs, it, decoder.channelCount, decoder.sampleRate, false) }
+                    output.release()
+                }
+                if (progressed) idle = 0 else { idle++; Thread.sleep(5) }
+            }
+        } finally {
+            decoder.release()
+        }
+    }
+
+    private fun MediaFormat.getIntegerOr(key: String, fallback: Int) =
+        if (containsKey(key)) getInteger(key) else fallback
 
     /**
      * Decodes audio directly from [videoPath] using MediaExtractor and MediaCodec, and aligns
@@ -274,7 +289,7 @@ class SubtitleSyncModule(context: ReactApplicationContext) : ReactContextBaseJav
         thread(name = "subtitle-align-video") {
             try {
                 val decoded = decodeAudioWindow(videoPath, windowStartS, 300.0)
-                    ?: return@thread promise.resolve(null)
+                    ?: return@thread promise.reject("E_NO_AUDIO", "No decodable audio in this video")
 
                 val s = DoubleArray(starts.size()) { starts.getDouble(it) }
                 val e = DoubleArray(ends.size()) { ends.getDouble(it) }
