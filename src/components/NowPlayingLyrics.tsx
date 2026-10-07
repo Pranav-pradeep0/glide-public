@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { FlatList, StyleSheet, Text, View } from 'react-native';
 import Feather from '@react-native-vector-icons/feather';
 import { Button, Touchable } from '@/components/ui';
@@ -14,11 +14,21 @@ interface NowPlayingLyricsProps {
     onPickLyrics: () => void;
 }
 
+/** Index of the line playing at `position`, or -1 before the first. */
+function activeLineIndex(lyrics: LyricLine[] | null, position: number): number {
+    if (!lyrics) { return -1; }
+    let active = -1;
+    for (let i = 0; i < lyrics.length && lyrics[i].time <= position; i++) {
+        active = i;
+    }
+    return active;
+}
+
 /**
  * Isolated lyrics viewer for NowPlayingScreen.
  *
- * Subscribes to `position` from `useAudioStore` only when mounted,
- * isolating active lyric highlighting and auto-scrolling from the main screen.
+ * Subscribes to the *active line index*, not to `position`: the store's position changes
+ * twice a second, the line every few seconds, and only a line change needs a render.
  */
 export const NowPlayingLyrics: React.FC<NowPlayingLyricsProps> = React.memo(({
     lyrics,
@@ -27,23 +37,32 @@ export const NowPlayingLyrics: React.FC<NowPlayingLyricsProps> = React.memo(({
     onPickLyrics,
 }) => {
     const { colors } = useTheme();
-    const position = useAudioStore((s) => s.position);
+    const activeLyricIndex = useAudioStore((s) => activeLineIndex(lyrics, s.position));
     const seekTo = useAudioStore((s) => s.seekTo);
     const lyricsListRef = useRef<FlatList<LyricLine>>(null);
 
-    // Active lyric line index
-    const activeLyricIndex = useMemo(() => {
-        if (!lyrics || lyrics.length === 0) return -1;
-        let active = -1;
-        for (let i = 0; i < lyrics.length; i++) {
-            if (lyrics[i].time <= position) {
-                active = i;
-            } else {
-                break;
-            }
-        }
-        return active;
-    }, [lyrics, position]);
+    const renderLine = useCallback(({ item: line, index: idx }: { item: LyricLine; index: number }) => {
+        const isActive = idx === activeLyricIndex;
+        return (
+            <Touchable
+                onPress={() => seekTo(line.time)}
+                style={styles.lyricRow}
+                scaleTo={0.98}
+            >
+                <Text
+                    style={[
+                        type.body,
+                        styles.lyricText,
+                        isActive
+                            ? { color: accentColor, fontWeight: '700', fontSize: 18 }
+                            : { color: colors.textSecondary },
+                    ]}
+                >
+                    {line.text}
+                </Text>
+            </Touchable>
+        );
+    }, [activeLyricIndex, accentColor, colors.textSecondary, seekTo]);
 
     // Auto-scroll lyrics cleanly centered
     useEffect(() => {
@@ -71,28 +90,8 @@ export const NowPlayingLyrics: React.FC<NowPlayingLyricsProps> = React.memo(({
                             animated: true,
                         });
                     }}
-                    renderItem={({ item: line, index: idx }) => {
-                        const isActive = idx === activeLyricIndex;
-                        return (
-                            <Touchable
-                                onPress={() => seekTo(line.time)}
-                                style={styles.lyricRow}
-                                scaleTo={0.98}
-                            >
-                                <Text
-                                    style={[
-                                        type.body,
-                                        styles.lyricText,
-                                        isActive
-                                            ? { color: accentColor, fontWeight: '700', fontSize: 18 }
-                                            : { color: colors.textSecondary },
-                                    ]}
-                                >
-                                    {line.text}
-                                </Text>
-                            </Touchable>
-                        );
-                    }}
+                    renderItem={renderLine}
+                    extraData={activeLyricIndex}
                 />
             ) : (
                 <View style={styles.emptyLyricsWrap}>
