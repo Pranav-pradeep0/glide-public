@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { DeviceEventEmitter, NativeModules, Platform } from 'react-native';
+import { AppState, DeviceEventEmitter, NativeModules, Platform } from 'react-native';
 import { createMMKV } from 'react-native-mmkv';
 import { AudioRepeatMode, AudioTrack } from '@/types';
 import { AudioMediaService } from '@/services/AudioMediaService';
@@ -76,37 +76,66 @@ setTimeout(hydratePersistedQueue, 0);
 
 const safeInitialIndex = initialPlayback.currentIndex || 0;
 
-/** Where native's playing track sits in our queue: by id, with native's index as the tiebreak. */
+/**
+ * Where native's playing track sits in our queue: by id, with native's index as the tiebreak.
+ * -1 when the playing track is not in our queue at all -- a queue started from Android Auto
+ * or another controller. Showing whatever song sits at native's index would be a wrong song.
+ */
 export function resolveQueueIndex(queue: AudioTrack[], nativeIndex: number, trackId?: string): number {
     if (!trackId) { return nativeIndex; }
     // If nativeIndex already points to this trackId, honor native's current index (breaks duplicates tie)
     if (queue[nativeIndex] && String(queue[nativeIndex].id) === String(trackId)) {
         return nativeIndex;
     }
-    // Otherwise look up by trackId across the queue
-    const found = queue.findIndex(t => String(t.id) === String(trackId));
-    return found >= 0 ? found : nativeIndex;
+    return queue.findIndex(t => String(t.id) === String(trackId));
 }
 
-let queuePersistTimer: ReturnType<typeof setTimeout> | null = null;
-function persistQueue(queue: AudioTrack[], immediate = false) {
-    if (queuePersistTimer) {
-        clearTimeout(queuePersistTimer);
-        queuePersistTimer = null;
-    }
-    const write = () => {
+/**
+ * Debounced writes, keyed by what they write, so a background transition can run whatever
+ * is still waiting: Android may kill the process right after, and a 1 s debounce would
+ * otherwise lose the last queue edit or position.
+ */
+const pendingWrites = new Map<string, { timer: ReturnType<typeof setTimeout>; write: () => void }>();
+
+function debounceWrite(key: string, delayMs: number, write: () => void) {
+    const pending = pendingWrites.get(key);
+    if (pending) { clearTimeout(pending.timer); }
+    const run = () => {
+        pendingWrites.delete(key);
         try {
-            mmkv.set(QUEUE_KEY, JSON.stringify(queue));
+            write();
         } catch {
             // ignore
         }
     };
-    if (immediate || queue.length === 0 || process.env.NODE_ENV === 'test') {
+    const timer = setTimeout(run, delayMs);
+    (timer as any)?.unref?.();
+    pendingWrites.set(key, { timer, write: run });
+}
+
+export function flushPendingWrites() {
+    for (const { timer, write } of Array.from(pendingWrites.values())) {
+        clearTimeout(timer);
         write();
+    }
+}
+
+function persistQueue(queue: AudioTrack[], immediate = false) {
+    const write = () => mmkv.set(QUEUE_KEY, JSON.stringify(queue));
+    if (immediate || queue.length === 0 || process.env.NODE_ENV === 'test') {
+        const pending = pendingWrites.get(QUEUE_KEY);
+        if (pending) {
+            clearTimeout(pending.timer);
+            pendingWrites.delete(QUEUE_KEY);
+        }
+        try {
+            write();
+        } catch {
+            // ignore
+        }
         return;
     }
-    queuePersistTimer = setTimeout(write, 1000);
-    queuePersistTimer?.unref?.();
+    debounceWrite(QUEUE_KEY, 1000, write);
 }
 
 function persistCurrentTrack(track: AudioTrack | null) {
@@ -121,18 +150,13 @@ function persistCurrentTrack(track: AudioTrack | null) {
     }
 }
 
-let playbackPersistTimer: ReturnType<typeof setTimeout> | null = null;
 function schedulePersistPlayback(state: StoredPlaybackState) {
-    if (playbackPersistTimer) clearTimeout(playbackPersistTimer);
-    playbackPersistTimer = setTimeout(() => {
-        try {
-            mmkv.set(PLAYBACK_KEY, JSON.stringify(state));
-        } catch {
-            // ignore
-        }
-    }, 500);
-    playbackPersistTimer?.unref?.();
+    debounceWrite(PLAYBACK_KEY, 500, () => mmkv.set(PLAYBACK_KEY, JSON.stringify(state)));
 }
+
+/** How often a playing song's position is saved, so a killed app resumes close to it. */
+const POSITION_SAVE_INTERVAL_MS = 5000;
+let lastPositionSaveAt = 0;
 
 function getPresetBands(presetId: string): number[] | null {
     const preset = EQUALIZER_PRESETS.find((p) => p.id === presetId);
@@ -743,6 +767,11 @@ export const useAudioStore = create<AudioStoreState>((set, get) => ({
             position: data.position,
             duration: data.duration > 0 ? data.duration : prev.duration,
         }));
+        const now = Date.now();
+        if (now - lastPositionSaveAt >= POSITION_SAVE_INTERVAL_MS) {
+            lastPositionSaveAt = now;
+            get()._persistState();
+        }
     },
 
     _persistState: () => {
@@ -763,6 +792,13 @@ export const useAudioStore = create<AudioStoreState>((set, get) => ({
 
 // Setup native device event listeners
 if (Platform.OS === 'android') {
+    AppState.addEventListener('change', (next) => {
+        if (next === 'background' || next === 'inactive') {
+            useAudioStore.getState()._persistState();
+            flushPendingWrites();
+        }
+    });
+
     DeviceEventEmitter.addListener('onAudioPlaybackStateChanged', (event) => {
         useAudioStore.getState()._setPlaybackState({
             isPlaying: !!event.isPlaying,

@@ -2,11 +2,15 @@ package com.glide.app.audio
 
 import android.content.ContentUris
 import android.content.Context
+import android.database.ContentObserver
+import android.database.Cursor
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import android.util.Size
 import androidx.palette.graphics.Palette
@@ -183,66 +187,107 @@ class MediaStoreAudioModule(private val reactContext: ReactApplicationContext) :
             return getArtworkDetails(context, albumId, songUriStr).uri
         }
 
-        fun getSongById(context: Context, id: String): SongRecord? {
-            songCache[id]?.let { return it }
+        private const val SONG_SELECTION =
+            "${MediaStore.Audio.Media.IS_MUSIC} != 0 AND ${MediaStore.Audio.Media.DURATION} >= 10000"
 
-            try {
-                val songId = id.toLongOrNull() ?: return null
-                val songUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, songId)
-                val resolver = context.contentResolver
-                val cursor = resolver.query(
-                    songUri,
-                    SONG_PROJECTION,
-                    null,
-                    null,
-                    null
+        @Volatile private var observerRegistered = false
+
+        /**
+         * The cache is a copy of MediaStore, so any library change empties it: a deleted or
+         * re-tagged song must not keep playing under its old record. It refills lazily.
+         */
+        private fun ensureObserver(context: Context) {
+            if (observerRegistered) return
+            synchronized(this) {
+                if (observerRegistered) return
+                context.applicationContext.contentResolver.registerContentObserver(
+                    MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                    true,
+                    object : ContentObserver(Handler(Looper.getMainLooper())) {
+                        override fun onChange(selfChange: Boolean) = songCache.clear()
+                    }
                 )
-                cursor?.use { c ->
-                    if (c.moveToFirst()) {
-                        val titleCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
-                        val artistCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
-                        val albumCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
-                        val albumIdCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
-                        val durationCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
-                        val albumId = c.getLong(albumIdCol)
+                observerRegistered = true
+            }
+        }
 
-                        val artFile = File(context.cacheDir, "album_art/$albumId.jpg")
-                        val artUri = if (artFile.exists() && artFile.length() > 0) {
-                            "file://${artFile.absolutePath}"
-                        } else null
+        private fun readRecord(context: Context, c: Cursor): SongRecord {
+            val songId = c.getLong(c.getColumnIndexOrThrow(MediaStore.Audio.Media._ID))
+            val albumId = c.getLong(c.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID))
+            val artFile = File(context.cacheDir, "album_art/$albumId.jpg")
+            return SongRecord(
+                id = songId.toString(),
+                title = sanitizeMetadata(c.getString(c.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)), "Unknown Track"),
+                artist = sanitizeMetadata(c.getString(c.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)), "Unknown Artist"),
+                album = sanitizeMetadata(c.getString(c.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)), "Unknown Album"),
+                albumId = albumId.toString(),
+                uri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, songId).toString(),
+                durationMs = c.getLong(c.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)),
+                artworkUri = if (artFile.exists() && artFile.length() > 0) "file://${artFile.absolutePath}" else null
+            )
+        }
 
-                        val record = SongRecord(
-                            id = id,
-                            title = sanitizeMetadata(c.getString(titleCol), "Unknown Track"),
-                            artist = sanitizeMetadata(c.getString(artistCol), "Unknown Artist"),
-                            album = sanitizeMetadata(c.getString(albumCol), "Unknown Album"),
-                            albumId = albumId.toString(),
-                            uri = songUri.toString(),
-                            durationMs = c.getLong(durationCol),
-                            artworkUri = artUri
-                        )
-                        songCache[id] = record
-                        return record
+        /**
+         * Records for these ids, from the cache or one batched `_ID IN (...)` query per 500
+         * misses -- not a query per song, which made resuming a large queue take seconds on a
+         * cold start. Ids MediaStore does not know (deleted songs, file paths from "open
+         * with") are simply absent; nothing is invented for them, and a failure is not cached.
+         */
+        fun getSongsByIds(context: Context, ids: List<String>): Map<String, SongRecord> {
+            ensureObserver(context)
+            val found = HashMap<String, SongRecord>(ids.size)
+            val misses = ArrayList<Long>()
+            for (id in ids) {
+                val cached = songCache[id]
+                if (cached != null) found[id] = cached
+                else id.toLongOrNull()?.let { misses.add(it) }
+            }
+            for (chunk in misses.distinct().chunked(500)) {
+                try {
+                    context.contentResolver.query(
+                        MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                        SONG_PROJECTION,
+                        "${MediaStore.Audio.Media._ID} IN (${chunk.joinToString(",")})",
+                        null,
+                        null
+                    )?.use { c ->
+                        while (c.moveToNext()) {
+                            val record = readRecord(context, c)
+                            songCache[record.id] = record
+                            found[record.id] = record
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w(TAG, "song lookup failed: ${e.message}")
+                }
+            }
+            return found
+        }
+
+        fun getSongById(context: Context, id: String): SongRecord? = getSongsByIds(context, listOf(id))[id]
+
+        /** Every song, as the library screen lists them. For browsers such as Android Auto. */
+        fun queryAllSongs(context: Context): List<SongRecord> {
+            ensureObserver(context)
+            val songs = ArrayList<SongRecord>()
+            try {
+                context.contentResolver.query(
+                    MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                    SONG_PROJECTION,
+                    SONG_SELECTION,
+                    null,
+                    "${MediaStore.Audio.Media.TITLE} COLLATE NOCASE ASC"
+                )?.use { c ->
+                    while (c.moveToNext()) {
+                        val record = readRecord(context, c)
+                        songCache[record.id] = record
+                        songs.add(record)
                     }
                 }
-            } catch (_: Exception) {}
-
-            val fallbackUri = ContentUris.withAppendedId(
-                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-                id.toLongOrNull() ?: return null
-            ).toString()
-            val fallback = SongRecord(
-                id = id,
-                title = "Track $id",
-                artist = "Unknown Artist",
-                album = "Unknown Album",
-                albumId = "",
-                uri = fallbackUri,
-                durationMs = 0L,
-                artworkUri = null
-            )
-            songCache[id] = fallback
-            return fallback
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "song scan failed: ${e.message}")
+            }
+            return songs
         }
     }
 
@@ -250,8 +295,11 @@ class MediaStoreAudioModule(private val reactContext: ReactApplicationContext) :
     fun getSongs(promise: Promise) {
         thread(name = "glide-audio-songs-scan") {
             try {
+                ensureObserver(reactContext)
+                // A full scan is the fresh truth; drop records for songs that are gone.
+                songCache.clear()
                 val resolver = reactContext.contentResolver
-                val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0 AND ${MediaStore.Audio.Media.DURATION} >= 10000"
+                val selection = SONG_SELECTION
                 val sortOrder = "${MediaStore.Audio.Media.TITLE} COLLATE NOCASE ASC"
 
                 val cursor = resolver.query(

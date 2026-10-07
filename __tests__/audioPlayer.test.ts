@@ -241,6 +241,18 @@ describe('Audio Player Utilities and Store', () => {
             expect(useAudioStore.getState().currentIndex).toBe(1);
         });
 
+        it('keeps the current song when native plays one that is not in the queue', () => {
+            useAudioStore.setState({
+                queue: [dummyTrack1, dummyTrack2],
+                currentIndex: 0,
+                currentTrack: dummyTrack1,
+            });
+
+            // Android Auto started its own queue; index 1 here is not what is playing
+            useAudioStore.getState()._setTrackChanged({ currentIndex: 1, trackId: 'from-auto' });
+            expect(useAudioStore.getState().currentTrack?.id).toBe(dummyTrack1.id);
+        });
+
         it('passes equalizer bands and settings to native setQueue', async () => {
             await useAudioStore.getState().setEqualizerPreset('rock');
             await useAudioStore.getState().playQueue([dummyTrack1], 0);

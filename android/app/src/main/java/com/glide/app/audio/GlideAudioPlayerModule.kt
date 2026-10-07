@@ -26,7 +26,8 @@ import com.facebook.react.bridge.WritableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.glide.app.player.GlidePlayerHolder
 import java.io.File
-import kotlin.concurrent.thread
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
 
 @UnstableApi
@@ -43,6 +44,15 @@ class GlideAudioPlayerModule(private val reactContext: ReactApplicationContext) 
         private val EQUALIZER_BAND_HZ =
             intArrayOf(60, 170, 310, 600, 1000, 3000, 6000, 12000, 14000, 16000)
         private const val EQUALIZER_PRIORITY = 0
+
+        /**
+         * One worker for every queue build, so builds finish in the order they were asked
+         * for. Paired with [queueGeneration], which drops a build that a newer request has
+         * already replaced: a slow 5,000-song "play all" can no longer land after the single
+         * song tapped a moment later.
+         */
+        private val queueExecutor = Executors.newSingleThreadExecutor { Thread(it, "glide-audio-queue") }
+        private val queueGeneration = AtomicInteger()
     }
 
     private var player: ExoPlayer? = null
@@ -300,61 +310,19 @@ class GlideAudioPlayerModule(private val reactContext: ReactApplicationContext) 
         equalizerBands: ReadableArray?,
         promise: Promise
     ) {
-        val bandLevels = equalizerBands?.takeIf { it.size() > 0 }?.let { array ->
-            FloatArray(array.size()) { array.getDouble(it).toFloat() }
-        }
-
-        thread(name = "glide-audio-build-queue") {
-            try {
-                consecutiveErrors = 0
-                val mediaItems = ArrayList<MediaItem>(tracks.size())
-                for (i in 0 until tracks.size()) {
-                    val map = tracks.getMap(i) ?: continue
-                    mediaItems.add(buildMediaItem(map, i.toString()))
-                }
-
-                mainHandler.post {
-                    try {
-                        val p = ensurePlayer()
-                        p.setMediaItems(
-                            mediaItems,
-                            startIndex.coerceIn(0, (mediaItems.size - 1).coerceAtLeast(0)),
-                            (startPositionSeconds * 1000).toLong()
-                        )
-                        p.shuffleModeEnabled = shuffle
-                        p.repeatMode = when (repeatMode) {
-                            "one" -> Player.REPEAT_MODE_ONE
-                            "all" -> Player.REPEAT_MODE_ALL
-                            else -> Player.REPEAT_MODE_OFF
-                        }
-
-                        if (bandLevels != null) {
-                            currentBandLevels = bandLevels
-                            applyEqualizer()
-                        }
-
-                        p.prepare()
-                        p.playWhenReady = playWhenReady
-
-                        if (playWhenReady) {
-                            GlidePlayerHolder.start(reactContext, p)
-                        }
-
-                        emitTrackChanged()
-                        emitPlaybackState()
-                        promise.resolve(true)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "setQueue error", e)
-                        promise.reject("E_SET_QUEUE", e.message, e)
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "setQueue background build error", e)
-                promise.reject("E_SET_QUEUE", e.message, e)
-            }
+        val maps = (0 until tracks.size()).map { tracks.getMap(it) }
+        replaceQueue(startIndex, startPositionSeconds, playWhenReady, shuffle, repeatMode, equalizerBands, promise) {
+            maps.mapIndexedNotNull { i, map -> map?.let { buildMediaItem(it, i.toString()) } }
         }
     }
 
+    /**
+     * Same as [setQueue], but only ids cross the bridge; records come from MediaStore. Every
+     * id yields exactly one item, in order. An id MediaStore does not know -- a file path
+     * from "open with", or a deleted song -- still gets an item (a direct URI, which plays or
+     * fails and is skipped like any bad file). Dropping it instead would shift every later
+     * index JS sends for remove, move and skip onto the wrong song.
+     */
     @ReactMethod
     fun setQueueByIds(
         trackIds: ReadableArray,
@@ -366,77 +334,109 @@ class GlideAudioPlayerModule(private val reactContext: ReactApplicationContext) 
         equalizerBands: ReadableArray?,
         promise: Promise
     ) {
-        val ids = ArrayList<String>(trackIds.size())
-        for (i in 0 until trackIds.size()) {
-            val str = trackIds.getString(i)
-            if (!str.isNullOrEmpty()) {
-                ids.add(str)
-            }
+        val ids = (0 until trackIds.size()).map { trackIds.getString(it) ?: "" }
+        replaceQueue(startIndex, startPositionSeconds, playWhenReady, shuffle, repeatMode, equalizerBands, promise) {
+            val records = MediaStoreAudioModule.getSongsByIds(reactContext, ids)
+            ids.map { id -> records[id]?.let { itemFromRecord(it) } ?: itemFromBareId(id) }
         }
+    }
+
+    private fun itemFromRecord(record: MediaStoreAudioModule.SongRecord): MediaItem {
+        val metaBuilder = MediaMetadata.Builder()
+            .setTitle(record.title)
+            .setArtist(record.artist)
+            .setAlbumTitle(record.album)
+        // The record may predate the art being cached; look again, as buildMediaItem does.
+        val artUri = record.artworkUri ?: File(reactContext.cacheDir, "album_art/${record.albumId}.jpg")
+            .takeIf { record.albumId.isNotEmpty() && it.exists() && it.length() > 0 }
+            ?.let { "file://${it.absolutePath}" }
+        if (artUri != null) metaBuilder.setArtworkUri(Uri.parse(artUri))
+        return MediaItem.Builder()
+            .setMediaId(record.id)
+            .setUri(Uri.parse(record.uri))
+            .setMediaMetadata(metaBuilder.build())
+            .build()
+    }
+
+    private fun itemFromBareId(id: String): MediaItem {
+        val uri = when {
+            id.toLongOrNull() != null ->
+                android.content.ContentUris.withAppendedId(
+                    android.provider.MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id.toLong()
+                )
+            id.startsWith("/") -> Uri.fromFile(File(id))
+            else -> Uri.parse(id)
+        }
+        val title = uri.lastPathSegment?.substringBeforeLast('.')?.takeIf { it.isNotBlank() } ?: "Unknown Track"
+        return MediaItem.Builder()
+            .setMediaId(id)
+            .setUri(uri)
+            .setMediaMetadata(MediaMetadata.Builder().setTitle(title).build())
+            .build()
+    }
+
+    private fun replaceQueue(
+        startIndex: Int,
+        startPositionSeconds: Double,
+        playWhenReady: Boolean,
+        shuffle: Boolean,
+        repeatMode: String,
+        equalizerBands: ReadableArray?,
+        promise: Promise,
+        build: () -> List<MediaItem>
+    ) {
         val bandLevels = equalizerBands?.takeIf { it.size() > 0 }?.let { array ->
             FloatArray(array.size()) { array.getDouble(it).toFloat() }
         }
-
-        thread(name = "glide-audio-build-queue-by-ids") {
-            try {
-                consecutiveErrors = 0
-                val mediaItems = ArrayList<MediaItem>(ids.size)
-                for (id in ids) {
-                    val record = MediaStoreAudioModule.getSongById(reactContext, id) ?: continue
-                    val metaBuilder = MediaMetadata.Builder()
-                        .setTitle(record.title)
-                        .setArtist(record.artist)
-                        .setAlbumTitle(record.album)
-                    if (!record.artworkUri.isNullOrEmpty()) {
-                        metaBuilder.setArtworkUri(Uri.parse(record.artworkUri))
-                    }
-                    mediaItems.add(
-                        MediaItem.Builder()
-                            .setMediaId(record.id)
-                            .setUri(Uri.parse(record.uri))
-                            .setMediaMetadata(metaBuilder.build())
-                            .build()
-                    )
-                }
-
-                mainHandler.post {
-                    try {
-                        val p = ensurePlayer()
-                        p.setMediaItems(
-                            mediaItems,
-                            startIndex.coerceIn(0, (mediaItems.size - 1).coerceAtLeast(0)),
-                            (startPositionSeconds * 1000).toLong()
-                        )
-                        p.shuffleModeEnabled = shuffle
-                        p.repeatMode = when (repeatMode) {
-                            "one" -> Player.REPEAT_MODE_ONE
-                            "all" -> Player.REPEAT_MODE_ALL
-                            else -> Player.REPEAT_MODE_OFF
-                        }
-
-                        if (bandLevels != null) {
-                            currentBandLevels = bandLevels
-                            applyEqualizer()
-                        }
-
-                        p.prepare()
-                        p.playWhenReady = playWhenReady
-
-                        if (playWhenReady) {
-                            GlidePlayerHolder.start(reactContext, p)
-                        }
-
-                        emitTrackChanged()
-                        emitPlaybackState()
-                        promise.resolve(true)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "setQueueByIds error", e)
-                        promise.reject("E_SET_QUEUE_BY_IDS", e.message, e)
-                    }
-                }
+        val generation = queueGeneration.incrementAndGet()
+        queueExecutor.execute {
+            val mediaItems = try {
+                build()
             } catch (e: Exception) {
-                Log.e(TAG, "setQueueByIds background build error", e)
-                promise.reject("E_SET_QUEUE_BY_IDS", e.message, e)
+                Log.e(TAG, "queue build error", e)
+                promise.reject("E_SET_QUEUE", e.message, e)
+                return@execute
+            }
+            mainHandler.post {
+                if (generation != queueGeneration.get()) {
+                    // A newer queue was asked for while this one was building.
+                    promise.resolve(false)
+                    return@post
+                }
+                try {
+                    consecutiveErrors = 0
+                    val p = ensurePlayer()
+                    p.setMediaItems(
+                        mediaItems,
+                        startIndex.coerceIn(0, (mediaItems.size - 1).coerceAtLeast(0)),
+                        (startPositionSeconds * 1000).toLong()
+                    )
+                    p.shuffleModeEnabled = shuffle
+                    p.repeatMode = when (repeatMode) {
+                        "one" -> Player.REPEAT_MODE_ONE
+                        "all" -> Player.REPEAT_MODE_ALL
+                        else -> Player.REPEAT_MODE_OFF
+                    }
+
+                    if (bandLevels != null) {
+                        currentBandLevels = bandLevels
+                        applyEqualizer()
+                    }
+
+                    p.prepare()
+                    p.playWhenReady = playWhenReady
+
+                    if (playWhenReady) {
+                        GlidePlayerHolder.start(reactContext, p)
+                    }
+
+                    emitTrackChanged()
+                    emitPlaybackState()
+                    promise.resolve(true)
+                } catch (e: Exception) {
+                    Log.e(TAG, "setQueue error", e)
+                    promise.reject("E_SET_QUEUE", e.message, e)
+                }
             }
         }
     }
