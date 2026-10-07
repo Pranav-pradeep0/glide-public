@@ -34,7 +34,7 @@ import {
     Touchable,
 } from '@/components/ui';
 import { metrics, playerTheme, type } from '@/theme/theme';
-import { AppSettings } from '../types';
+import { AppSettings, ShakeAction } from '../types';
 import pkg from '../../package.json';
 
 const AnimatedText = Animated.createAnimatedComponent(Text);
@@ -196,6 +196,9 @@ export default function SettingsScreen() {
         setAutoPlayNext,
         setDefaultAudioLanguage,
         setShakeThreshold,
+        setShakeEnabled,
+        setShakeAction,
+        setOnlineLyricsEnabled,
     } = useAppStore();
     const clearAllHistory = useVideoHistoryStore((state) => state.clearAllHistory);
     const [languageModalVisible, setLanguageModalVisible] = React.useState(false);
@@ -398,6 +401,12 @@ export default function SettingsScreen() {
                         toggle={{ value: settings.autoPlayNext, onChange: setAutoPlayNext }}
                     />
                     <ListRow
+                        icon="music"
+                        title="Online lyrics"
+                        caption="Fetch lyrics from LRCLIB when not found locally"
+                        toggle={{ value: settings.onlineLyricsEnabled, onChange: setOnlineLyricsEnabled }}
+                    />
+                    <ListRow
                         icon="fast-forward"
                         title="Seek buttons"
                         toggle={{ value: settings.showSeekButtons, onChange: setShowSeekButtons }}
@@ -450,6 +459,32 @@ export default function SettingsScreen() {
 
                 <SectionLabel title="Gestures & haptics" />
                 <ListGroup>
+                    <ListRow
+                        icon="smartphone"
+                        title="Shake to control"
+                        caption="Control playback by shaking device"
+                        toggle={{ value: settings.shakeEnabled, onChange: setShakeEnabled }}
+                    />
+                    {settings.shakeEnabled && (
+                        <ChipRow title="Shake action">
+                            <View style={styles.chips}>
+                                {[
+                                    { key: 'play_pause', label: 'Play/Pause' },
+                                    { key: 'next', label: 'Next' },
+                                    { key: 'previous', label: 'Previous' },
+                                    { key: 'seek_forward', label: `Forward ${settings.seekDuration} s` },
+                                    { key: 'seek_backward', label: `Backward ${settings.seekDuration} s` },
+                                ].map((opt) => (
+                                    <Chip
+                                        key={opt.key}
+                                        label={opt.label}
+                                        selected={settings.shakeAction === opt.key}
+                                        onPress={() => setShakeAction(opt.key as ShakeAction)}
+                                    />
+                                ))}
+                            </View>
+                        </ChipRow>
+                    )}
                     <SliderRow
                         title="Shake strength"
                         caption="How hard to shake before it counts"

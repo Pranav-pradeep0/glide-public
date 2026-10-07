@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { AppSettings, HapticSettings } from '../types';
+import { AppSettings, HapticSettings, ShakeAction } from '../types';
 import type { UpdateError } from '../hooks/useUpdateInstaller';
 import type { UpdateApkCache } from '../storage/updateStorage';
 
@@ -51,6 +51,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     autoPlayNext: false,
     defaultAudioLanguage: null,
     shakeThreshold: 1.2,
+    shakeEnabled: false,
+    shakeAction: 'play_pause',
+    onlineLyricsEnabled: true,
 };
 
 interface AppStore {
@@ -98,6 +101,9 @@ interface AppStore {
     setAutoPlayNext: (enabled: boolean) => void;
     setDefaultAudioLanguage: (language: string | null) => void;
     setShakeThreshold: (threshold: number) => void;
+    setShakeEnabled: (enabled: boolean) => void;
+    setShakeAction: (action: ShakeAction) => void;
+    setOnlineLyricsEnabled: (enabled: boolean) => void;
 
     // Update actions
     setUpdateStatus: (data: {
@@ -270,6 +276,18 @@ export const useAppStore = create<AppStore>((set) => ({
     setShakeThreshold: (threshold) =>
         set((state) => ({
             settings: { ...state.settings, shakeThreshold: threshold },
+        })),
+    setShakeEnabled: (enabled) =>
+        set((state) => ({
+            settings: { ...state.settings, shakeEnabled: enabled },
+        })),
+    setShakeAction: (action) =>
+        set((state) => ({
+            settings: { ...state.settings, shakeAction: action },
+        })),
+    setOnlineLyricsEnabled: (enabled) =>
+        set((state) => ({
+            settings: { ...state.settings, onlineLyricsEnabled: enabled },
         })),
 
     setUpdateStatus: (data) =>

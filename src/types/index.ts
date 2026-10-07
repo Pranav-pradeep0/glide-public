@@ -90,7 +90,12 @@ export interface AppSettings {
     autoPlayNext: boolean; // Auto-play next video in folder
     defaultAudioLanguage: string | null; // Preferred audio language (matches substring in track name)
     shakeThreshold: number; // Shake intensity threshold in g units
+    shakeEnabled: boolean; // Shake-to-control enabled
+    shakeAction: ShakeAction; // Action triggered by shake gesture
+    onlineLyricsEnabled: boolean; // Fetch lyrics online via LRCLIB
 }
+
+export type ShakeAction = 'play_pause' | 'next' | 'previous' | 'seek_forward' | 'seek_backward';
 
 export interface PlayerState {
     isPlaying: boolean;
