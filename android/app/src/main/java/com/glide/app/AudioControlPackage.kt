@@ -8,23 +8,14 @@ import com.glide.app.audio.AudioVolumeModule
 import com.glide.app.brightness.DisplayBrightnessModule
 
 /**
- * React Native package for audio volume, display brightness, and legacy compatibility.
+ * React Native package for audio volume and display brightness.
  */
 class AudioControlPackage : ReactPackage {
 
     override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> {
-        val audioVolumeModule = AudioVolumeModule(reactContext)
-        val displayBrightnessModule = DisplayBrightnessModule(reactContext)
-        val legacyAudioControlModule = AudioControlModule(
-            reactContext,
-            audioVolumeModule,
-            displayBrightnessModule
-        )
-
         return listOf(
-            audioVolumeModule,
-            displayBrightnessModule,
-            legacyAudioControlModule
+            AudioVolumeModule(reactContext),
+            DisplayBrightnessModule(reactContext)
         )
     }
 

@@ -11,8 +11,7 @@ import { Gesture } from 'react-native-gesture-handler';
 import { SharedValue, runOnJS, useSharedValue } from 'react-native-reanimated';
 import { PLAYER_CONSTANTS } from './types';
 
-const { DisplayBrightnessModule, AudioControlModule } = NativeModules;
-const BrightnessModule = DisplayBrightnessModule || AudioControlModule;
+const { DisplayBrightnessModule: BrightnessModule } = NativeModules;
 
 const applyBrightnessDefault = (value: number) => {
     BrightnessModule?.setBrightness?.(value);

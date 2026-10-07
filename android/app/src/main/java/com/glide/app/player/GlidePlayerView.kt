@@ -439,7 +439,7 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
         // Never on the phone's speaker. Unknown counts as speaker. Forgetting the level too
         // means plugging headphones back in does not bring the boost back by itself.
         if (volumeBoostPercent > 100 &&
-            com.glide.app.AudioControlModule.getInstance()?.isOnSpeaker() != false) {
+            com.glide.app.audio.AudioVolumeModule.isOnSpeaker(context)) {
             volumeBoostPercent = 100
         }
         if (volumeBoostPercent > 100 && !outputWatcherRegistered) {

@@ -3,8 +3,7 @@ import { NativeModules, DeviceEventEmitter, EmitterSubscription } from 'react-na
 import { SharedValue, useSharedValue } from 'react-native-reanimated';
 import type { GlidePlayerRef } from '@/components/VideoPlayer/GlidePlayer';
 
-const { AudioVolumeModule, AudioControlModule } = NativeModules;
-const AudioModule = AudioVolumeModule || AudioControlModule;
+const { AudioVolumeModule: AudioModule } = NativeModules;
 
 export type AudioRouteType = 'speaker' | 'bluetooth' | 'wired' | 'usb' | 'unknown';
 
@@ -39,7 +38,7 @@ interface UseAudioControllerReturn {
 /**
  * Audio Controller Hook
  *
- * Uses the custom AudioControlModule native module for:
+ * Uses the AudioVolumeModule native module for:
  * - System volume control (0-100%)
  * - Audio route detection
  * - Hardware button listening

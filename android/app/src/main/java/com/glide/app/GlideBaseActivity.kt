@@ -40,15 +40,6 @@ open class GlideBaseActivity : ReactActivity() {
             return false
         }
 
-        val legacyModule = reactContext.getNativeModule(AudioControlModule::class.java)
-            ?: (reactContext.getNativeModule(AudioControlModule.MODULE_NAME) as? AudioControlModule)
-        if (legacyModule != null) {
-            if (legacyModule.isListening) {
-                return legacyModule.handleVolumeKey(keyCode)
-            }
-            return false
-        }
-
         return false
     }
 }

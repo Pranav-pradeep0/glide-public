@@ -21,8 +21,7 @@ import {
 import type { PlayerResizeMode } from '@/components/VideoPlayer/GlidePlayer';
 import { haptic } from '@/native/HapticModule';
 
-const { DisplayBrightnessModule, AudioControlModule } = NativeModules;
-const BrightnessModule = DisplayBrightnessModule || AudioControlModule;
+const { DisplayBrightnessModule: BrightnessModule } = NativeModules;
 
 import { UsePlayerCoreReturn, UsePlayerUIReturn, UsePlayerHUDReturn, PLAYER_CONSTANTS } from './types';
 import { useSeekGesture } from './useSeekGesture';

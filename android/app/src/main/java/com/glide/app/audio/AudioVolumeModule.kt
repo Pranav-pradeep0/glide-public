@@ -48,6 +48,99 @@ class AudioVolumeModule(private val reactContext: ReactApplicationContext) :
         const val ROUTE_USB = "usb"
         const val ROUTE_UNKNOWN = "unknown"
 
+        fun detectRoute(am: AudioManager?): String {
+            if (am == null) return ROUTE_SPEAKER
+            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                detectCurrentRouteModern(am)
+            } else {
+                detectCurrentRouteLegacy(am)
+            }
+        }
+
+        /**
+         * Whether audio is coming out of the phone's own speaker right now, read fresh. The
+         * video player asks this before applying any boost above 100%, which a phone speaker
+         * must never get. Static, so the answer never depends on a module having been built.
+         */
+        @JvmStatic
+        fun isOnSpeaker(context: Context): Boolean =
+            ROUTE_SPEAKER == detectRoute(context.getSystemService(AudioManager::class.java))
+
+        @RequiresApi(Build.VERSION_CODES.M)
+        private fun detectCurrentRouteModern(am: AudioManager): String {
+            val devices = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            var detectedRoute = ROUTE_SPEAKER
+            var foundExternal = false
+
+            for (device in devices) {
+                val classified = classifyDevice(device)
+                if (classified == ROUTE_BLUETOOTH) {
+                    return ROUTE_BLUETOOTH
+                } else if (classified == ROUTE_USB) {
+                    detectedRoute = ROUTE_USB
+                    foundExternal = true
+                } else if (classified == ROUTE_WIRED) {
+                    if (detectedRoute != ROUTE_USB) {
+                        detectedRoute = ROUTE_WIRED
+                    }
+                    foundExternal = true
+                } else if (classified == ROUTE_UNKNOWN && !device.isSource) {
+                    if (!foundExternal) {
+                        detectedRoute = ROUTE_WIRED
+                        foundExternal = true
+                    }
+                }
+            }
+
+            return detectedRoute
+        }
+
+        @Suppress("DEPRECATION")
+        private fun detectCurrentRouteLegacy(am: AudioManager): String {
+            return when {
+                am.isBluetoothA2dpOn -> ROUTE_BLUETOOTH
+                am.isWiredHeadsetOn -> ROUTE_WIRED
+                else -> ROUTE_SPEAKER
+            }
+        }
+
+        @RequiresApi(Build.VERSION_CODES.M)
+        private fun classifyDevice(device: AudioDeviceInfo): String {
+            return when (device.type) {
+                AudioDeviceInfo.TYPE_BUILTIN_SPEAKER,
+                AudioDeviceInfo.TYPE_BUILTIN_EARPIECE,
+                AudioDeviceInfo.TYPE_TELEPHONY -> ROUTE_SPEAKER
+
+                AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+                AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> ROUTE_BLUETOOTH
+
+                AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+                AudioDeviceInfo.TYPE_WIRED_HEADSET,
+                AudioDeviceInfo.TYPE_LINE_ANALOG,
+                AudioDeviceInfo.TYPE_LINE_DIGITAL,
+                AudioDeviceInfo.TYPE_AUX_LINE,
+                AudioDeviceInfo.TYPE_HDMI,
+                AudioDeviceInfo.TYPE_DOCK,
+                AudioDeviceInfo.TYPE_FM,
+                AudioDeviceInfo.TYPE_FM_TUNER,
+                AudioDeviceInfo.TYPE_TV_TUNER -> ROUTE_WIRED
+
+                AudioDeviceInfo.TYPE_USB_HEADSET,
+                AudioDeviceInfo.TYPE_USB_ACCESSORY,
+                AudioDeviceInfo.TYPE_USB_DEVICE -> ROUTE_USB
+
+                else -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        val type = device.type
+                        if (type == 26 || type == 27) { // BLE_HEADSET, BLE_SPEAKER
+                            return ROUTE_BLUETOOTH
+                        }
+                    }
+                    ROUTE_UNKNOWN
+                }
+            }
+        }
+
         // Event names
         private const val EVENT_VOLUME_CHANGE = "onVolumeChange"
         private const val EVENT_ROUTE_CHANGE = "onAudioRouteChange"
@@ -250,96 +343,12 @@ class AudioVolumeModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
-    fun detectCurrentRoute(): String {
-        val am = audioManager ?: return ROUTE_SPEAKER
-
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            detectCurrentRouteModern(am)
-        } else {
-            detectCurrentRouteLegacy(am)
-        }
-    }
-
-    @RequiresApi(Build.VERSION_CODES.M)
-    private fun detectCurrentRouteModern(am: AudioManager): String {
-        val devices = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-        var detectedRoute = ROUTE_SPEAKER
-        var foundExternal = false
-
-        for (device in devices) {
-            val classified = classifyDevice(device)
-            if (classified == ROUTE_BLUETOOTH) {
-                return ROUTE_BLUETOOTH
-            } else if (classified == ROUTE_USB) {
-                detectedRoute = ROUTE_USB
-                foundExternal = true
-            } else if (classified == ROUTE_WIRED) {
-                if (detectedRoute != ROUTE_USB) {
-                    detectedRoute = ROUTE_WIRED
-                }
-                foundExternal = true
-            } else if (classified == ROUTE_UNKNOWN && !device.isSource) {
-                if (!foundExternal) {
-                    detectedRoute = ROUTE_WIRED
-                    foundExternal = true
-                }
-            }
-        }
-
-        return detectedRoute
-    }
-
-    @Suppress("DEPRECATION")
-    private fun detectCurrentRouteLegacy(am: AudioManager): String {
-        return when {
-            am.isBluetoothA2dpOn -> ROUTE_BLUETOOTH
-            am.isWiredHeadsetOn -> ROUTE_WIRED
-            else -> ROUTE_SPEAKER
-        }
-    }
-
-    @RequiresApi(Build.VERSION_CODES.M)
-    private fun classifyDevice(device: AudioDeviceInfo): String {
-        return when (device.type) {
-            AudioDeviceInfo.TYPE_BUILTIN_SPEAKER,
-            AudioDeviceInfo.TYPE_BUILTIN_EARPIECE,
-            AudioDeviceInfo.TYPE_TELEPHONY -> ROUTE_SPEAKER
-
-            AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
-            AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> ROUTE_BLUETOOTH
-
-            AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
-            AudioDeviceInfo.TYPE_WIRED_HEADSET,
-            AudioDeviceInfo.TYPE_LINE_ANALOG,
-            AudioDeviceInfo.TYPE_LINE_DIGITAL,
-            AudioDeviceInfo.TYPE_AUX_LINE,
-            AudioDeviceInfo.TYPE_HDMI,
-            AudioDeviceInfo.TYPE_DOCK,
-            AudioDeviceInfo.TYPE_FM,
-            AudioDeviceInfo.TYPE_FM_TUNER,
-            AudioDeviceInfo.TYPE_TV_TUNER -> ROUTE_WIRED
-
-            AudioDeviceInfo.TYPE_USB_HEADSET,
-            AudioDeviceInfo.TYPE_USB_ACCESSORY,
-            AudioDeviceInfo.TYPE_USB_DEVICE -> ROUTE_USB
-
-            else -> {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    val type = device.type
-                    if (type == 26 || type == 27) { // BLE_HEADSET, BLE_SPEAKER
-                        return ROUTE_BLUETOOTH
-                    }
-                }
-                ROUTE_UNKNOWN
-            }
-        }
-    }
+    fun detectCurrentRoute(): String = detectRoute(audioManager)
 
     fun getMaxVolumeForRoute(route: String): Int {
         return if (ROUTE_SPEAKER == route) 100 else 200
     }
 
-    fun isOnSpeaker(): Boolean = ROUTE_SPEAKER == detectCurrentRoute()
 
     // =========================================================================
     // LISTENERS & EVENT HANDLING

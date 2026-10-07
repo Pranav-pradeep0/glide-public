@@ -17,8 +17,7 @@ import { SystemBars } from 'react-native-edge-to-edge';
 import type { PlayerResizeMode } from '@/components/VideoPlayer/GlidePlayer';
 
 // Native Modules
-const { DisplayBrightnessModule, AudioControlModule } = NativeModules;
-const BrightnessModule = DisplayBrightnessModule || AudioControlModule;
+const { DisplayBrightnessModule: BrightnessModule } = NativeModules;
 
 import { finishCurrentActivity, usePipModeListener } from '@/native/PipModule';
 
@@ -561,8 +560,7 @@ export default function VideoPlayerScreen({ route }: Props) {
     // ========================================================================
 
     const handleGoBack = useCallback(() => {
-        const BrightnessMod = NativeModules.DisplayBrightnessModule || NativeModules.AudioControlModule;
-        BrightnessMod?.resetBrightnessSync?.();
+        BrightnessModule?.resetBrightnessSync?.();
         forceSave();
         player.stop();
         VideoOrientationService.release();
@@ -1137,8 +1135,7 @@ export default function VideoPlayerScreen({ route }: Props) {
     // Cleanup on unmount
     useEffect(() => {
         return () => {
-            const BrightnessMod = NativeModules.DisplayBrightnessModule || NativeModules.AudioControlModule;
-            BrightnessMod?.resetBrightnessSync?.();
+            BrightnessModule?.resetBrightnessSync?.();
             player.videoRef.current?.stopPlayer();
             const isNetwork = NavigationService.isNetworkStream(videoPath);
             if (!isNetwork) {
