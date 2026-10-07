@@ -444,67 +444,62 @@ class SubtitleSyncModule(context: ReactApplicationContext) : ReactContextBaseJav
     }
 
     /**
-     * Enumerates embedded subtitle tracks in [videoPath] using Media3 MetadataRetriever with MediaExtractor fallback.
+     * Embedded subtitle tracks, in the player's own ordinal order (same Media3 extractor), with
+     * the container's default and forced flags. Reads only the file header.
      */
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     @ReactMethod
     fun getSubtitleTracks(videoPath: String, promise: Promise) {
         thread(name = "subtitle-tracks") {
-            val context = reactApplicationContext
-            val uri = Uri.parse(videoPath)
-            var pfd: ParcelFileDescriptor? = null
-            val extractor = MediaExtractor()
-
             try {
-                if (videoPath.startsWith("content://")) {
-                    pfd = context.contentResolver.openFileDescriptor(uri, "r")
-                    if (pfd != null) {
-                        extractor.setDataSource(pfd.fileDescriptor)
-                    } else {
-                        extractor.setDataSource(context, uri, null)
-                    }
-                } else {
-                    val cleanPath = if (videoPath.startsWith("file://")) uri.path ?: videoPath.removePrefix("file://") else videoPath
-                    extractor.setDataSource(cleanPath)
-                }
-
-                val tracksArray = Arguments.createArray()
-                var subIndex = 0
-                for (i in 0 until extractor.trackCount) {
-                    val format = extractor.getTrackFormat(i)
-                    val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
-                    if (mime.startsWith("text/") || mime.startsWith("application/") ||
-                        mime.contains("sub") || mime.contains("pgs") || mime.contains("tx3g")) {
-                        val lang = if (format.containsKey(MediaFormat.KEY_LANGUAGE)) format.getString(MediaFormat.KEY_LANGUAGE) ?: "und" else "und"
-                        val isBitmap = mime.contains("pgs") || mime.contains("vobsub") || mime.contains("dvd")
-                        val codec = when {
-                            mime.contains("subrip") || mime.contains("srt") -> "srt"
-                            mime.contains("pgs") -> "pgs"
-                            mime.contains("ssa") || mime.contains("ass") -> "ass"
-                            mime.contains("vtt") -> "webvtt"
-                            mime.contains("tx3g") || mime.contains("quicktime") -> "mov_text"
-                            else -> mime.substringAfterLast("/")
-                        }
-                        val title = if (lang != "und") lang else "Subtitle ${subIndex + 1}"
-                        val trackMap = Arguments.createMap().apply {
-                            putInt("index", subIndex)
-                            putString("codec", codec)
+                val uri = EmbeddedSubtitles.toUri(videoPath)
+                val tracks = Arguments.createArray()
+                if (!EmbeddedSubtitles.isNetwork(uri)) {
+                    for (t in EmbeddedSubtitles.listTracks(reactApplicationContext, uri)) {
+                        val lang = t.language
+                        tracks.pushMap(Arguments.createMap().apply {
+                            putInt("index", t.ordinal)
+                            putString("codec", t.codec)
                             putString("language", lang)
-                            putString("title", title)
-                            putBoolean("isDefault", false)
-                            putBoolean("isForced", false)
-                            putBoolean("isBitmap", isBitmap)
-                        }
-                        tracksArray.pushMap(trackMap)
-                        subIndex++
+                            putString("title", t.label ?: if (lang != "und") lang else "Subtitle ${t.ordinal + 1}")
+                            putBoolean("isDefault", t.isDefault)
+                            putBoolean("isForced", t.isForced)
+                            putBoolean("isBitmap", t.isBitmap)
+                        })
                     }
                 }
-                promise.resolve(tracksArray)
-            } catch (e: Throwable) {
+                promise.resolve(tracks)
+            } catch (t: Throwable) {
                 promise.resolve(Arguments.createArray())
-            } finally {
-                try { extractor.release() } catch (_: Throwable) {}
-                try { pfd?.close() } catch (_: Throwable) {}
             }
         }
     }
+
+    /**
+     * Writes embedded text subtitle track [ordinal] to an SRT file in the cache and resolves
+     * its path, or null when the track has no text cues (bitmap, unsupported, empty) or the
+     * video is a network stream (this reads the whole file). Replaces ffmpeg-kit's extraction;
+     * the file name matches what SubtitleExtractor.cleanupSubtitleFiles sweeps.
+     */
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    @ReactMethod
+    fun extractSubtitle(videoPath: String, ordinal: Int, promise: Promise) {
+        thread(name = "subtitle-extract") {
+            try {
+                val uri = EmbeddedSubtitles.toUri(videoPath)
+                val srt = if (EmbeddedSubtitles.isNetwork(uri)) null
+                    else EmbeddedSubtitles.extractSrt(reactApplicationContext, uri, ordinal)
+                if (srt == null) {
+                    promise.resolve(null)
+                    return@thread
+                }
+                val file = File(reactApplicationContext.cacheDir, "subtitle_${System.nanoTime()}.srt")
+                file.writeText(srt)
+                promise.resolve(file.absolutePath)
+            } catch (t: Throwable) {
+                promise.reject("E_EXTRACT_SUBTITLE", t.message ?: "Subtitle extraction failed", t)
+            }
+        }
+    }
+
 }

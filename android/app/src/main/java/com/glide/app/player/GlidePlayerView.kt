@@ -14,6 +14,7 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
@@ -998,7 +999,10 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
         val subTrackArray = Arguments.createArray()
         textTracks.forEachIndexed { id, (group, index) ->
             val format = group.getFormat(index)
-            val mime = format.sampleMimeType ?: ""
+            // Subtitles parsed during extraction all report media3-cues; the container's own
+            // mime is kept in codecs. Without this a PGS track read as text.
+            val mime = (if (format.sampleMimeType == MimeTypes.APPLICATION_MEDIA3_CUES) format.codecs
+                else format.sampleMimeType).orEmpty()
             val isBitmap = mime.contains("pgs") || mime.contains("vobsub") || mime.contains("dvd")
             val codec = when {
                 mime.contains("subrip") || mime.contains("srt") -> "srt"
@@ -1018,6 +1022,9 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
                 putString("language", lang)
                 putString("codec", codec)
                 putBoolean("isBitmap", isBitmap)
+                // Automatic subtitle choice prefers the default track and avoids forced-only ones.
+                putBoolean("isDefault", format.selectionFlags and C.SELECTION_FLAG_DEFAULT != 0)
+                putBoolean("isForced", format.selectionFlags and C.SELECTION_FLAG_FORCED != 0)
             })
         }
         info.putArray("subtitleTracks", subTrackArray)

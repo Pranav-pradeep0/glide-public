@@ -64,15 +64,24 @@ export class SubtitleExtractor {
     }
 
     /**
-     * Extract subtitle track to file.
-     * Note: FFmpegKit has been retired. Player uses native subtitle rendering directly.
+     * Extract an embedded text subtitle track to an SRT file in the cache, returning its path.
+     * `subtitleIndex` is the track's ordinal among the file's subtitle tracks, as
+     * getSubtitleTracks and the player both number them. Null for bitmap or empty tracks.
      */
     static async extractSubtitle(
-        _videoPath: string,
-        _subtitleIndex: number,
-        _outputFormat: 'srt' | 'vtt' | 'ass' = 'srt'
+        videoPath: string,
+        subtitleIndex: number,
+        _outputFormat: 'srt' = 'srt'
     ): Promise<string | null> {
-        return null;
+        if (Platform.OS !== 'android' || !NativeModules.SubtitleSyncModule?.extractSubtitle) {
+            return null;
+        }
+        try {
+            return await NativeModules.SubtitleSyncModule.extractSubtitle(videoPath, subtitleIndex);
+        } catch (error) {
+            console.error(`${LOG_PREFIX} [extractSubtitle] failed`, error);
+            return null;
+        }
     }
 
     /**
