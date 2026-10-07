@@ -84,6 +84,14 @@ class GlidePlayerViewManager : SimpleViewManager<GlidePlayerView>() {
     fun setAudioEqualizer(view: GlidePlayerView, bands: ReadableArray?) =
         view.setAudioEqualizer(bands)
 
+    /** 100..200; above 100 is gain on top of a maxed system stream. */
+    @ReactProp(name = "volumeBoost", defaultInt = 100)
+    fun setVolumeBoost(view: GlidePlayerView, percent: Int) = view.setVolumeBoost(percent)
+
+    /** Milliseconds; positive plays the audio later. */
+    @ReactProp(name = "audioDelay", defaultInt = 0)
+    fun setAudioDelay(view: GlidePlayerView, ms: Int) = view.setAudioDelay(ms)
+
     @ReactProp(name = "videoEnhancement", defaultBoolean = false)
     fun setVideoEnhancement(view: GlidePlayerView, enabled: Boolean) =
         view.setVideoEnhancement(enabled)

@@ -52,6 +52,8 @@ interface AnimatedVideoViewProps {
 
     // Audio
     audioEqualizer?: number[];
+    /** Milliseconds; positive plays the audio later. */
+    audioDelay?: number;
 
     /**
      * Where to begin playback on the first mount, in seconds, from watch history.
@@ -98,6 +100,7 @@ const AnimatedVideoView = forwardRef<GlidePlayerRef, AnimatedVideoViewProps>(
             title,
             artist,
             audioEqualizer,
+            audioDelay,
             initialResumeSeconds,
             animatedStyle,
             onLoad,
@@ -157,6 +160,7 @@ const AnimatedVideoView = forwardRef<GlidePlayerRef, AnimatedVideoViewProps>(
                     title={title}
                     artist={artist}
                     audioEqualizer={audioEqualizer}
+                    audioDelay={audioDelay}
                     videoEnhancement={videoEnhancement}
                     videoEnhancementStrength={videoEnhancementStrength}
                     onLoad={onLoad}

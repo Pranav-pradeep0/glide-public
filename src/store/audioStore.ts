@@ -49,6 +49,14 @@ try {
 const safeInitialIndex = initialQueue.length > 0 ? Math.max(0, Math.min(initialPlayback.currentIndex, initialQueue.length - 1)) : 0;
 const initialTrack = initialQueue.length > 0 ? initialQueue[safeInitialIndex] : null;
 
+/** Where native's playing track sits in our queue: by id, with native's index as the tiebreak. */
+export function resolveQueueIndex(queue: AudioTrack[], nativeIndex: number, trackId?: string): number {
+    if (!trackId) { return nativeIndex; }
+    if (queue[nativeIndex]?.id === trackId) { return nativeIndex; }
+    const found = queue.findIndex(t => t.id === trackId);
+    return found >= 0 ? found : nativeIndex;
+}
+
 function persistQueue(queue: AudioTrack[]) {
     try {
         mmkv.set(QUEUE_KEY, JSON.stringify(queue));
@@ -604,10 +612,13 @@ export const useAudioStore = create<AudioStoreState>((set, get) => ({
 
     _setTrackChanged: (data) => {
         const { queue, currentTrack } = get();
-        const nextIndex = data.currentIndex;
+        // Native's index is only a hint: after a failed queue call or an error auto-skip the
+        // two queues can disagree, and indexing would show the wrong song. The id is what is
+        // actually playing; the index only breaks ties when a song is queued twice.
+        const nextIndex = resolveQueueIndex(queue, data.currentIndex, data.trackId);
         if (nextIndex >= 0 && nextIndex < queue.length) {
             const nextTrack = queue[nextIndex];
-            const hasTrackChanged = data.trackId ? data.trackId !== currentTrack?.id : nextTrack.id !== currentTrack?.id;
+            const hasTrackChanged = nextTrack.id !== currentTrack?.id;
 
             set((prev) => ({
                 currentIndex: nextIndex,

@@ -208,6 +208,19 @@ describe('Audio Player Utilities and Store', () => {
             expect(useAudioStore.getState().position).toBe(0);
         });
 
+        it('shows the song native is playing even when its index disagrees', () => {
+            useAudioStore.setState({
+                queue: [dummyTrack1, dummyTrack2],
+                currentIndex: 0,
+                currentTrack: dummyTrack1,
+            });
+
+            // Native auto-skipped past an unplayable item, so its queue is one shorter
+            useAudioStore.getState()._setTrackChanged({ currentIndex: 0, trackId: dummyTrack2.id });
+            expect(useAudioStore.getState().currentTrack?.id).toBe(dummyTrack2.id);
+            expect(useAudioStore.getState().currentIndex).toBe(1);
+        });
+
         it('passes equalizer bands and settings to native setQueue', async () => {
             await useAudioStore.getState().setEqualizerPreset('rock');
             await useAudioStore.getState().playQueue([dummyTrack1], 0);

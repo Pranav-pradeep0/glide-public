@@ -50,7 +50,7 @@ import {
     usePlayerTracks,
     usePlayerBookmarks,
     usePlayerSettings,
-    useShakeControl,
+    ShakeDetector,
     formatTime,
     PLAYER_CONSTANTS,
 } from '@/hooks/video-player';
@@ -858,15 +858,11 @@ export default function VideoPlayerScreen({ route }: Props) {
         isNetworkStream,
     ]);
 
-    useShakeControl({
-        enabled: shakeEnabled,
-        onShake: handleShakeAction,
-        shakeThreshold: settings.shakeThreshold,
-        isLocked: ui.state.locked,
-        isSeeking: player.state.isSeeking,
-        isInPip: isInPipMode,
-        isQuickSettingsOpen: ui.state.quickSettingsOpen,
-    });
+    // Leaving the screen inside the autoplay delay must not navigate to the next video afterwards.
+    const autoPlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    useEffect(() => () => {
+        if (autoPlayTimerRef.current) { clearTimeout(autoPlayTimerRef.current); }
+    }, []);
 
     const handleVideoEnd = useCallback(() => {
         // Always call default player end handler to ensure clean state
@@ -874,7 +870,9 @@ export default function VideoPlayerScreen({ route }: Props) {
 
         // Check for auto-play
         // Delay slightly to let player state settle and ensure smooth transition
-        setTimeout(() => {
+        if (autoPlayTimerRef.current) { clearTimeout(autoPlayTimerRef.current); }
+        autoPlayTimerRef.current = setTimeout(() => {
+            autoPlayTimerRef.current = null;
             if (settings.autoPlayNext && hasNext) {
                 handleNext();
             }
@@ -1255,6 +1253,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                         artist={albumName || 'Glide'}
                         animatedStyle={gestures.videoAnimatedStyle}
                         audioEqualizer={settingsHook.audioEqualizer}
+                        audioDelay={settingsHook.settings.audioDelay}
                         initialResumeSeconds={resumePosition ?? undefined}
                         onLoad={player.handleLoad}
                         onProgress={player.handleProgress}
@@ -1270,6 +1269,17 @@ export default function VideoPlayerScreen({ route }: Props) {
             </GestureDetector>
 
 
+
+            {shakeEnabled && (
+                <ShakeDetector
+                    onShake={handleShakeAction}
+                    shakeThreshold={settings.shakeThreshold}
+                    isLocked={ui.state.locked}
+                    isSeeking={player.state.isSeeking}
+                    isInPip={isInPipMode}
+                    isQuickSettingsOpen={ui.state.quickSettingsOpen}
+                />
+            )}
 
             {/* Floating Sync Panel */}
             {!pipPresentationActive && syncPanelType && (

@@ -2,6 +2,7 @@ package com.glide.app.player
 
 import android.graphics.Bitmap
 import android.media.audiofx.Equalizer
+import android.media.audiofx.LoudnessEnhancer
 import android.os.Handler
 import android.os.Looper
 import android.util.Base64
@@ -25,6 +26,8 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.LifecycleEventListener
 import com.facebook.react.bridge.ReadableArray
@@ -35,6 +38,7 @@ import com.facebook.react.uimanager.UIManagerHelper
 import com.facebook.react.uimanager.events.Event
 import java.io.ByteArrayOutputStream
 import kotlin.math.abs
+import kotlin.math.log10
 import kotlin.math.roundToLong
 
 /**
@@ -47,7 +51,7 @@ import kotlin.math.roundToLong
  * Subtitles are split on purpose: bitmap cues (PGS/VobSub) come from ExoPlayer through
  * onCues and are drawn by the JS overlay, while text cues stay on the ffmpeg extraction
  * path because haptics and negative subtitle delay both need the whole cue list upfront.
- * Audio delay is dropped (D1).
+ * Audio delay is an AudioDelayProcessor in the sink (D1 revisited: users asked for it).
  *
  * What is *not* here is the point. There is no audio-focus subsystem (ExoPlayer owns it),
  * no start-time resolver (setMediaItem takes an offset), no seek verifier or settle window
@@ -79,6 +83,10 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
     private var videoArtist: String? = null
     private var equalizerBands: FloatArray? = null
     private var equalizer: Equalizer? = null
+    private var volumeBoostPercent = 100
+    private var loudnessEnhancer: LoudnessEnhancer? = null
+    private var audioDelayMs = 0
+    private var audioDelayProcessor: AudioDelayProcessor? = null
 
     // Bridge-level duplicate filter, matching ReactVlcPlayerView.shouldSkipSeek: JS sets the
     // prop to a fraction and then back to -1, and React re-sends an unchanged prop on
@@ -398,6 +406,41 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
         applyEqualizer()
     }
 
+    /**
+     * Volume above 100%, for when the system stream is already at max. JS caps it at 100 on
+     * the speaker; on headphones it goes to 200, which LoudnessEnhancer reaches as gain with
+     * its own limiter rather than clipping samples.
+     */
+    fun setVolumeBoost(percent: Int) {
+        volumeBoostPercent = percent.coerceIn(100, 200)
+        applyVolumeBoost()
+    }
+
+    private fun applyVolumeBoost() {
+        if (volumeBoostPercent <= 100) {
+            loudnessEnhancer?.release()
+            loudnessEnhancer = null
+            return
+        }
+        val sessionId = player?.audioSessionId ?: C.AUDIO_SESSION_ID_UNSET
+        if (sessionId == C.AUDIO_SESSION_ID_UNSET) return
+        try {
+            val enhancer = loudnessEnhancer ?: LoudnessEnhancer(sessionId).also { loudnessEnhancer = it }
+            // Amplitude ratio to millibels: 150% is +3.5 dB, 200% is +6 dB.
+            enhancer.setTargetGain((2000 * log10(volumeBoostPercent / 100.0)).toInt())
+            enhancer.enabled = true
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "volume boost unavailable: ${e.message}")
+            loudnessEnhancer = null
+        }
+    }
+
+    /** Milliseconds; positive plays the audio later. Live, no re-open. */
+    fun setAudioDelay(ms: Int) {
+        audioDelayMs = ms
+        audioDelayProcessor?.delayMs = ms
+    }
+
     private fun applyEqualizer() {
         val bands = equalizerBands
         if (bands == null) {
@@ -567,8 +610,19 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
         // MODE_ON keeps platform decoders first and falls back to the FFmpeg extension only
         // where the device has none. On the test device that is every one of AC-3, E-AC-3,
         // DTS and TrueHD, which otherwise select no track and play silently with no error.
-        val renderers = DefaultRenderersFactory(context)
-            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+        val delayProcessor = AudioDelayProcessor().also { it.delayMs = audioDelayMs }
+        audioDelayProcessor = delayProcessor
+        val renderers = object : DefaultRenderersFactory(context) {
+            override fun buildAudioSink(
+                context: android.content.Context,
+                enableFloatOutput: Boolean,
+                enableAudioOutputPlaybackParams: Boolean,
+            ): AudioSink = DefaultAudioSink.Builder(context)
+                .setEnableFloatOutput(enableFloatOutput)
+                .setEnableAudioOutputPlaybackParameters(enableAudioOutputPlaybackParams)
+                .setAudioProcessors(arrayOf(delayProcessor))
+                .build()
+        }.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
 
         val p = ExoPlayer.Builder(context, renderers)
             // The entire audio-focus subsystem of the VLC view is this one argument. With
@@ -583,6 +637,7 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
                 /* handleAudioFocus = */ true
             )
             .setHandleAudioBecomingNoisy(true)
+            .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
 
         player = p
@@ -638,6 +693,9 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
         progressHandler.removeCallbacks(progressTick)
         equalizer?.release()
         equalizer = null
+        loudnessEnhancer?.release()
+        loudnessEnhancer = null
+        audioDelayProcessor = null
         player?.let {
             // Before release, never after: the session must not be left holding a released
             // player. That is the defect class the VLC adapter kept producing.
@@ -724,6 +782,9 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
             equalizer?.release()
             equalizer = null
             applyEqualizer()
+            loudnessEnhancer?.release()
+            loudnessEnhancer = null
+            applyVolumeBoost()
         }
 
         override fun onTracksChanged(tracks: Tracks) {

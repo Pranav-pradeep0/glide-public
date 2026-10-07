@@ -1,10 +1,7 @@
 package com.glide.app;
 
-import android.content.BroadcastReceiver;
 import android.content.ContentResolver;
 import android.content.Context;
-import android.content.Intent;
-import android.content.IntentFilter;
 import android.database.ContentObserver;
 import android.media.AudioDeviceCallback;
 import android.media.AudioDeviceInfo;
@@ -97,7 +94,6 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
 
     // Brightness constants
     private static final float BRIGHTNESS_RELEASE_VALUE = -1.0f;
-    private static final int SYSTEM_BRIGHTNESS_MAX = 255;
 
     // React Native context and system services
     private final ReactApplicationContext reactContext;
@@ -142,7 +138,6 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
     // Observers and callbacks
     private ContentObserver volumeObserver;
     private AudioDeviceCallback audioDeviceCallback;
-    private BroadcastReceiver noisyAudioReceiver;
 
     // Static instance for MainActivity access
     private static volatile AudioControlModule sInstance;
@@ -226,7 +221,7 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
      * </p>
      * <ul>
      * <li>0-100: System volume only</li>
-     * <li>101-200: System at max + VLC boost (handled by caller)</li>
+     * <li>101-200: System at max + the player's LoudnessEnhancer (handled by caller)</li>
      * </ul>
      * 
      * <p>
@@ -558,7 +553,6 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
      * <li>Caches system brightness (automatic)</li>
      * <li>Registers volume observer for hardware button detection</li>
      * <li>Registers audio device callback for route change detection</li>
-     * <li>Registers noisy audio receiver for headphone disconnect</li>
      * </ul>
      */
     @ReactMethod
@@ -579,7 +573,6 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
         // Register observers
         registerVolumeObserver();
         registerAudioDeviceCallback();
-        registerNoisyAudioReceiver();
     }
 
     /**
@@ -611,7 +604,6 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
         cancelPendingAudioCallbacks();
         unregisterVolumeObserver();
         unregisterAudioDeviceCallback();
-        unregisterNoisyAudioReceiver();
 
         // AUTOMATIC BRIGHTNESS RELEASE
         // We release control back to system by setting window brightness to -1.0
@@ -686,6 +678,12 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
         }
     }
 
+    private int getSystemVolumePercentage() {
+        int currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+        int maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+        return maxVolume > 0 ? Math.round((currentVolume / (float) maxVolume) * 100) : 0;
+    }
+
     /**
      * Handles hardware volume button changes.
      */
@@ -696,9 +694,7 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
 
         try {
             long now = System.currentTimeMillis();
-            int currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
-            int maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
-            int percentage = maxVolume > 0 ? Math.round((currentVolume / (float) maxVolume) * 100) : 0;
+            int percentage = getSystemVolumePercentage();
 
             if (percentage == lastEmittedVolumePercentage
                     && (now - lastEmittedVolumeEventTime) < DUPLICATE_VOLUME_EVENT_DEBOUNCE_MS) {
@@ -827,72 +823,12 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
                 params.putString("route", newRoute);
                 params.putString("previousRoute", previousRoute);
                 params.putInt("maxVolume", newMaxVolume);
+                params.putInt("volume", getSystemVolumePercentage());
 
                 sendEvent(EVENT_ROUTE_CHANGE, params);
             }
         };
         mainHandler.postDelayed(pendingRouteChange, ROUTE_CHANGE_DEBOUNCE_MS);
-    }
-
-    /**
-     * Registers broadcast receiver for headphone disconnect detection.
-     */
-    private void registerNoisyAudioReceiver() {
-        if (noisyAudioReceiver != null) {
-            return;
-        }
-
-        try {
-            noisyAudioReceiver = new BroadcastReceiver() {
-                @Override
-                public void onReceive(Context context, Intent intent) {
-                    if (AudioManager.ACTION_AUDIO_BECOMING_NOISY.equals(intent.getAction())) {
-                        handleAudioBecomingNoisy();
-                    }
-                }
-            };
-
-            IntentFilter filter = new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY);
-            reactContext.registerReceiver(noisyAudioReceiver, filter);
-            Log.d(TAG, "Noisy audio receiver registered");
-        } catch (Exception e) {
-            Log.e(TAG, "Error registering noisy audio receiver", e);
-        }
-    }
-
-    /**
-     * Handles audio becoming noisy (headphones disconnected).
-     */
-    private void handleAudioBecomingNoisy() {
-        String previousRoute = currentRoute;
-        currentRoute = ROUTE_SPEAKER;
-        currentMaxVolume = 100;
-
-        Log.i(TAG, "Audio becoming noisy: " + previousRoute + " -> " + ROUTE_SPEAKER);
-
-        if (!currentRoute.equals(previousRoute)) {
-            WritableMap params = Arguments.createMap();
-            params.putString("route", currentRoute);
-            params.putString("previousRoute", previousRoute);
-            params.putInt("maxVolume", currentMaxVolume);
-
-            sendEvent(EVENT_ROUTE_CHANGE, params);
-        }
-    }
-
-    /**
-     * Unregisters noisy audio receiver.
-     */
-    private void unregisterNoisyAudioReceiver() {
-        if (noisyAudioReceiver != null) {
-            try {
-                reactContext.unregisterReceiver(noisyAudioReceiver);
-                noisyAudioReceiver = null;
-                Log.d(TAG, "Noisy audio receiver unregistered");
-            } catch (Exception e) {
-                Log.e(TAG, "Error unregistering noisy audio receiver", e);
-            }
-        }
     }
 
     /**
@@ -914,31 +850,39 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
     }
 
     // =========================================================================
-    // MAINACTIVITY INTEGRATION
+    // ACTIVITY INTEGRATION
     // =========================================================================
 
     /**
-     * Checks if module is actively listening (video player is open).
-     * 
-     * <p>
-     * Called by MainActivity to determine whether to intercept volume keys.
-     * </p>
-     * 
-     * @return true if listening, false otherwise
+     * Steps the music stream silently and reports it to JS, so the player's own volume HUD
+     * shows instead of the system one. Shared by every Activity that hosts the player --
+     * MainActivity and VideoPlayerActivity (videos opened from other apps).
+     *
+     * @return true if the key was consumed
      */
-    public boolean isListeningForVolumeChanges() {
-        return isListening;
-    }
-
-    /**
-     * Emits a hardware volume change event to React Native.
-     * 
-     * <p>
-     * Called by MainActivity after intercepting and handling a volume key press.
-     * </p>
-     */
-    public void emitHardwareVolumeChange() {
-        handleHardwareVolumeChange();
+    public boolean handleVolumeKey(int keyCode) {
+        if (keyCode != android.view.KeyEvent.KEYCODE_VOLUME_UP
+                && keyCode != android.view.KeyEvent.KEYCODE_VOLUME_DOWN) {
+            return false;
+        }
+        // Only while the video player is open and listening.
+        if (!isListening || audioManager == null) {
+            return false;
+        }
+        try {
+            int maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+            int currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+            int step = Math.max(1, maxVolume / 15);
+            int newVolume = keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP
+                    ? Math.min(currentVolume + step, maxVolume)
+                    : Math.max(currentVolume - step, 0);
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, newVolume, 0);
+            handleHardwareVolumeChange();
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "Volume key handling failed", e);
+            return false;
+        }
     }
 
     // =========================================================================
@@ -950,7 +894,7 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
         Log.d(TAG, "onHostResume");
 
         if (isListening && shouldRestoreBrightness && lastRequestedBrightness >= 0f) {
-            applyBrightness(lastRequestedBrightness, false, null, false);
+            applyBrightness(lastRequestedBrightness, false, null);
         }
     }
 
@@ -988,44 +932,13 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
     // =========================================================================
 
     /**
-     * Checks if the app has permission to write system settings.
-     * 
-     * @param promise Promise resolving to boolean
-     */
-    @ReactMethod
-    public void hasWriteSettingsPermission(Promise promise) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            promise.resolve(Settings.System.canWrite(reactContext));
-        } else {
-            promise.resolve(true); // Permission not required before Android M
-        }
-    }
-
-    /**
-     * Opens the system settings screen to grant WRITE_SETTINGS permission.
-     */
-    @ReactMethod
-    public void requestWriteSettingsPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            Intent intent = new Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS);
-            intent.setData(android.net.Uri.parse("package:" + reactContext.getPackageName()));
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            reactContext.startActivity(intent);
-        }
-    }
-
-    /**
      * Sets app brightness (0.0 to 1.0).
      * 
      * <p>
-     * <b>Hybrid Strategy:</b>
+     * Window brightness only. Writing the global system setting outlived the player:
+     * releasing the window value cannot undo it, so the phone stayed at the video's level.
+     * Android 15+ also gets HDR headroom control to prevent UI blowout.
      * </p>
-     * <ul>
-     * <li>If WRITE_SETTINGS granted: Updates system brightness directly (iQOO/MIUI
-     * fix)</li>
-     * <li>Fallback: Updates current activity window brightness</li>
-     * <li>Android 15+: Applies HDR headroom control to prevent UI blowout</li>
-     * </ul>
      * 
      * @param brightness Brightness level (0.0 = black, 1.0 = full)
      * @param promise    Promise resolving to the set brightness value
@@ -1035,7 +948,7 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
         final float finalBrightness = Math.max(0f, Math.min(1f, brightness));
         shouldRestoreBrightness = true;
         lastRequestedBrightness = finalBrightness;
-        applyBrightness(finalBrightness, true, promise, true);
+        applyBrightness(finalBrightness, true, promise);
     }
 
     /**
@@ -1058,7 +971,7 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
         final float finalBrightness = Math.max(0f, Math.min(1f, brightness));
         shouldRestoreBrightness = true;
         lastRequestedBrightness = finalBrightness;
-        applyBrightness(finalBrightness, false, null, false);
+        applyBrightness(finalBrightness, false, null);
     }
 
     /**
@@ -1159,25 +1072,9 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
         });
     }
 
-    private void applyBrightness(float brightness, boolean logFailures, @Nullable Promise promise, boolean allowSystemUpdate) {
+    private void applyBrightness(float brightness, boolean logFailures, @Nullable Promise promise) {
         final float finalBrightness = Math.max(0f, Math.min(1f, brightness));
         android.app.Activity activity = getCurrentActivity();
-
-        boolean systemUpdated = false;
-        if (allowSystemUpdate && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.System.canWrite(reactContext)) {
-            try {
-                int systemValue = Math.round(finalBrightness * SYSTEM_BRIGHTNESS_MAX);
-                Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, systemValue);
-                systemUpdated = true;
-                if (logFailures) {
-                    Log.d(TAG, "System brightness updated to: " + systemValue);
-                }
-            } catch (Exception e) {
-                if (logFailures) {
-                    Log.w(TAG, "Failed to update system brightness despite permission", e);
-                }
-            }
-        }
 
         if (activity == null) {
             if (promise != null) {
@@ -1186,7 +1083,6 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
             return;
         }
 
-        final boolean finalSystemUpdated = systemUpdated;
         activity.runOnUiThread(() -> {
             try {
                 android.view.Window window = activity.getWindow();
@@ -1196,7 +1092,7 @@ public class AudioControlModule extends ReactContextBaseJavaModule implements Li
                     params.setDesiredHdrHeadroom(1.0f);
                 }
 
-                params.screenBrightness = finalSystemUpdated ? BRIGHTNESS_RELEASE_VALUE : finalBrightness;
+                params.screenBrightness = finalBrightness;
                 window.setAttributes(params);
 
                 if (logFailures) {

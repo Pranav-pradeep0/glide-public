@@ -78,4 +78,14 @@ export function useShakeControl(options: UseShakeControlOptions) {
     });
 }
 
+/**
+ * The hook as a component, so the accelerometer only exists while it is mounted:
+ * `useAnimatedSensor` registers the sensor for the caller's whole lifetime regardless of
+ * `enabled`. Render it as `{enabled && <ShakeDetector ... />}`.
+ */
+export function ShakeDetector(props: Omit<UseShakeControlOptions, 'enabled'>) {
+    useShakeControl({ ...props, enabled: true });
+    return null;
+}
+
 export default useShakeControl;

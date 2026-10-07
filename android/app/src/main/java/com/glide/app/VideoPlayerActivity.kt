@@ -148,4 +148,9 @@ class VideoPlayerActivity : ReactActivity() {
       android.util.Log.w("VideoPlayerActivity", "Failed to notify PIP state change: ${e.message}")
     }
   }
+
+  /** Hardware volume keys drive the player's own HUD, same as in MainActivity. */
+  override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean =
+      AudioControlModule.getInstance()?.handleVolumeKey(keyCode) == true ||
+          super.onKeyDown(keyCode, event)
 }

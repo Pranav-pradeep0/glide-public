@@ -62,6 +62,8 @@ export interface GlidePlayerRef {
     previewSeek: (fraction: number) => void;
     stopPlayer: () => void;
     enterPictureInPicture: () => void;
+    /** 100..200. Above 100 is gain on top of a maxed system stream; set imperatively so gestures stay smooth. */
+    setVolume: (percent: number) => void;
 }
 
 export interface GlidePlayerProps extends ViewProps {
@@ -79,6 +81,8 @@ export interface GlidePlayerProps extends ViewProps {
     title?: string;
     artist?: string;
     audioEqualizer?: number[];
+    /** Milliseconds; positive plays the audio later. */
+    audioDelay?: number;
     videoEnhancement?: boolean;
     /** 0..1.5, 1 = the tuned look. Live; only the toggle re-opens the media. */
     videoEnhancementStrength?: number;
@@ -126,6 +130,7 @@ const GlidePlayer = forwardRef<GlidePlayerRef, GlidePlayerProps>((props, ref) =>
             setNativeProps({ previewSeek: fraction });
             setTimeout(() => setNativeProps({ previewSeek: -1 }), 0);
         },
+        setVolume: (percent: number) => setNativeProps({ volumeBoost: Math.round(percent) }),
         stopPlayer: () => dispatchCommand('stopPlayer'),
         enterPictureInPicture: () => dispatchCommand('enterPictureInPicture'),
     }), [setNativeProps, dispatchCommand]);

@@ -17,7 +17,7 @@ import { SUBTITLE_COLORS } from '../utils/constants';
 import { FileService } from '@/services/FileService';
 import { LANGUAGES } from '@/utils/languages';
 import HapticModule from '../native/HapticModule';
-import { useShakeControl } from '../hooks/video-player';
+import { ShakeDetector } from '../hooks/video-player';
 import Feather from '@react-native-vector-icons/feather';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { SharedValue, useSharedValue, useAnimatedStyle } from 'react-native-reanimated';
@@ -38,6 +38,7 @@ import { AppSettings } from '../types';
 import pkg from '../../package.json';
 
 const AnimatedText = Animated.createAnimatedComponent(Text);
+const noop = () => {};
 
 const RESET_LABEL = 'Reset to default';
 
@@ -240,17 +241,11 @@ export default function SettingsScreen() {
         }
     }, [setHapticIntensity]);
 
-    useShakeControl({
-        enabled: shakeTestEnabled,
-        onShake: () => { },
-        onThresholdHit: () => {
-            if (HapticModule) {
-                HapticModule.vibrate(80, 160);
-            }
-        },
-        mode: 'tuning',
-        shakeThreshold: settings.shakeThreshold,
-    });
+    const handleShakeTestHit = useCallback(() => {
+        if (HapticModule) {
+            HapticModule.vibrate(80, 160);
+        }
+    }, []);
 
     function handleClearCache() {
         Alert.alert(
@@ -356,6 +351,14 @@ export default function SettingsScreen() {
 
     return (
         <View style={[styles.flex, { backgroundColor: colors.background }]}>
+            {shakeTestEnabled && (
+                <ShakeDetector
+                    onShake={noop}
+                    onThresholdHit={handleShakeTestHit}
+                    mode="tuning"
+                    shakeThreshold={settings.shakeThreshold}
+                />
+            )}
             <ScrollView
                 contentContainerStyle={[styles.content, { paddingTop: insets.top + metrics.space.lg }]}
                 keyboardShouldPersistTaps="handled"

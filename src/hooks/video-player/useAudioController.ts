@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { NativeModules, DeviceEventEmitter, EmitterSubscription } from 'react-native';
 import { SharedValue, useSharedValue } from 'react-native-reanimated';
+import type { GlidePlayerRef } from '@/components/VideoPlayer/GlidePlayer';
 
 const { AudioControlModule } = NativeModules;
 
@@ -39,26 +40,20 @@ interface UseAudioControllerReturn {
  *
  * Uses the custom AudioControlModule native module for:
  * - System volume control (0-100%)
- * - VLC boost control (100-200%)
  * - Audio route detection
  * - Hardware button listening
+ * and the player's own boost (100-200%, LoudnessEnhancer) on top of a maxed system stream.
  *
- * Designed for smooth gesture-driven volume control.
+ * Android keeps a separate stream volume per output device and switches between them
+ * itself. This hook never remembers a level per route: on a route change it adopts the new
+ * device's own volume and drops any boost, so unplugging headphones at 150% returns the
+ * speaker to wherever the user left it rather than to a level carried over from headphones.
  */
 export function useAudioController(
-    vlcRef: React.RefObject<any>,
+    playerRef: React.RefObject<GlidePlayerRef | null>,
     initialVolume: number = 100,
     onHardwareVolumeChange?: (volume: number) => void
 ): UseAudioControllerReturn {
-    // Volume state per route (session persistence)
-    const [volumePerRoute, setVolumePerRoute] = useState<{ [key: string]: number }>({
-        speaker: 100,
-        bluetooth: 100,
-        wired: 100,
-        usb: 100,
-        unknown: 100,
-    });
-
     const [audioRoute, setAudioRoute] = useState<AudioRoute>({
         type: 'speaker',
         maxVolume: 100,
@@ -77,6 +72,28 @@ export function useAudioController(
     const lastSetVolumeRef = useRef(initialVolume);
     const lastSetTimeRef = useRef(0);
 
+    // Last boost sent to the player, to avoid redundant native calls
+    const lastBoostRef = useRef(100);
+    const audioRouteRef = useRef(audioRoute);
+    audioRouteRef.current = audioRoute;
+    const onHardwareVolumeChangeRef = useRef(onHardwareVolumeChange);
+    onHardwareVolumeChangeRef.current = onHardwareVolumeChange;
+
+    const setBoost = useCallback((percent: number) => {
+        if (percent === lastBoostRef.current) { return; }
+        lastBoostRef.current = percent;
+        playerRef.current?.setVolume(percent);
+    }, [playerRef]);
+
+    /** Adopt a system-reported level (0-100) as the whole volume, with no boost. */
+    const adoptSystemVolume = useCallback((percentage: number) => {
+        currentVolumeShared.value = percentage / 100;
+        setVolumeState(percentage);
+        lastSetVolumeRef.current = percentage;
+        lastSetTimeRef.current = Date.now();
+        setBoost(100);
+    }, [currentVolumeShared, setBoost]);
+
     // Initialize and start listening
     useEffect(() => {
         if (!AudioControlModule) {
@@ -84,7 +101,6 @@ export function useAudioController(
             return;
         }
 
-        // Get initial route and volume
         AudioControlModule.getCurrentRoute().then((result: any) => {
             setAudioRoute({
                 type: result.route as AudioRouteType,
@@ -96,164 +112,103 @@ export function useAudioController(
             const percentage = result.volume;
             currentVolumeShared.value = percentage / 100;
             setVolumeState(percentage);
-
-            // Sync all routes to initial volume
-            setVolumePerRoute({
-                speaker: percentage,
-                bluetooth: percentage,
-                wired: percentage,
-                usb: percentage,
-                unknown: percentage,
-            });
+            lastSetVolumeRef.current = percentage;
         });
 
-        // Start native listeners
         AudioControlModule.startListening();
 
         return () => {
             AudioControlModule.stopListening();
         };
-    }, []);
+    }, [currentVolumeShared]);
 
     // Listen for hardware volume changes (from physical buttons)
     useEffect(() => {
         const subscription: EmitterSubscription = DeviceEventEmitter.addListener(
             'onVolumeChange',
             (event) => {
-                // Ignore if gesture is active
                 if (isGestureActiveRef.current) {
                     return;
                 }
 
                 const { volume: newVolume, fromHardware } = event;
+                if (!fromHardware) { return; }
 
-                if (fromHardware) {
-                    const now = Date.now();
-                    const timeSinceLastSet = now - lastSetTimeRef.current;
+                const now = Date.now();
 
-                    // Ignore events within 300ms of our last set (system quantization feedback)
-                    if (timeSinceLastSet < 300) {
-                        return;
-                    }
-
-                    // Ignore if the value is within 5% of what we last set (quantization)
-                    const diff = Math.abs(newVolume - lastSetVolumeRef.current);
-                    if (diff <= 5) {
-                        return;
-                    }
-
-                    // This is a genuine hardware button press - sync our state
-                    const normalized = newVolume / 100;
-                    currentVolumeShared.value = normalized;
-                    setVolumeState(newVolume);
-                    lastSetVolumeRef.current = newVolume;
-                    lastSetTimeRef.current = now;
-
-                    // Update VLC (hardware changes are 0-100%, so VLC at unity)
-                    if (vlcRef.current?.setVolume) {
-                        vlcRef.current.setVolume(100);
-                        lastVlcVolumeRef.current = 100;
-                    }
-
-                    // Update route history
-                    setVolumePerRoute(prev => ({
-                        ...prev,
-                        [audioRoute.type]: newVolume,
-                    }));
-
-                    // Trigger HUD display via callback
-                    if (onHardwareVolumeChange) {
-                        onHardwareVolumeChange(newVolume);
-                    }
+                // Ignore events within 300ms of our last set (system quantization feedback)
+                if (now - lastSetTimeRef.current < 300) {
+                    return;
                 }
+
+                // Boosted, and the system stream is still at max: a volume-up press (or a
+                // re-report) must not knock the boost back down to 100%.
+                if (newVolume >= 100 && lastSetVolumeRef.current > 100) {
+                    return;
+                }
+
+                // Ignore if the value is within 5% of what we last set (quantization)
+                if (Math.abs(newVolume - lastSetVolumeRef.current) <= 5) {
+                    return;
+                }
+
+                adoptSystemVolume(newVolume);
+                onHardwareVolumeChangeRef.current?.(newVolume);
             }
         );
 
         return () => {
             subscription.remove();
         };
-    }, [audioRoute.type]); // Removed vlcRef and onHardwareVolumeChange (stable or ref-based)
+    }, [adoptSystemVolume]);
 
     // Listen for route changes
     useEffect(() => {
         const subscription: EmitterSubscription = DeviceEventEmitter.addListener(
             'onAudioRouteChange',
             (event) => {
-                const { route, previousRoute, maxVolume } = event;
-                const newRouteType = route as AudioRouteType;
+                const { route, previousRoute, maxVolume, volume: deviceVolume } = event;
 
-                if (__DEV__) {console.log(`[AudioController] Route changed: ${previousRoute} -> ${route} (Max: ${maxVolume})`);}
+                if (__DEV__) {console.log(`[AudioController] Route changed: ${previousRoute} -> ${route} (Max: ${maxVolume}, volume: ${deviceVolume})`);}
 
                 setAudioRoute({
-                    type: newRouteType,
+                    type: route as AudioRouteType,
                     maxVolume: maxVolume,
                 });
 
-                // Get saved volume for this route, clamped to new max
-                setVolumePerRoute(prev => {
-                    const savedVolume = prev[newRouteType] ?? 100;
-                    const targetVolume = Math.min(savedVolume, maxVolume);
-                    const normalized = targetVolume / 100;
-
-                    currentVolumeShared.value = normalized;
-                    setVolumeState(targetVolume);
-
-                    // Apply immediately
-                    AudioControlModule.setVolume(Math.min(targetVolume, 100));
-
-                    if (targetVolume <= 100) {
-                        if (vlcRef.current?.setVolume) {vlcRef.current.setVolume(100);}
-                    } else {
-                        if (vlcRef.current?.setVolume) {vlcRef.current.setVolume(targetVolume);}
-                    }
-
-                    return prev;
-                });
+                // Android has already switched to the new device's own stream volume; take
+                // it as-is. A boost never follows the user onto another device.
+                if (typeof deviceVolume === 'number') {
+                    adoptSystemVolume(deviceVolume);
+                } else {
+                    setBoost(100);
+                    AudioControlModule.getVolume().then((result: any) => adoptSystemVolume(result.volume));
+                }
             }
         );
 
         return () => {
             subscription.remove();
         };
-    }, [vlcRef]);
-
-    // Track last VLC volume to avoid redundant native calls
-    const lastVlcVolumeRef = useRef(100);
-
-    // Refs for stable callback access
-    const audioRouteRef = useRef(audioRoute);
-    const vlcRefInternal = useRef(vlcRef.current);
-
-    useEffect(() => {
-        audioRouteRef.current = audioRoute;
-    }, [audioRoute]);
-
-    useEffect(() => {
-        vlcRefInternal.current = vlcRef.current;
-    }, [vlcRef.current]);
-
+    }, [adoptSystemVolume, setBoost]);
 
     // Apply volume (called during gestures and manual sets)
     // STABLE CALLBACK: Uses refs to avoid recreation and stale closures
     const applyVolume = useCallback((normalizedValue: number, fromGesture: boolean = false) => {
         if (!AudioControlModule) {return;}
 
-        // Mark gesture active
         if (fromGesture) {
             isGestureActiveRef.current = true;
         }
 
-        // Clamp based on route
-        let effectiveValue = normalizedValue;
         const currentRoute = audioRouteRef.current;
         const routeMaxNormal = currentRoute.maxVolume / 100;
 
         // Speaker protection
+        let effectiveValue = normalizedValue;
         if (currentRoute.type === 'speaker' && effectiveValue > 1.0) {
             effectiveValue = 1.0;
         }
-
-        // Clamp to route max
         effectiveValue = Math.max(0, Math.min(effectiveValue, routeMaxNormal));
 
         // Convert to percentage (0-200)
@@ -263,7 +218,6 @@ export function useAudioController(
         lastSetVolumeRef.current = percentage;
         lastSetTimeRef.current = Date.now();
 
-        // Set system volume
         const systemPercentage = Math.min(percentage, 100);
 
         // Use sync method during gestures for better performance (no promise overhead)
@@ -279,27 +233,15 @@ export function useAudioController(
             if (__DEV__) {console.warn('[AudioController] Native setVolume failed:', error);}
         }
 
-        // Handle VLC boost for 100-200%
-        // OPTIMIZATION: Only update VLC when the value actually changes
-        const targetVlcVolume = percentage <= 100 ? 100 : percentage;
-        if (targetVlcVolume !== lastVlcVolumeRef.current) {
-            lastVlcVolumeRef.current = targetVlcVolume;
-            if (vlcRefInternal.current?.setVolume) {
-                vlcRefInternal.current.setVolume(targetVlcVolume);
-            }
-        }
+        // 100-200% is the player's boost on top of the maxed system stream
+        setBoost(Math.max(100, percentage));
 
         // Skip React state updates during gesture for smoothness
         // State will sync on gesture end
         if (!fromGesture) {
             setVolumeState(percentage);
-            setVolumePerRoute(prev => ({
-                ...prev,
-                [currentRoute.type]: percentage,
-            }));
         }
-
-    }, []);
+    }, [setBoost]);
 
     // Set volume (0-200 range)
     const setVolume = useCallback((val: number) => {
@@ -310,10 +252,6 @@ export function useAudioController(
     const onGestureEnd = useCallback(() => {
         const finalVolume = Math.round(currentVolumeShared.value * 100);
         setVolumeState(finalVolume);
-        setVolumePerRoute(prev => ({
-            ...prev,
-            [audioRoute.type]: finalVolume,
-        }));
 
         // Update tracking to prevent quantized feedback from overriding
         lastSetVolumeRef.current = finalVolume;
@@ -323,7 +261,7 @@ export function useAudioController(
         setTimeout(() => {
             isGestureActiveRef.current = false;
         }, 300);
-    }, [audioRoute.type]);
+    }, [currentVolumeShared]);
 
     return useMemo(() => ({
         volume,
@@ -342,4 +280,3 @@ export function useAudioController(
         onGestureEnd,
     ]);
 }
-

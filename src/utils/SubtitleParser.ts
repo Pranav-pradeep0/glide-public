@@ -156,35 +156,27 @@ export class SubtitleParser {
         }
     }
 
-    // Find active subtitle at current time
+    /**
+     * Every cue showing at currentTime, merged into one (a sign and a line of dialogue are
+     * both on screen at once). A linear scan on purpose: cues overlap, and ASS files list
+     * events out of time order, which a binary search silently gets wrong. A few thousand
+     * comparisons four times a second costs nothing.
+     */
     static findActiveCue(cues: SubtitleCue[], currentTime: number): SubtitleCue | null {
-        // Binary search for performance
-        let left = 0;
-        let right = cues.length - 1;
-        let result: SubtitleCue | null = null;
-
-        while (left <= right) {
-            const mid = Math.floor((left + right) / 2);
-            const cue = cues[mid];
-
+        let first: SubtitleCue | null = null;
+        let text = '';
+        for (const cue of cues) {
             if (currentTime >= cue.startTime && currentTime <= cue.endTime) {
-                return cue;
-            }
-
-            if (currentTime < cue.startTime) {
-                right = mid - 1;
-            } else {
-                result = cue;
-                left = mid + 1;
+                if (!first) {
+                    first = cue;
+                    text = cue.text;
+                } else if (cue.text !== text) {
+                    text += '\n' + cue.text;
+                }
             }
         }
-
-        // Double-check the result
-        if (result && currentTime >= result.startTime && currentTime <= result.endTime) {
-            return result;
-        }
-
-        return null;
+        if (!first || text === first.text) { return first; }
+        return { ...first, text };
     }
 
     /**
