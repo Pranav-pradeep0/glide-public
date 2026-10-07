@@ -22,6 +22,8 @@ interface FloatingSyncPanelProps {
     onChange: (value: number) => void;
     onClose: () => void;
     subtitleCues?: SubtitleCue[];
+    /** The selected embedded subtitle is still being read; show the actions, disabled. */
+    subtitleCuesLoading?: boolean;
     /** Read at the moment of an action; the player screen does not re-render on progress. */
     currentTimeRef: React.MutableRefObject<number>;
     /** Automatic sync from the audio (subtitles only). Applies its own result and reports it. */
@@ -44,6 +46,7 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
     onChange,
     onClose,
     subtitleCues = [],
+    subtitleCuesLoading = false,
     currentTimeRef,
     onAutoSync,
     autoSyncRunning = false,
@@ -111,7 +114,8 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
         setResults([]);
     }, [setValue]);
 
-    const isSubtitle = syncType === 'subtitle' && subtitleCues.length > 0;
+    const cuesReady = subtitleCues.length > 0;
+    const isSubtitle = syncType === 'subtitle' && (cuesReady || subtitleCuesLoading);
     const direction = value === 0 ? 'in sync' : `seconds ${value > 0 ? 'later' : 'earlier'}`;
     // Which way to go, in terms of what the viewer actually sees and hears.
     const hint = syncType === 'audio'
@@ -201,10 +205,11 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
                             <View style={styles.actionRow}>
                                 {onAutoSync && (
                                     <Button
-                                        label={autoSyncRunning ? 'Syncing…' : 'Auto sync'}
+                                        label={!cuesReady ? 'Reading subtitles…' : autoSyncRunning ? 'Syncing…' : 'Auto sync'}
                                         variant="primary"
                                         icon="zap"
-                                        loading={autoSyncRunning}
+                                        loading={autoSyncRunning || !cuesReady}
+                                        disabled={!cuesReady}
                                         onPress={handleAuto}
                                         accessibilityLabel="Sync subtitles automatically from the audio"
                                         onPlayer
@@ -215,6 +220,7 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
                                     label="Pick a line"
                                     icon="search"
                                     onPress={handleToggleSearch}
+                                    disabled={!cuesReady}
                                     accessibilityLabel="Pick the line you just heard"
                                     onPlayer
                                     style={styles.flex}

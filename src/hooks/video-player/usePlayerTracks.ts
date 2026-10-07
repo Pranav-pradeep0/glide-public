@@ -69,6 +69,8 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
     // Subtitles
     const [subtitleTracks, setSubtitleTracks] = useState<SubtitleTrack[]>([]);
     const [subtitleTracksReady, setSubtitleTracksReady] = useState(false);
+    /** An embedded text track is being read out of the file; its cues are on the way. */
+    const [subtitleCuesLoading, setSubtitleCuesLoading] = useState(false);
     const [selectedSubtitleTrackIndex, setSelectedSubtitleTrackIndex] = useState<number | null>(initialSubtitleTrackIndex ?? null);
 
     // Sync initial subtitle track when it becomes available (hydration)
@@ -216,6 +218,7 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
                 return;
             }
 
+            setSubtitleCuesLoading(true);
             try {
                 const cues = await SubtitleCueStore.getCues(videoPath, selectedSubtitleTrackIndex);
                 if (!mounted) {return;}
@@ -235,6 +238,8 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
                 if (mounted) {
                     setSubtitleCues([]);
                 }
+            } finally {
+                if (mounted) {setSubtitleCuesLoading(false);}
             }
         };
 
@@ -242,6 +247,7 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
 
         return () => {
             mounted = false;
+            setSubtitleCuesLoading(false);
         };
     }, [selectedSubtitleTrackIndex, videoPath, subtitleTracks]);
 
@@ -341,6 +347,7 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
         // Subtitles
         subtitleTracks,
         subtitleTracksReady,
+        subtitleCuesLoading,
         selectedSubtitleTrackIndex,
         subtitleCues,
         currentSubtitleCue: useSubtitleCueStore.getState().currentCue,
@@ -367,7 +374,7 @@ export function usePlayerTracks(options: UsePlayerTracksOptions): UsePlayerTrack
         setSubtitleCues,
     }), [
         audioTracks, selectedAudioTrackId, selectAudioTrack,
-        subtitleTracks, subtitleTracksReady, selectedSubtitleTrackIndex, subtitleCues, selectSubtitleTrack,
+        subtitleTracks, subtitleTracksReady, subtitleCuesLoading, selectedSubtitleTrackIndex, subtitleCues, selectSubtitleTrack,
         externalSubtitles, currentExternalName, loadExternalCues, loadSDHForHaptics,
         hapticCues,
         audioTracksForSelector, subtitleTracksForSelector,

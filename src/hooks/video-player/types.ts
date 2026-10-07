@@ -348,6 +348,7 @@ export interface UsePlayerTracksReturn {
     subtitleTracksReady: boolean;
     selectedSubtitleTrackIndex: number | null;
     subtitleCues: SubtitleCue[];
+    subtitleCuesLoading: boolean;
     currentSubtitleCue: SubtitleCue | null;
     /** Ordinal among subtitle streams for the native player; -1 disables text output. */
     nativeTextTrackOrdinal: number;

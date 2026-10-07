@@ -1277,6 +1277,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                     onChange={syncPanelType === 'audio' ? settingsHook.setAudioDelay : settingsHook.setSubtitleDelay}
                     onClose={() => setSyncPanelType(null)}
                     subtitleCues={tracksHook.subtitleCues}
+                    subtitleCuesLoading={tracksHook.subtitleCuesLoading}
                     currentTimeRef={player.currentTimeRef}
                     onAutoSync={syncPanelType === 'subtitle' && !isNetworkStream ? runAutoSync : undefined}
                     autoSyncRunning={autoSyncRunning}
