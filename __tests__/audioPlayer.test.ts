@@ -20,6 +20,7 @@ Object.defineProperty(Platform, 'OS', {
 
 NativeModules.GlideAudioPlayerModule = {
     setQueue: jest.fn<any>().mockReturnValue(Promise.resolve(true)),
+    setQueueByIds: jest.fn<any>().mockReturnValue(Promise.resolve(true)),
     addMediaItem: jest.fn<any>().mockReturnValue(Promise.resolve(true)),
     removeMediaItem: jest.fn<any>().mockReturnValue(Promise.resolve(true)),
     moveMediaItem: jest.fn<any>().mockReturnValue(Promise.resolve(true)),
@@ -178,7 +179,7 @@ describe('Audio Player Utilities and Store', () => {
             expect(NativeModules.GlideAudioPlayerModule.setAudioEqualizer).toHaveBeenCalled();
         });
 
-        it('does not truncate large queues beyond 100 items when persisting', async () => {
+        it('does not truncate large queues beyond 100 items when persisting and uses setQueueByIds', async () => {
             const largeQueue: AudioTrack[] = Array.from({ length: 150 }, (_, i) => ({
                 ...dummyTrack1,
                 id: `track-${i}`,
@@ -189,6 +190,25 @@ describe('Audio Player Utilities and Store', () => {
             const state = useAudioStore.getState();
             expect(state.queue.length).toBe(150);
             expect(state.currentIndex).toBe(120);
+            expect(NativeModules.GlideAudioPlayerModule.setQueueByIds).toHaveBeenCalledWith(
+                largeQueue.map((t) => t.id),
+                120,
+                0,
+                true,
+                false,
+                'off',
+                expect.arrayContaining([expect.any(Number)])
+            );
+        });
+
+        it('safely hydrates queue from MMKV without evaluation freeze', () => {
+            mockMMKVStore.set('@glide_audio_queue', JSON.stringify([dummyTrack1, dummyTrack2]));
+            useAudioStore.setState({ queue: [], currentTrack: null });
+            useAudioStore.getState().hydrateQueue();
+
+            const state = useAudioStore.getState();
+            expect(state.queue.length).toBe(2);
+            expect(state.queue[0].id).toBe('101');
         });
 
         it('preserves position when track index has not changed in _setTrackChanged', () => {

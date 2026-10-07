@@ -33,9 +33,21 @@ class MediaStoreAudioModule(private val reactContext: ReactApplicationContext) :
 
     data class PaletteColors(val primary: String?, val secondary: String?, val onPrimary: String?)
 
+    data class SongRecord(
+        val id: String,
+        val title: String,
+        val artist: String,
+        val album: String,
+        val albumId: String,
+        val uri: String,
+        val durationMs: Long,
+        val artworkUri: String? = null
+    )
+
     companion object {
         private const val TAG = "MediaStoreAudioModule"
         private val artExecutor = java.util.concurrent.Executors.newFixedThreadPool(2)
+        private val songCache = java.util.concurrent.ConcurrentHashMap<String, SongRecord>()
 
         private val SONG_PROJECTION = arrayOf(
             MediaStore.Audio.Media._ID,
@@ -170,6 +182,68 @@ class MediaStoreAudioModule(private val reactContext: ReactApplicationContext) :
         fun getArtworkUri(context: Context, albumId: Long, songUriStr: String?): String? {
             return getArtworkDetails(context, albumId, songUriStr).uri
         }
+
+        fun getSongById(context: Context, id: String): SongRecord? {
+            songCache[id]?.let { return it }
+
+            try {
+                val songId = id.toLongOrNull() ?: return null
+                val songUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, songId)
+                val resolver = context.contentResolver
+                val cursor = resolver.query(
+                    songUri,
+                    SONG_PROJECTION,
+                    null,
+                    null,
+                    null
+                )
+                cursor?.use { c ->
+                    if (c.moveToFirst()) {
+                        val titleCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
+                        val artistCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
+                        val albumCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
+                        val albumIdCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
+                        val durationCol = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
+                        val albumId = c.getLong(albumIdCol)
+
+                        val artFile = File(context.cacheDir, "album_art/$albumId.jpg")
+                        val artUri = if (artFile.exists() && artFile.length() > 0) {
+                            "file://${artFile.absolutePath}"
+                        } else null
+
+                        val record = SongRecord(
+                            id = id,
+                            title = sanitizeMetadata(c.getString(titleCol), "Unknown Track"),
+                            artist = sanitizeMetadata(c.getString(artistCol), "Unknown Artist"),
+                            album = sanitizeMetadata(c.getString(albumCol), "Unknown Album"),
+                            albumId = albumId.toString(),
+                            uri = songUri.toString(),
+                            durationMs = c.getLong(durationCol),
+                            artworkUri = artUri
+                        )
+                        songCache[id] = record
+                        return record
+                    }
+                }
+            } catch (_: Exception) {}
+
+            val fallbackUri = ContentUris.withAppendedId(
+                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                id.toLongOrNull() ?: return null
+            ).toString()
+            val fallback = SongRecord(
+                id = id,
+                title = "Track $id",
+                artist = "Unknown Artist",
+                album = "Unknown Album",
+                albumId = "",
+                uri = fallbackUri,
+                durationMs = 0L,
+                artworkUri = null
+            )
+            songCache[id] = fallback
+            return fallback
+        }
     }
 
     @ReactMethod
@@ -212,12 +286,32 @@ class MediaStoreAudioModule(private val reactContext: ReactApplicationContext) :
                             songId
                         ).toString()
 
+                        val title = sanitizeMetadata(c.getString(titleCol), "Unknown Track")
+                        val artist = sanitizeMetadata(c.getString(artistCol), "Unknown Artist")
+                        val album = sanitizeMetadata(c.getString(albumCol), "Unknown Album")
+
+                        val artFile = File(reactContext.cacheDir, "album_art/$albumId.jpg")
+                        val artworkUri = if (artFile.exists() && artFile.length() > 0) {
+                            "file://${artFile.absolutePath}"
+                        } else null
+
+                        songCache[songId.toString()] = SongRecord(
+                            id = songId.toString(),
+                            title = title,
+                            artist = artist,
+                            album = album,
+                            albumId = albumId.toString(),
+                            uri = contentUri,
+                            durationMs = durationMs,
+                            artworkUri = artworkUri
+                        )
+
                         val map = Arguments.createMap().apply {
                             putString("id", songId.toString())
-                            putString("title", sanitizeMetadata(c.getString(titleCol), "Unknown Track"))
-                            putString("artist", sanitizeMetadata(c.getString(artistCol), "Unknown Artist"))
+                            putString("title", title)
+                            putString("artist", artist)
                             putString("artistId", c.getLong(artistIdCol).toString())
-                            putString("album", sanitizeMetadata(c.getString(albumCol), "Unknown Album"))
+                            putString("album", album)
                             putString("albumId", albumId.toString())
                             putDouble("duration", durationMs / 1000.0) // seconds
                             putString("path", c.getString(dataCol) ?: "")
@@ -227,9 +321,8 @@ class MediaStoreAudioModule(private val reactContext: ReactApplicationContext) :
                             putInt("year", c.getInt(yearCol))
                             putDouble("dateAdded", c.getLong(dateAddedCol).toDouble())
 
-                            val artFile = File(reactContext.cacheDir, "album_art/$albumId.jpg")
-                            if (artFile.exists() && artFile.length() > 0) {
-                                putString("artworkUri", "file://${artFile.absolutePath}")
+                            if (artworkUri != null) {
+                                putString("artworkUri", artworkUri)
                                 val paletteFile = File(reactContext.cacheDir, "album_art/$albumId.palette")
                                 if (paletteFile.exists() && paletteFile.length() > 0) {
                                     try {

@@ -13,6 +13,10 @@ class AudioMediaServiceClass {
         this.songsCache = null;
     }
 
+    getCachedSongById(trackId: string): AudioTrack | undefined {
+        return this.songsCache?.find((s) => String(s.id) === String(trackId));
+    }
+
     async getSongs(forceRefresh = false): Promise<AudioTrack[]> {
         if (Platform.OS !== 'android' || !this.module) {
             return [];

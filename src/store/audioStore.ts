@@ -11,6 +11,7 @@ const mmkv = createMMKV({ id: 'glide_audio_store_v1' });
 
 const QUEUE_KEY = '@glide_audio_queue';
 const PLAYBACK_KEY = '@glide_audio_playback_state';
+const CURRENT_TRACK_KEY = '@glide_audio_current_track';
 
 interface StoredPlaybackState {
     currentIndex: number;
@@ -20,6 +21,7 @@ interface StoredPlaybackState {
     repeatMode: AudioRepeatMode;
     equalizerPreset: string;
     queueSource?: string;
+    currentTrack?: AudioTrack | null;
 }
 
 let initialQueue: AudioTrack[] = [];
@@ -32,34 +34,88 @@ let initialPlayback: StoredPlaybackState = {
     equalizerPreset: 'flat',
     queueSource: 'Library',
 };
+let initialTrack: AudioTrack | null = null;
 
 try {
-    const rawQueue = mmkv.getString(QUEUE_KEY);
-    if (rawQueue) {
-        initialQueue = JSON.parse(rawQueue);
-    }
     const rawPlayback = mmkv.getString(PLAYBACK_KEY);
     if (rawPlayback) {
         initialPlayback = { ...initialPlayback, ...JSON.parse(rawPlayback) };
+    }
+    const rawTrack = mmkv.getString(CURRENT_TRACK_KEY);
+    if (rawTrack) {
+        initialTrack = JSON.parse(rawTrack);
+    } else if (initialPlayback.currentTrack) {
+        initialTrack = initialPlayback.currentTrack;
     }
 } catch {
     // ignore
 }
 
-const safeInitialIndex = initialQueue.length > 0 ? Math.max(0, Math.min(initialPlayback.currentIndex, initialQueue.length - 1)) : 0;
-const initialTrack = initialQueue.length > 0 ? initialQueue[safeInitialIndex] : null;
+// Safely hydrate the persisted queue asynchronously to avoid blocking JS module evaluation
+function hydratePersistedQueue() {
+    try {
+        const rawQueue = mmkv.getString(QUEUE_KEY);
+        if (rawQueue) {
+            const queue: AudioTrack[] = JSON.parse(rawQueue);
+            if (Array.isArray(queue) && queue.length > 0) {
+                const current = useAudioStore.getState();
+                if (current.queue.length === 0) {
+                    const safeIndex = Math.max(0, Math.min(current.currentIndex, queue.length - 1));
+                    useAudioStore.setState({
+                        queue,
+                        currentTrack: current.currentTrack || queue[safeIndex] || null,
+                    });
+                }
+            }
+        }
+    } catch {
+        // ignore
+    }
+}
+setTimeout(hydratePersistedQueue, 0);
+
+const safeInitialIndex = initialPlayback.currentIndex || 0;
 
 /** Where native's playing track sits in our queue: by id, with native's index as the tiebreak. */
 export function resolveQueueIndex(queue: AudioTrack[], nativeIndex: number, trackId?: string): number {
     if (!trackId) { return nativeIndex; }
-    if (queue[nativeIndex]?.id === trackId) { return nativeIndex; }
-    const found = queue.findIndex(t => t.id === trackId);
+    // If nativeIndex already points to this trackId, honor native's current index (breaks duplicates tie)
+    if (queue[nativeIndex] && String(queue[nativeIndex].id) === String(trackId)) {
+        return nativeIndex;
+    }
+    // Otherwise look up by trackId across the queue
+    const found = queue.findIndex(t => String(t.id) === String(trackId));
     return found >= 0 ? found : nativeIndex;
 }
 
-function persistQueue(queue: AudioTrack[]) {
+let queuePersistTimer: ReturnType<typeof setTimeout> | null = null;
+function persistQueue(queue: AudioTrack[], immediate = false) {
+    if (queuePersistTimer) {
+        clearTimeout(queuePersistTimer);
+        queuePersistTimer = null;
+    }
+    const write = () => {
+        try {
+            mmkv.set(QUEUE_KEY, JSON.stringify(queue));
+        } catch {
+            // ignore
+        }
+    };
+    if (immediate || queue.length === 0 || process.env.NODE_ENV === 'test') {
+        write();
+        return;
+    }
+    queuePersistTimer = setTimeout(write, 1000);
+    queuePersistTimer?.unref?.();
+}
+
+function persistCurrentTrack(track: AudioTrack | null) {
     try {
-        mmkv.set(QUEUE_KEY, JSON.stringify(queue));
+        if (track) {
+            mmkv.set(CURRENT_TRACK_KEY, JSON.stringify(track));
+        } else {
+            mmkv.remove(CURRENT_TRACK_KEY);
+        }
     } catch {
         // ignore
     }
@@ -127,6 +183,7 @@ export interface AudioStoreState {
     setAudioEqualizer: (bands: number[]) => Promise<void>;
     setEqualizerPreset: (presetId: string) => Promise<void>;
     clearQueue: () => Promise<void>;
+    hydrateQueue: () => void;
 
     // Internal updates from native events
     _setPlaybackState: (state: { isPlaying: boolean; isBuffering: boolean; position?: number; duration?: number }) => void;
@@ -171,12 +228,18 @@ export const useAudioStore = create<AudioStoreState>((set, get) => ({
         });
 
         // Save queue only when queue changes
+        persistCurrentTrack(track);
         persistQueue(queue);
 
         const audioModule = getAudioModule();
         if (Platform.OS === 'android' && audioModule) {
             try {
-                await audioModule.setQueue(queue, startIndex, 0, true, shuffle, repeatMode, equalizerBands);
+                if (typeof audioModule.setQueueByIds === 'function' && queue.length > 50) {
+                    const trackIds = queue.map((t) => t.id);
+                    await audioModule.setQueueByIds(trackIds, startIndex, 0, true, shuffle, repeatMode, equalizerBands);
+                } else {
+                    await audioModule.setQueue(queue, startIndex, 0, true, shuffle, repeatMode, equalizerBands);
+                }
             } catch (err) {
                 console.error('[AudioStore] playTrack error:', err);
                 set({ isPlaying: false, isBuffering: false });
@@ -215,12 +278,18 @@ export const useAudioStore = create<AudioStoreState>((set, get) => ({
             queueSource: source,
         });
 
+        persistCurrentTrack(track);
         persistQueue(queue);
 
         const audioModule = getAudioModule();
         if (Platform.OS === 'android' && audioModule) {
             try {
-                await audioModule.setQueue(queue, safeIndex, 0, true, shuffle, repeatMode, equalizerBands);
+                if (typeof audioModule.setQueueByIds === 'function' && queue.length > 50) {
+                    const trackIds = queue.map((t) => t.id);
+                    await audioModule.setQueueByIds(trackIds, safeIndex, 0, true, shuffle, repeatMode, equalizerBands);
+                } else {
+                    await audioModule.setQueue(queue, safeIndex, 0, true, shuffle, repeatMode, equalizerBands);
+                }
             } catch (err) {
                 console.error('[AudioStore] playQueue error:', err);
                 set({ isPlaying: false, isBuffering: false });
@@ -300,6 +369,7 @@ export const useAudioStore = create<AudioStoreState>((set, get) => ({
             nextIndex = Math.min(currentIndex, nextQueue.length - 1);
             nextTrack = nextQueue[nextIndex];
             nextPosition = 0;
+            persistCurrentTrack(nextTrack);
         } else if (index < currentIndex) {
             nextIndex = currentIndex - 1;
         }
@@ -429,7 +499,12 @@ export const useAudioStore = create<AudioStoreState>((set, get) => ({
                     const state = await audioModule.getCurrentState();
                     if (!state.trackId && queue.length > 0) {
                         const equalizerBands = getPresetBands(equalizerPreset);
-                        await audioModule.setQueue(queue, currentIndex, position, true, shuffle, repeatMode, equalizerBands);
+                        if (typeof audioModule.setQueueByIds === 'function' && queue.length > 50) {
+                            const trackIds = queue.map((t) => t.id);
+                            await audioModule.setQueueByIds(trackIds, currentIndex, position, true, shuffle, repeatMode, equalizerBands);
+                        } else {
+                            await audioModule.setQueue(queue, currentIndex, position, true, shuffle, repeatMode, equalizerBands);
+                        }
                         set({ isPlaying: true });
                         return;
                     }
@@ -514,6 +589,7 @@ export const useAudioStore = create<AudioStoreState>((set, get) => ({
             duration: track.duration,
             isPlaying: true,
         });
+        persistCurrentTrack(track);
 
         const audioModule = getAudioModule();
         if (Platform.OS === 'android' && audioModule) {
@@ -589,7 +665,8 @@ export const useAudioStore = create<AudioStoreState>((set, get) => ({
             duration: 0,
             shuffledIndices: [],
         });
-        persistQueue([]);
+        persistCurrentTrack(null);
+        persistQueue([], true);
         const audioModule = getAudioModule();
         if (Platform.OS === 'android' && audioModule) {
             try {
@@ -599,6 +676,10 @@ export const useAudioStore = create<AudioStoreState>((set, get) => ({
             }
         }
         get()._persistState();
+    },
+
+    hydrateQueue: () => {
+        hydratePersistedQueue();
     },
 
     _setPlaybackState: (state) => {
@@ -616,18 +697,33 @@ export const useAudioStore = create<AudioStoreState>((set, get) => ({
         // two queues can disagree, and indexing would show the wrong song. The id is what is
         // actually playing; the index only breaks ties when a song is queued twice.
         const nextIndex = resolveQueueIndex(queue, data.currentIndex, data.trackId);
+        let nextTrack: AudioTrack | null = null;
         if (nextIndex >= 0 && nextIndex < queue.length) {
-            const nextTrack = queue[nextIndex];
+            nextTrack = queue[nextIndex];
+        } else if (data.trackId) {
+            const found = queue.find(t => String(t.id) === String(data.trackId));
+            if (found) {
+                nextTrack = found;
+            } else {
+                const cached = AudioMediaService.getCachedSongById(data.trackId);
+                if (cached) {
+                    nextTrack = cached;
+                }
+            }
+        }
+
+        if (nextTrack) {
             const hasTrackChanged = nextTrack.id !== currentTrack?.id;
 
             set((prev) => ({
-                currentIndex: nextIndex,
+                currentIndex: nextIndex >= 0 && nextIndex < queue.length ? nextIndex : prev.currentIndex,
                 currentTrack: nextTrack,
                 // Only reset position to 0 when the playing song actually changes, not when its index shifts from queue edits
                 position: hasTrackChanged ? 0 : prev.position,
                 duration: data.duration && data.duration > 0 ? data.duration : nextTrack.duration,
                 shuffledIndices: data.queueIndices ?? prev.shuffledIndices,
             }));
+            persistCurrentTrack(nextTrack);
             get()._persistState();
 
             if (!nextTrack.artworkUri && nextTrack.albumId) {
@@ -650,7 +746,7 @@ export const useAudioStore = create<AudioStoreState>((set, get) => ({
     },
 
     _persistState: () => {
-        const { currentIndex, position, duration, shuffle, repeatMode, equalizerPreset, queueSource } = get();
+        const { currentIndex, position, duration, shuffle, repeatMode, equalizerPreset, queueSource, currentTrack } = get();
         // Persist only lightweight playback state (~100 bytes) on regular state transitions
         schedulePersistPlayback({
             currentIndex,
@@ -660,6 +756,7 @@ export const useAudioStore = create<AudioStoreState>((set, get) => ({
             repeatMode,
             equalizerPreset,
             queueSource,
+            currentTrack,
         });
     },
 }));
@@ -699,6 +796,27 @@ if (Platform.OS === 'android') {
         clearSleepTimerInterval();
         useAudioStore.setState({ sleepTimerMode: 'off', sleepTimerRemaining: 0 });
     });
+
+    if (NativeModules.GlideAudioPlayerModule?.getCurrentState) {
+        NativeModules.GlideAudioPlayerModule.getCurrentState().then((state: any) => {
+            if (state && (state.isPlaying || state.position > 0)) {
+                useAudioStore.getState()._setPlaybackState({
+                    isPlaying: !!state.isPlaying,
+                    isBuffering: !!state.isBuffering,
+                    position: typeof state.position === 'number' ? state.position : undefined,
+                    duration: typeof state.duration === 'number' ? state.duration : undefined,
+                });
+                if (state.trackId) {
+                    useAudioStore.getState()._setTrackChanged({
+                        currentIndex: state.currentIndex ?? 0,
+                        trackId: state.trackId,
+                        duration: state.duration,
+                        queueIndices: Array.isArray(state.queueIndices) ? state.queueIndices : undefined,
+                    });
+                }
+            }
+        }).catch(() => {});
+    }
 }
 
 // Recents > Music. One place catches every way a song starts: a tap, skip, auto-advance or

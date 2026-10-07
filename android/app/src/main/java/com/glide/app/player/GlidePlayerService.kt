@@ -1,23 +1,25 @@
 package com.glide.app.player
 
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import androidx.core.content.ContextCompat
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
-
-import android.app.PendingIntent
 import com.glide.app.MainActivity
 
 /**
- * Where the player view and the session service find each other.
+ * Where the player view, audio player, and the session service find each other.
  *
  * They live in one process but are created independently by the system, and an Intent
  * cannot carry an object reference.
  *
- * Main thread only, which is where both the view and the service are created.
+ * Main thread only, which is where both the views and the service are created.
  */
 @UnstableApi
 object GlidePlayerHolder {
@@ -26,10 +28,33 @@ object GlidePlayerHolder {
     var player: ExoPlayer? = null
         private set
 
+    @JvmStatic
+    var audioPlayer: ExoPlayer? = null
+        private set
+
     private var service: GlidePlayerService? = null
 
     fun attachService(value: GlidePlayerService?) {
         service = value
+    }
+
+    @Synchronized
+    fun getOrCreateAudioPlayer(context: Context): ExoPlayer {
+        audioPlayer?.let { return it }
+        val appContext = context.applicationContext
+        val audioAttributes = AudioAttributes.Builder()
+            .setUsage(C.USAGE_MEDIA)
+            .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+            .build()
+
+        val newPlayer = ExoPlayer.Builder(appContext)
+            .setAudioAttributes(audioAttributes, /* handleAudioFocus = */ true)
+            .setHandleAudioBecomingNoisy(true)
+            .setWakeMode(C.WAKE_MODE_LOCAL)
+            .build()
+
+        audioPlayer = newPlayer
+        return newPlayer
     }
 
     fun start(context: Context, value: ExoPlayer) {
@@ -39,13 +64,16 @@ object GlidePlayerHolder {
             service?.updatePlayer(value)
         } else {
             try {
-                context.applicationContext.startService(
-                    Intent(context.applicationContext, GlidePlayerService::class.java)
-                )
-            } catch (e: IllegalStateException) {
-                // A background start can be refused. Playback still works; only the session and
-                // its notification are missing.
-                Log.w(GlidePlayerView.TAG, "could not start playback service: ${e.message}")
+                val intent = Intent(context.applicationContext, GlidePlayerService::class.java)
+                ContextCompat.startForegroundService(context.applicationContext, intent)
+            } catch (e: Exception) {
+                try {
+                    context.applicationContext.startService(
+                        Intent(context.applicationContext, GlidePlayerService::class.java)
+                    )
+                } catch (e2: Exception) {
+                    Log.w(GlidePlayerView.TAG, "could not start playback service: ${e2.message}")
+                }
             }
         }
     }
@@ -61,8 +89,14 @@ object GlidePlayerHolder {
             // A newer view already took over; leave its registration alone.
             return
         }
-        service?.releaseSession()
         player = null
+        val audio = audioPlayer
+        if (audio != null && (audio.isPlaying || audio.playWhenReady) && audio.mediaItemCount > 0) {
+            // Audio is still active in the background; hand the session back to audio
+            service?.updatePlayer(audio)
+            return
+        }
+        service?.releaseSession()
         try {
             context.applicationContext.stopService(
                 Intent(context.applicationContext, GlidePlayerService::class.java)
@@ -71,12 +105,33 @@ object GlidePlayerHolder {
             Log.w(GlidePlayerView.TAG, "could not stop playback service: ${e.message}")
         }
     }
+
+    fun clearAudio(context: Context) {
+        val a = audioPlayer
+        audioPlayer = null
+        if (a != null) {
+            a.stop()
+            a.clearMediaItems()
+            a.release()
+        }
+        if (player == null || player === a) {
+            player = null
+            service?.releaseSession()
+            try {
+                context.applicationContext.stopService(
+                    Intent(context.applicationContext, GlidePlayerService::class.java)
+                )
+            } catch (e: IllegalStateException) {
+                Log.w(GlidePlayerView.TAG, "could not stop playback service: ${e.message}")
+            }
+        }
+    }
 }
 
 /**
  * Foreground service owning the media session and its notification.
  *
- * This is A5: ExoPlayer *is* a Media3 `Player`, so it is handed to `MediaSession` directly.
+ * ExoPlayer *is* a Media3 `Player`, so it is handed to `MediaSession` directly.
  * There is no adapter — no `SimpleBasePlayer` subclass mirroring engine state, and so none
  * of the divergence bugs that came with mirroring it.
  */
@@ -89,19 +144,23 @@ class GlidePlayerService : MediaSessionService() {
         super.onCreate()
         GlidePlayerHolder.attachService(this)
 
-        val player = GlidePlayerHolder.player
-        if (player == null) {
+        val activePlayer = GlidePlayerHolder.player ?: GlidePlayerHolder.audioPlayer
+        if (activePlayer == null) {
             // Nothing is playing; there is no state for a session to describe.
             Log.w(GlidePlayerView.TAG, "session service started with no player, stopping")
             stopSelf()
             return
         }
 
-        buildAndAddSession(player)
+        buildAndAddSession(activePlayer)
         Log.w(GlidePlayerView.TAG, "media session created")
     }
 
     private fun buildAndAddSession(player: ExoPlayer) {
+        if (session != null) {
+            session?.player = player
+            return
+        }
         val sessionActivityIntent = PendingIntent.getActivity(
             this,
             0,
@@ -122,7 +181,11 @@ class GlidePlayerService : MediaSessionService() {
     }
 
     fun updatePlayer(newPlayer: ExoPlayer) {
-        session?.player = newPlayer
+        if (session == null) {
+            buildAndAddSession(newPlayer)
+        } else {
+            session?.player = newPlayer
+        }
         Log.w(GlidePlayerView.TAG, "media session updated with new player")
     }
 
@@ -136,21 +199,26 @@ class GlidePlayerService : MediaSessionService() {
         session = null
     }
 
-    /**
-     * Media3 returns START_STICKY, which suits a service that owns its media and can
-     * rebuild after the process dies. This one cannot: the player lives in the React view
-     * and the holder is static, so both die with the process. Left sticky, the platform
-     * restarts it, the restart finds no player, and the service is killed for never going
-     * foreground — forever. A sticky restart is recognisable by its null intent.
-     */
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent == null || GlidePlayerHolder.player == null) {
+        val activePlayer = GlidePlayerHolder.player ?: GlidePlayerHolder.audioPlayer
+        if (activePlayer == null) {
             Log.w(GlidePlayerView.TAG, "session service start with no player, stopping")
             stopSelf()
             return START_NOT_STICKY
         }
+        if (session == null) {
+            buildAndAddSession(activePlayer)
+        }
         super.onStartCommand(intent, flags, startId)
         return START_NOT_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        val activePlayer = GlidePlayerHolder.player ?: GlidePlayerHolder.audioPlayer
+        if (activePlayer == null || !activePlayer.playWhenReady || activePlayer.mediaItemCount == 0) {
+            stopSelf()
+        }
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {

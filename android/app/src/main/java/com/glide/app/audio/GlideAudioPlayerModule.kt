@@ -26,6 +26,7 @@ import com.facebook.react.bridge.WritableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.glide.app.player.GlidePlayerHolder
 import java.io.File
+import kotlin.concurrent.thread
 import kotlin.math.abs
 
 @UnstableApi
@@ -70,81 +71,84 @@ class GlideAudioPlayerModule(private val reactContext: ReactApplicationContext) 
         }
     }
 
+    private var playerListener: Player.Listener? = null
+
     private fun ensurePlayer(): ExoPlayer {
         val existing = player
         if (existing != null) {
             return existing
         }
 
-        val audioAttributes = AudioAttributes.Builder()
-            .setUsage(C.USAGE_MEDIA)
-            .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-            .build()
+        val p = GlidePlayerHolder.getOrCreateAudioPlayer(reactContext)
+        player = p
 
-        val newPlayer = ExoPlayer.Builder(reactContext)
-            .setAudioAttributes(audioAttributes, /* handleAudioFocus = */ true)
-            .setHandleAudioBecomingNoisy(true)
-            .setWakeMode(C.WAKE_MODE_LOCAL)
-            .build()
-
-        newPlayer.addListener(object : Player.Listener {
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                if (isPlaying) {
-                    consecutiveErrors = 0
+        var listener = playerListener
+        if (listener == null) {
+            listener = object : Player.Listener {
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    if (isPlaying) {
+                        consecutiveErrors = 0
+                    }
+                    emitPlaybackState()
+                    if (isPlaying) {
+                        startProgressUpdates()
+                    } else {
+                        stopProgressUpdates()
+                    }
                 }
-                emitPlaybackState()
-                if (isPlaying) {
-                    startProgressUpdates()
-                } else {
-                    stopProgressUpdates()
+
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    emitPlaybackState()
+                }
+
+                override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                    if (reason == Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM) {
+                        player?.pauseAtEndOfMediaItems = false
+                        emitDeviceEvent("onSleepTimerFired", Arguments.createMap())
+                    }
+                }
+
+                override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                    emitTrackChanged()
+                }
+
+                override fun onAudioSessionIdChanged(audioSessionId: Int) {
+                    equalizer?.release()
+                    equalizer = null
+                    applyEqualizer()
+                }
+
+                override fun onPlayerError(error: PlaybackException) {
+                    Log.w(TAG, "audio player error: ${error.errorCodeName} (${error.errorCode}): ${error.message}")
+                    consecutiveErrors++
+                    val count = p.mediaItemCount
+                    if (consecutiveErrors < count && p.hasNextMediaItem()) {
+                        p.seekToNextMediaItem()
+                        p.prepare()
+                        p.play()
+                    } else {
+                        consecutiveErrors = 0
+                        p.stop()
+                    }
+                    val map = Arguments.createMap().apply {
+                        putString("error", error.message ?: "Playback error")
+                        putInt("errorCode", error.errorCode)
+                    }
+                    emitDeviceEvent("onAudioError", map)
+                    emitPlaybackState()
                 }
             }
+            playerListener = listener
+        }
 
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                emitPlaybackState()
-            }
+        p.removeListener(listener)
+        p.addListener(listener)
 
-            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-                if (reason == Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM) {
-                    player?.pauseAtEndOfMediaItems = false
-                    emitDeviceEvent("onSleepTimerFired", Arguments.createMap())
-                }
-            }
+        if (p.isPlaying) {
+            startProgressUpdates()
+        }
 
-            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                emitTrackChanged()
-            }
-
-            override fun onAudioSessionIdChanged(audioSessionId: Int) {
-                equalizer?.release()
-                equalizer = null
-                applyEqualizer()
-            }
-
-            override fun onPlayerError(error: PlaybackException) {
-                Log.w(TAG, "audio player error: ${error.errorCodeName} (${error.errorCode}): ${error.message}")
-                consecutiveErrors++
-                val p = player
-                val count = p?.mediaItemCount ?: 0
-                if (p != null && consecutiveErrors < count && p.hasNextMediaItem()) {
-                    p.seekToNextMediaItem()
-                    p.prepare()
-                    p.play()
-                } else {
-                    consecutiveErrors = 0
-                    p?.stop()
-                }
-                val map = Arguments.createMap().apply {
-                    putString("error", error.message ?: "Playback error")
-                    putInt("errorCode", error.errorCode)
-                }
-                emitDeviceEvent("onAudioError", map)
-                emitPlaybackState()
-            }
-        })
-
-        player = newPlayer
-        return newPlayer
+        return p
     }
 
     private fun startProgressUpdates() {
@@ -296,43 +300,143 @@ class GlideAudioPlayerModule(private val reactContext: ReactApplicationContext) 
         equalizerBands: ReadableArray?,
         promise: Promise
     ) {
-        mainHandler.post {
+        val bandLevels = equalizerBands?.takeIf { it.size() > 0 }?.let { array ->
+            FloatArray(array.size()) { array.getDouble(it).toFloat() }
+        }
+
+        thread(name = "glide-audio-build-queue") {
             try {
                 consecutiveErrors = 0
-                val p = ensurePlayer()
-                val mediaItems = mutableListOf<MediaItem>()
-
+                val mediaItems = ArrayList<MediaItem>(tracks.size())
                 for (i in 0 until tracks.size()) {
                     val map = tracks.getMap(i) ?: continue
                     mediaItems.add(buildMediaItem(map, i.toString()))
                 }
 
-                p.setMediaItems(mediaItems, startIndex.coerceIn(0, (mediaItems.size - 1).coerceAtLeast(0)), (startPositionSeconds * 1000).toLong())
-                p.shuffleModeEnabled = shuffle
-                p.repeatMode = when (repeatMode) {
-                    "one" -> Player.REPEAT_MODE_ONE
-                    "all" -> Player.REPEAT_MODE_ALL
-                    else -> Player.REPEAT_MODE_OFF
+                mainHandler.post {
+                    try {
+                        val p = ensurePlayer()
+                        p.setMediaItems(
+                            mediaItems,
+                            startIndex.coerceIn(0, (mediaItems.size - 1).coerceAtLeast(0)),
+                            (startPositionSeconds * 1000).toLong()
+                        )
+                        p.shuffleModeEnabled = shuffle
+                        p.repeatMode = when (repeatMode) {
+                            "one" -> Player.REPEAT_MODE_ONE
+                            "all" -> Player.REPEAT_MODE_ALL
+                            else -> Player.REPEAT_MODE_OFF
+                        }
+
+                        if (bandLevels != null) {
+                            currentBandLevels = bandLevels
+                            applyEqualizer()
+                        }
+
+                        p.prepare()
+                        p.playWhenReady = playWhenReady
+
+                        if (playWhenReady) {
+                            GlidePlayerHolder.start(reactContext, p)
+                        }
+
+                        emitTrackChanged()
+                        emitPlaybackState()
+                        promise.resolve(true)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "setQueue error", e)
+                        promise.reject("E_SET_QUEUE", e.message, e)
+                    }
                 }
-
-                if (equalizerBands != null && equalizerBands.size() > 0) {
-                    currentBandLevels = FloatArray(equalizerBands.size()) { equalizerBands.getDouble(it).toFloat() }
-                    applyEqualizer()
-                }
-
-                p.prepare()
-                p.playWhenReady = playWhenReady
-
-                if (playWhenReady) {
-                    GlidePlayerHolder.start(reactContext, p)
-                }
-
-                emitTrackChanged()
-                emitPlaybackState()
-                promise.resolve(true)
             } catch (e: Exception) {
-                Log.e(TAG, "setQueue error", e)
+                Log.e(TAG, "setQueue background build error", e)
                 promise.reject("E_SET_QUEUE", e.message, e)
+            }
+        }
+    }
+
+    @ReactMethod
+    fun setQueueByIds(
+        trackIds: ReadableArray,
+        startIndex: Int,
+        startPositionSeconds: Double,
+        playWhenReady: Boolean,
+        shuffle: Boolean,
+        repeatMode: String,
+        equalizerBands: ReadableArray?,
+        promise: Promise
+    ) {
+        val ids = ArrayList<String>(trackIds.size())
+        for (i in 0 until trackIds.size()) {
+            val str = trackIds.getString(i)
+            if (!str.isNullOrEmpty()) {
+                ids.add(str)
+            }
+        }
+        val bandLevels = equalizerBands?.takeIf { it.size() > 0 }?.let { array ->
+            FloatArray(array.size()) { array.getDouble(it).toFloat() }
+        }
+
+        thread(name = "glide-audio-build-queue-by-ids") {
+            try {
+                consecutiveErrors = 0
+                val mediaItems = ArrayList<MediaItem>(ids.size)
+                for (id in ids) {
+                    val record = MediaStoreAudioModule.getSongById(reactContext, id) ?: continue
+                    val metaBuilder = MediaMetadata.Builder()
+                        .setTitle(record.title)
+                        .setArtist(record.artist)
+                        .setAlbumTitle(record.album)
+                    if (!record.artworkUri.isNullOrEmpty()) {
+                        metaBuilder.setArtworkUri(Uri.parse(record.artworkUri))
+                    }
+                    mediaItems.add(
+                        MediaItem.Builder()
+                            .setMediaId(record.id)
+                            .setUri(Uri.parse(record.uri))
+                            .setMediaMetadata(metaBuilder.build())
+                            .build()
+                    )
+                }
+
+                mainHandler.post {
+                    try {
+                        val p = ensurePlayer()
+                        p.setMediaItems(
+                            mediaItems,
+                            startIndex.coerceIn(0, (mediaItems.size - 1).coerceAtLeast(0)),
+                            (startPositionSeconds * 1000).toLong()
+                        )
+                        p.shuffleModeEnabled = shuffle
+                        p.repeatMode = when (repeatMode) {
+                            "one" -> Player.REPEAT_MODE_ONE
+                            "all" -> Player.REPEAT_MODE_ALL
+                            else -> Player.REPEAT_MODE_OFF
+                        }
+
+                        if (bandLevels != null) {
+                            currentBandLevels = bandLevels
+                            applyEqualizer()
+                        }
+
+                        p.prepare()
+                        p.playWhenReady = playWhenReady
+
+                        if (playWhenReady) {
+                            GlidePlayerHolder.start(reactContext, p)
+                        }
+
+                        emitTrackChanged()
+                        emitPlaybackState()
+                        promise.resolve(true)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "setQueueByIds error", e)
+                        promise.reject("E_SET_QUEUE_BY_IDS", e.message, e)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "setQueueByIds background build error", e)
+                promise.reject("E_SET_QUEUE_BY_IDS", e.message, e)
             }
         }
     }
@@ -469,9 +573,10 @@ class GlideAudioPlayerModule(private val reactContext: ReactApplicationContext) 
                 p?.stop()
                 p?.clearMediaItems()
                 stopProgressUpdates()
-                if (p != null) {
-                    GlidePlayerHolder.clear(reactContext, p)
-                }
+                playerListener?.let { p?.removeListener(it) }
+                playerListener = null
+                GlidePlayerHolder.clearAudio(reactContext)
+                player = null
                 emitPlaybackState()
                 promise.resolve(true)
             } catch (e: Exception) {
@@ -589,7 +694,7 @@ class GlideAudioPlayerModule(private val reactContext: ReactApplicationContext) 
     fun getCurrentState(promise: Promise) {
         mainHandler.post {
             try {
-                val p = player
+                val p = player ?: if (GlidePlayerHolder.audioPlayer != null) ensurePlayer() else null
                 val map = Arguments.createMap().apply {
                     putBoolean("isPlaying", p?.isPlaying ?: false)
                     putBoolean("isBuffering", p?.playbackState == Player.STATE_BUFFERING)
@@ -616,12 +721,13 @@ class GlideAudioPlayerModule(private val reactContext: ReactApplicationContext) 
             sleepTimerRunnable = null
             equalizer?.release()
             equalizer = null
-            val p = player
-            if (p != null) {
-                GlidePlayerHolder.clear(reactContext, p)
-                p.release()
-                player = null
+            playerListener?.let {
+                player?.removeListener(it)
             }
+            playerListener = null
+            player = null
+            // We do NOT release the audio player or stop the service here;
+            // background audio playback cleanly survives React Native JS reloads.
         }
     }
 }
