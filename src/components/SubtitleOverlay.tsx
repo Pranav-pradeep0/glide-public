@@ -13,6 +13,7 @@ import { FormattedSubtitleText } from '@/utils/SubtitleHtmlParser';
 
 /** Tracking added to subtitle text, in px. See the comment at its use site. */
 const SUBTITLE_LETTER_SPACING = 0.3;
+const LINE_HEIGHT_RATIO = 1.28;
 
 export interface SubtitleSettings {
     fontSize: number;
@@ -236,15 +237,14 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = React.memo(({
         };
     });
 
-    // Animated font size
+    // Animated font size. lineHeight moves with it: a fixed lineHeight on a growing
+    // font makes the two lines of a cue overlap while pinching.
     const animatedTextStyle = useAnimatedStyle(() => {
-        const isActive = isPinching.value;
+        const config = isPinching.value ? ACTIVE_SPRING_CONFIG : SMOOTH_SPRING_CONFIG;
 
         return {
-            fontSize: withSpring(
-                fontSize.value,
-                isActive ? ACTIVE_SPRING_CONFIG : SMOOTH_SPRING_CONFIG
-            ),
+            fontSize: withSpring(fontSize.value, config),
+            lineHeight: withSpring(fontSize.value * LINE_HEIGHT_RATIO, config),
         };
     });
 
@@ -258,7 +258,7 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = React.memo(({
         : {};
 
     const hasSubtitle = currentCue && currentCue.text.trim();
-    const resolvedLineHeight = Math.round(settings.fontSize * 1.28);
+    const resolvedLineHeight = Math.round(settings.fontSize * LINE_HEIGHT_RATIO);
     const minSubtitleHeight = Math.round(resolvedLineHeight + 8);
     const backgroundColor =
         settings.backgroundColor === 'transparent'
@@ -304,7 +304,6 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = React.memo(({
                                 color: settings.fontColor,
                                 fontWeight: settings.fontWeight || '600',
                                 fontFamily: settings.fontFamily,
-                                lineHeight: resolvedLineHeight,
                                 textAlign: 'center',
                                 // Slight positive tracking. Subtitles sit over moving,
                                 // often noisy picture, where tightly-set letters bleed
