@@ -29,7 +29,8 @@ interface FloatingSyncPanelProps {
     autoSyncRunning?: boolean;
 }
 
-const formatSeconds = (ms: number) => `${ms > 0 ? '+' : ms < 0 ? '−' : ''}${(Math.abs(ms) / 1000).toFixed(2)}`;
+/** Unsigned: the direction is spelled out under it, since "+1.2" never said which way. */
+const formatSeconds = (ms: number) => (Math.abs(ms) / 1000).toFixed(2);
 
 const formatMatchTime = (seconds: number) => {
     const m = Math.floor(seconds / 60);
@@ -111,9 +112,12 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
     }, [setValue]);
 
     const isSubtitle = syncType === 'subtitle' && subtitleCues.length > 0;
-    const noun = syncType === 'audio' ? 'Audio plays' : 'Subtitles show';
-    const caption = autoNote
-        ?? (value === 0 ? 'No offset' : `${noun} ${(Math.abs(value) / 1000).toFixed(2)} s ${value > 0 ? 'later' : 'earlier'}`);
+    const direction = value === 0 ? 'in sync' : `seconds ${value > 0 ? 'later' : 'earlier'}`;
+    // Which way to go, in terms of what the viewer actually sees and hears.
+    const hint = syncType === 'audio'
+        ? 'Hear it before the lips move? Tap Later.'
+        : 'Text shows before the voice? Tap Later.';
+    const caption = autoNote ?? hint;
 
     const renderNudge = (ms: number) => (
         <Touchable
@@ -124,8 +128,19 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
             accessibilityRole="button"
             accessibilityLabel={`${ms > 0 ? 'Later' : 'Earlier'} by ${Math.abs(ms)} milliseconds`}
         >
-            <Text style={[type.label, styles.nudgeText]}>{ms > 0 ? '+' : '−'}{Math.abs(ms) / 1000}</Text>
+            <Text style={[type.label, styles.nudgeText]}>{Math.abs(ms) / 1000}</Text>
         </Touchable>
+    );
+
+    const renderNudgeGroup = (steps: number[], label: string, icon: 'chevrons-left' | 'chevrons-right') => (
+        <View style={styles.nudgeGroup}>
+            <View style={styles.nudgeRow}>{steps.map(renderNudge)}</View>
+            <View style={styles.groupLabel}>
+                {icon === 'chevrons-left' && <Feather name={icon} size={12} color={colors.textTertiary} />}
+                <Text style={[type.caption, styles.groupLabelText]}>{label}</Text>
+                {icon === 'chevrons-right' && <Feather name={icon} size={12} color={colors.textTertiary} />}
+            </View>
+        </View>
     );
 
     return (
@@ -165,14 +180,14 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
                 {!searchMode && (
                     <>
                         <View style={styles.stepper}>
-                            {EARLIER_MS.map(renderNudge)}
+                            {renderNudgeGroup(EARLIER_MS, 'Earlier', 'chevrons-left')}
                             <View style={styles.valueBox} accessibilityLiveRegion="polite">
                                 <Text style={[type.hero, styles.value, value === 0 && styles.valueZero]} numberOfLines={1} adjustsFontSizeToFit>
                                     {formatSeconds(value)}
                                 </Text>
-                                <Text style={[type.caption, styles.valueUnit]}>seconds</Text>
+                                <Text style={[type.caption, styles.valueUnit]}>{direction}</Text>
                             </View>
-                            {LATER_MS.map(renderNudge)}
+                            {renderNudgeGroup(LATER_MS, 'Later', 'chevrons-right')}
                         </View>
 
                         <View style={styles.captionRow}>
@@ -248,7 +263,7 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
                                                 </Text>
                                                 <Text style={[type.caption, styles.resultTime]}>{formatMatchTime(item.cue.startTime)}</Text>
                                             </View>
-                                            <Text style={[type.label, styles.resultShift]}>{formatSeconds(shift)} s</Text>
+                                            <Text style={[type.label, styles.resultShift]}>{formatSeconds(shift)} s {shift > 0 ? 'later' : shift < 0 ? 'earlier' : ''}</Text>
                                         </Touchable>
                                     );
                                 })}
@@ -292,6 +307,10 @@ const styles = StyleSheet.create({
     title: { color: colors.text },
 
     stepper: { flexDirection: 'row', alignItems: 'center', gap: metrics.space.xs },
+    nudgeGroup: { alignItems: 'center', gap: 2 },
+    nudgeRow: { flexDirection: 'row', gap: metrics.space.xs },
+    groupLabel: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+    groupLabelText: { color: colors.textTertiary },
     nudge: {
         width: metrics.touch,
         height: metrics.touch,
