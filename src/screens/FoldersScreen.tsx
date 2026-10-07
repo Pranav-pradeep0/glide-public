@@ -9,20 +9,15 @@ import { Loader } from '@/components/Loader';
 import { IconButton, SortButton, Touchable } from '@/components/ui';
 import Animated from 'react-native-reanimated';
 import { EmptyState, ListHeader, cellEntering, getRelativeTime, joinMeta } from '@/components/VideoRow';
-import { RootStackParamList } from '@/types';
+import { RootStackParamList, VideoFolder } from '@/types';
 import { useTheme } from '@/hooks/useTheme';
-import { consumeDirtyAlbumCovers, useAlbums, useAlbumCover } from '@/hooks/useMediaService';
+import { consumeDirtyAlbumCovers, useAlbums } from '@/hooks/useMediaService';
 import { useThumbnail } from '@/hooks/useThumbnails';
 import { metrics, type } from '@/theme/theme';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 const GRID_HALF_GAP = metrics.space.sm / 2 + 2;
-
-interface AlbumWithCount {
-    title: string;
-    count: number;
-}
 
 type ViewMode = 'grid' | 'list';
 type SortByOption = 'name' | 'count';
@@ -47,25 +42,24 @@ function Cover({ path, style }: { path?: string; style: object }) {
 }
 
 interface AlbumItemProps {
-    item: AlbumWithCount;
+    item: VideoFolder;
     onPress: () => void;
-    coverRefreshKey: number;
 }
 
 /**
- * "42 videos · Added 3 days ago". The count reads once, as text; the date of the newest
- * video says where new things landed.
+ * "42 videos · Added 3 days ago". The count and relative date derived directly from pre-grouped folder metadata.
  */
-function useFolderMeta(item: AlbumWithCount, refreshKey: number) {
-    const coverVideo = useAlbumCover(item.title, refreshKey);
-    // The cover hook reports seconds.
-    const added = coverVideo?.modifiedDate ? `Added ${getRelativeTime(coverVideo.modifiedDate * 1000)}` : undefined;
-    return { path: coverVideo?.path, meta: joinMeta(videoCount(item.count), added) };
+function getFolderMeta(item: VideoFolder) {
+    const added = item.newestTimestamp ? `Added ${getRelativeTime(item.newestTimestamp)}` : undefined;
+    return {
+        path: item.firstVideoPath || item.firstVideoUri,
+        meta: joinMeta(videoCount(item.count), added),
+    };
 }
 
-const AlbumGridCard = React.memo(({ item, onPress, coverRefreshKey }: AlbumItemProps) => {
+const AlbumGridCard = React.memo(({ item, onPress }: AlbumItemProps) => {
     const { colors } = useTheme();
-    const folder = useFolderMeta(item, coverRefreshKey);
+    const folder = useMemo(() => getFolderMeta(item), [item]);
     return (
         <Touchable
             style={styles.gridCard}
@@ -83,9 +77,9 @@ const AlbumGridCard = React.memo(({ item, onPress, coverRefreshKey }: AlbumItemP
     );
 });
 
-const AlbumListItem = React.memo(({ item, onPress, coverRefreshKey }: AlbumItemProps) => {
+const AlbumListItem = React.memo(({ item, onPress }: AlbumItemProps) => {
     const { colors } = useTheme();
-    const folder = useFolderMeta(item, coverRefreshKey);
+    const folder = useMemo(() => getFolderMeta(item), [item]);
     return (
         <Touchable
             style={styles.row}
@@ -111,14 +105,12 @@ export default function FoldersScreen() {
     const navigation = useNavigation<NavigationProp>();
 
     const { albums, loading, refetch } = useAlbums();
-    const [coverRefreshKey, setCoverRefreshKey] = useState(0);
 
     useFocusEffect(
         useCallback(() => {
             const dirtyAlbums = consumeDirtyAlbumCovers();
             if (dirtyAlbums.length > 0) {
                 refetch();
-                setCoverRefreshKey((k) => k + 1);
             }
             return undefined;
         }, [refetch])
@@ -142,22 +134,23 @@ export default function FoldersScreen() {
         );
     }, [albums, sortBy]);
 
-    const handleAlbumPress = useCallback((album: AlbumWithCount) => {
+    const handleAlbumPress = useCallback((album: VideoFolder) => {
         navigation.navigate('AlbumVideos', {
             albumTitle: album.title,
+            bucketId: album.id,
             videoCount: album.count,
         });
     }, [navigation]);
 
     const grid = viewMode === 'grid';
 
-    const renderAlbum = useCallback(({ item }: { item: AlbumWithCount }) => (
+    const renderAlbum = useCallback(({ item }: { item: VideoFolder }) => (
         <Animated.View entering={cellEntering(grid)} style={grid ? styles.gridCell : styles.listCell}>
             {grid
-                ? <AlbumGridCard item={item} onPress={() => handleAlbumPress(item)} coverRefreshKey={coverRefreshKey} />
-                : <AlbumListItem item={item} onPress={() => handleAlbumPress(item)} coverRefreshKey={coverRefreshKey} />}
+                ? <AlbumGridCard item={item} onPress={() => handleAlbumPress(item)} />
+                : <AlbumListItem item={item} onPress={() => handleAlbumPress(item)} />}
         </Animated.View>
-    ), [grid, handleAlbumPress, coverRefreshKey]);
+    ), [grid, handleAlbumPress]);
 
     if (loading && albums.length === 0) {
         return <Loader />;
@@ -202,7 +195,7 @@ export default function FoldersScreen() {
                         ref={flashListRef}
                         data={sortedAlbums}
                         renderItem={renderAlbum}
-                        keyExtractor={(item: AlbumWithCount) => item.title}
+                        keyExtractor={(item: VideoFolder) => item.id || item.title}
                         numColumns={grid ? 2 : 1}
                         key={`${viewMode}-${sortBy}`}
                         contentContainerStyle={{

@@ -1,0 +1,471 @@
+package com.glide.app.player
+
+import android.content.ContentUris
+import android.content.Context
+import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
+import android.net.Uri
+import android.os.Build
+import android.provider.MediaStore
+import android.util.Log
+import android.util.Size
+import com.facebook.react.bridge.Arguments
+import com.facebook.react.bridge.Promise
+import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.bridge.ReactContextBaseJavaModule
+import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.module.annotations.ReactModule
+import java.io.File
+import java.io.FileOutputStream
+import kotlin.concurrent.thread
+
+@ReactModule(name = MediaStoreVideoModule.NAME)
+class MediaStoreVideoModule(private val reactContext: ReactApplicationContext) :
+    ReactContextBaseJavaModule(reactContext) {
+
+    override fun getName(): String = NAME
+
+    private data class FolderBucketData(
+        val id: String,
+        val title: String,
+        var count: Int,
+        var newestTimestamp: Long,
+        var firstVideoUri: String,
+        var firstVideoPath: String
+    )
+
+    companion object {
+        const val NAME = "MediaStoreVideoModule"
+        private const val TAG = "MediaStoreVideoModule"
+        private val thumbExecutor = java.util.concurrent.Executors.newFixedThreadPool(4)
+
+        private val VIDEO_PROJECTION = arrayOf(
+            MediaStore.Video.Media._ID,
+            MediaStore.Video.Media.TITLE,
+            MediaStore.Video.Media.DISPLAY_NAME,
+            MediaStore.Video.Media.DATA,
+            MediaStore.Video.Media.DURATION,
+            MediaStore.Video.Media.SIZE,
+            MediaStore.Video.Media.DATE_MODIFIED,
+            MediaStore.Video.Media.WIDTH,
+            MediaStore.Video.Media.HEIGHT,
+            MediaStore.Video.Media.BUCKET_ID,
+            MediaStore.Video.Media.BUCKET_DISPLAY_NAME
+        )
+
+        fun loadThumbnailSync(context: Context, videoUriOrPath: String, width: Int, height: Int): String? {
+            return try {
+                val cacheDir = File(context.cacheDir, "video_thumbs")
+                if (!cacheDir.exists()) {
+                    cacheDir.mkdirs()
+                }
+
+                var contentUri: Uri? = null
+                var videoId: Long? = null
+                var dateModified: Long = 0L
+                var fileSize: Long = 0L
+
+                if (videoUriOrPath.startsWith("content://")) {
+                    val parsed = Uri.parse(videoUriOrPath)
+                    contentUri = parsed
+                    videoId = try { ContentUris.parseId(parsed) } catch (_: Throwable) { null }
+                    try {
+                        val proj = arrayOf(
+                            MediaStore.Video.Media._ID,
+                            MediaStore.Video.Media.DATE_MODIFIED,
+                            MediaStore.Video.Media.SIZE
+                        )
+                        context.contentResolver.query(parsed, proj, null, null, null)?.use { c ->
+                            if (c.moveToFirst()) {
+                                if (videoId == null) videoId = c.getLong(0)
+                                dateModified = c.getLong(1)
+                                fileSize = c.getLong(2)
+                            }
+                        }
+                    } catch (_: Throwable) {}
+                } else if (videoUriOrPath.toLongOrNull() != null) {
+                    val id = videoUriOrPath.toLong()
+                    videoId = id
+                    contentUri = ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id)
+                    try {
+                        val proj = arrayOf(
+                            MediaStore.Video.Media.DATE_MODIFIED,
+                            MediaStore.Video.Media.SIZE
+                        )
+                        context.contentResolver.query(contentUri, proj, null, null, null)?.use { c ->
+                            if (c.moveToFirst()) {
+                                dateModified = c.getLong(0)
+                                fileSize = c.getLong(1)
+                            }
+                        }
+                    } catch (_: Throwable) {}
+                } else {
+                    try {
+                        val proj = arrayOf(
+                            MediaStore.Video.Media._ID,
+                            MediaStore.Video.Media.DATE_MODIFIED,
+                            MediaStore.Video.Media.SIZE
+                        )
+                        val sel = "${MediaStore.Video.Media.DATA} = ?"
+                        val args = arrayOf(videoUriOrPath)
+                        context.contentResolver.query(
+                            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                            proj,
+                            sel,
+                            args,
+                            null
+                        )?.use { c ->
+                            if (c.moveToFirst()) {
+                                videoId = c.getLong(0)
+                                dateModified = c.getLong(1)
+                                fileSize = c.getLong(2)
+                                contentUri = ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, videoId!!)
+                            }
+                        }
+                    } catch (_: Throwable) {}
+
+                    if (videoId == null) {
+                        val f = File(videoUriOrPath)
+                        if (f.exists()) {
+                            dateModified = f.lastModified()
+                            fileSize = f.length()
+                        }
+                    }
+                }
+
+                val safeId = videoId?.toString() ?: Math.abs(videoUriOrPath.hashCode()).toString()
+                val cacheKey = "${safeId}_${dateModified}_${fileSize}_${width}x${height}.jpg"
+                val cacheFile = File(cacheDir, cacheKey)
+                if (cacheFile.exists() && cacheFile.length() > 0) {
+                    return "file://${cacheFile.absolutePath}"
+                }
+
+                var bitmap: Bitmap? = null
+
+                // 1. API 29+ contentResolver.loadThumbnail
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && contentUri != null) {
+                    try {
+                        bitmap = context.contentResolver.loadThumbnail(contentUri, Size(width, height), null)
+                    } catch (_: Throwable) {}
+                }
+
+                // 2. Legacy MediaStore.Video.Thumbnails for API < 29
+                if (bitmap == null && videoId != null && videoId > 0) {
+                    try {
+                        @Suppress("DEPRECATION")
+                        bitmap = MediaStore.Video.Thumbnails.getThumbnail(
+                            context.contentResolver,
+                            videoId,
+                            MediaStore.Video.Thumbnails.MINI_KIND,
+                            null
+                        )
+                    } catch (_: Throwable) {}
+                }
+
+                // 3. Fallback to MediaMetadataRetriever
+                if (bitmap == null) {
+                    val retriever = MediaMetadataRetriever()
+                    try {
+                        if (contentUri != null) {
+                            retriever.setDataSource(context, contentUri)
+                        } else {
+                            retriever.setDataSource(videoUriOrPath)
+                        }
+                        bitmap = retriever.frameAtTime
+                    } catch (_: Throwable) {}
+                    finally {
+                        try { retriever.release() } catch (_: Throwable) {}
+                    }
+                }
+
+                if (bitmap != null) {
+                    val tempFile = File(cacheDir, "${cacheKey}.tmp_${System.nanoTime()}")
+                    try {
+                        FileOutputStream(tempFile).use { out ->
+                            bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                        }
+                        if (tempFile.renameTo(cacheFile)) {
+                            return "file://${cacheFile.absolutePath}"
+                        } else if (cacheFile.exists() && cacheFile.length() > 0) {
+                            return "file://${cacheFile.absolutePath}"
+                        }
+                    } catch (t: Throwable) {
+                        Log.e(TAG, "Error writing thumbnail to cache", t)
+                    } finally {
+                        try { tempFile.delete() } catch (_: Throwable) {}
+                        try { bitmap.recycle() } catch (_: Throwable) {}
+                    }
+                }
+
+                null
+            } catch (t: Throwable) {
+                Log.e(TAG, "Error in loadThumbnailSync", t)
+                null
+            }
+        }
+    }
+
+    @ReactMethod
+    fun getLibrary(promise: Promise) {
+        thread(name = "glide-video-library-scan") {
+            try {
+                val resolver = reactContext.contentResolver
+                val selection = "${MediaStore.Video.Media.SIZE} > 0"
+                val sortOrder = "${MediaStore.Video.Media.DATE_MODIFIED} DESC"
+
+                val cursor = resolver.query(
+                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                    VIDEO_PROJECTION,
+                    selection,
+                    null,
+                    sortOrder
+                )
+
+                val videosArray = Arguments.createArray()
+                val bucketsMap = LinkedHashMap<String, FolderBucketData>()
+
+                cursor?.use { c ->
+                    val idCol = c.getColumnIndex(MediaStore.Video.Media._ID)
+                    val titleCol = c.getColumnIndex(MediaStore.Video.Media.TITLE)
+                    val displayNameCol = c.getColumnIndex(MediaStore.Video.Media.DISPLAY_NAME)
+                    val dataCol = c.getColumnIndex(MediaStore.Video.Media.DATA)
+                    val durationCol = c.getColumnIndex(MediaStore.Video.Media.DURATION)
+                    val sizeCol = c.getColumnIndex(MediaStore.Video.Media.SIZE)
+                    val dateModifiedCol = c.getColumnIndex(MediaStore.Video.Media.DATE_MODIFIED)
+                    val widthCol = c.getColumnIndex(MediaStore.Video.Media.WIDTH)
+                    val heightCol = c.getColumnIndex(MediaStore.Video.Media.HEIGHT)
+                    val bucketIdCol = c.getColumnIndex(MediaStore.Video.Media.BUCKET_ID)
+                    val bucketDisplayNameCol = c.getColumnIndex(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
+
+                    while (c.moveToNext()) {
+                        val videoId = if (idCol >= 0) c.getLong(idCol) else 0L
+                        val title = if (titleCol >= 0) c.getString(titleCol) else null
+                        val displayName = if (displayNameCol >= 0) c.getString(displayNameCol) else null
+                        val dataPath = if (dataCol >= 0) c.getString(dataCol) ?: "" else ""
+                        val durationMs = if (durationCol >= 0) c.getLong(durationCol) else 0L
+                        val sizeBytes = if (sizeCol >= 0) c.getLong(sizeCol) else 0L
+                        val dateModifiedSec = if (dateModifiedCol >= 0) c.getLong(dateModifiedCol) else 0L
+                        val width = if (widthCol >= 0) c.getInt(widthCol) else 0
+                        val height = if (heightCol >= 0) c.getInt(heightCol) else 0
+                        val rawBucketId = if (bucketIdCol >= 0) c.getString(bucketIdCol) else null
+                        val rawBucketName = if (bucketDisplayNameCol >= 0) c.getString(bucketDisplayNameCol) else null
+
+                        val contentUri = ContentUris.withAppendedId(
+                            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                            videoId
+                        ).toString()
+
+                        val videoName = when {
+                            !displayName.isNullOrBlank() -> displayName
+                            !title.isNullOrBlank() -> title
+                            dataPath.isNotBlank() -> File(dataPath).name
+                            else -> "Unknown Video"
+                        }
+
+                        val bucketTitle = when {
+                            !rawBucketName.isNullOrBlank() -> rawBucketName
+                            dataPath.isNotBlank() -> {
+                                val parent = File(dataPath).parentFile
+                                parent?.name ?: "Videos"
+                            }
+                            else -> "Videos"
+                        }
+
+                        val bucketId = when {
+                            !rawBucketId.isNullOrBlank() -> rawBucketId
+                            dataPath.isNotBlank() -> {
+                                val parent = File(dataPath).parentFile
+                                parent?.absolutePath?.hashCode()?.toString() ?: "0"
+                            }
+                            else -> "0"
+                        }
+
+                        val dateModifiedMs = if (dateModifiedSec > 0) dateModifiedSec * 1000L else System.currentTimeMillis()
+
+                        // Update or insert bucket
+                        val bucket = bucketsMap[bucketId]
+                        if (bucket == null) {
+                            bucketsMap[bucketId] = FolderBucketData(
+                                id = bucketId,
+                                title = bucketTitle,
+                                count = 1,
+                                newestTimestamp = dateModifiedMs,
+                                firstVideoUri = contentUri,
+                                firstVideoPath = dataPath
+                            )
+                        } else {
+                            bucket.count++
+                            if (dateModifiedMs > bucket.newestTimestamp) {
+                                bucket.newestTimestamp = dateModifiedMs
+                                bucket.firstVideoUri = contentUri
+                                bucket.firstVideoPath = dataPath
+                            }
+                        }
+
+                        val videoMap = Arguments.createMap().apply {
+                            putString("id", videoId.toString())
+                            putString("name", videoName)
+                            putString("path", dataPath)
+                            putString("uri", contentUri)
+                            putDouble("size", sizeBytes.toDouble())
+                            putDouble("modifiedDate", dateModifiedMs.toDouble())
+                            putDouble("duration", durationMs / 1000.0) // seconds
+                            putInt("width", width)
+                            putInt("height", height)
+                            putBoolean("isDirectory", false)
+                            putString("album", bucketTitle)
+                            putString("bucketId", bucketId)
+                        }
+                        videosArray.pushMap(videoMap)
+                    }
+                }
+
+                val foldersArray = Arguments.createArray()
+                for (bucket in bucketsMap.values) {
+                    val folderMap = Arguments.createMap().apply {
+                        putString("id", bucket.id)
+                        putString("title", bucket.title)
+                        putInt("count", bucket.count)
+                        putDouble("newestTimestamp", bucket.newestTimestamp.toDouble())
+                        putString("firstVideoUri", bucket.firstVideoUri)
+                        putString("firstVideoPath", bucket.firstVideoPath)
+                    }
+                    foldersArray.pushMap(folderMap)
+                }
+
+                val result = Arguments.createMap().apply {
+                    putArray("videos", videosArray)
+                    putArray("folders", foldersArray)
+                }
+                promise.resolve(result)
+            } catch (e: Exception) {
+                promise.reject("E_MEDIASTORE_VIDEOS", e.message, e)
+            }
+        }
+    }
+
+    @ReactMethod
+    fun getVideos(bucketId: String?, promise: Promise) {
+        thread(name = "glide-video-bucket-scan") {
+            try {
+                val resolver = reactContext.contentResolver
+                val selection = if (!bucketId.isNullOrEmpty()) {
+                    "${MediaStore.Video.Media.SIZE} > 0 AND (${MediaStore.Video.Media.BUCKET_ID} = ? OR ${MediaStore.Video.Media.BUCKET_DISPLAY_NAME} = ?)"
+                } else {
+                    "${MediaStore.Video.Media.SIZE} > 0"
+                }
+                val selectionArgs = if (!bucketId.isNullOrEmpty()) {
+                    arrayOf(bucketId, bucketId)
+                } else {
+                    null
+                }
+                val sortOrder = "${MediaStore.Video.Media.DATE_MODIFIED} DESC"
+
+                val cursor = resolver.query(
+                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                    VIDEO_PROJECTION,
+                    selection,
+                    selectionArgs,
+                    sortOrder
+                )
+
+                val videosArray = Arguments.createArray()
+                cursor?.use { c ->
+                    val idCol = c.getColumnIndex(MediaStore.Video.Media._ID)
+                    val titleCol = c.getColumnIndex(MediaStore.Video.Media.TITLE)
+                    val displayNameCol = c.getColumnIndex(MediaStore.Video.Media.DISPLAY_NAME)
+                    val dataCol = c.getColumnIndex(MediaStore.Video.Media.DATA)
+                    val durationCol = c.getColumnIndex(MediaStore.Video.Media.DURATION)
+                    val sizeCol = c.getColumnIndex(MediaStore.Video.Media.SIZE)
+                    val dateModifiedCol = c.getColumnIndex(MediaStore.Video.Media.DATE_MODIFIED)
+                    val widthCol = c.getColumnIndex(MediaStore.Video.Media.WIDTH)
+                    val heightCol = c.getColumnIndex(MediaStore.Video.Media.HEIGHT)
+                    val bucketDisplayNameCol = c.getColumnIndex(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
+                    val bucketIdCol = c.getColumnIndex(MediaStore.Video.Media.BUCKET_ID)
+
+                    while (c.moveToNext()) {
+                        val videoId = if (idCol >= 0) c.getLong(idCol) else 0L
+                        val title = if (titleCol >= 0) c.getString(titleCol) else null
+                        val displayName = if (displayNameCol >= 0) c.getString(displayNameCol) else null
+                        val dataPath = if (dataCol >= 0) c.getString(dataCol) ?: "" else ""
+                        val durationMs = if (durationCol >= 0) c.getLong(durationCol) else 0L
+                        val sizeBytes = if (sizeCol >= 0) c.getLong(sizeCol) else 0L
+                        val dateModifiedSec = if (dateModifiedCol >= 0) c.getLong(dateModifiedCol) else 0L
+                        val width = if (widthCol >= 0) c.getInt(widthCol) else 0
+                        val height = if (heightCol >= 0) c.getInt(heightCol) else 0
+                        val rawBucketId = if (bucketIdCol >= 0) c.getString(bucketIdCol) else null
+                        val rawBucketName = if (bucketDisplayNameCol >= 0) c.getString(bucketDisplayNameCol) else null
+
+                        val contentUri = ContentUris.withAppendedId(
+                            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                            videoId
+                        ).toString()
+
+                        val videoName = when {
+                            !displayName.isNullOrBlank() -> displayName
+                            !title.isNullOrBlank() -> title
+                            dataPath.isNotBlank() -> File(dataPath).name
+                            else -> "Unknown Video"
+                        }
+
+                        val bucketTitle = when {
+                            !rawBucketName.isNullOrBlank() -> rawBucketName
+                            dataPath.isNotBlank() -> {
+                                val parent = File(dataPath).parentFile
+                                parent?.name ?: "Videos"
+                            }
+                            else -> "Videos"
+                        }
+
+                        val dateModifiedMs = if (dateModifiedSec > 0) dateModifiedSec * 1000L else System.currentTimeMillis()
+
+                        val videoMap = Arguments.createMap().apply {
+                            putString("id", videoId.toString())
+                            putString("name", videoName)
+                            putString("path", dataPath)
+                            putString("uri", contentUri)
+                            putDouble("size", sizeBytes.toDouble())
+                            putDouble("modifiedDate", dateModifiedMs.toDouble())
+                            putDouble("duration", durationMs / 1000.0)
+                            putInt("width", width)
+                            putInt("height", height)
+                            putBoolean("isDirectory", false)
+                            putString("album", bucketTitle)
+                            if (!rawBucketId.isNullOrBlank()) {
+                                putString("bucketId", rawBucketId)
+                            }
+                        }
+                        videosArray.pushMap(videoMap)
+                    }
+                }
+                promise.resolve(videosArray)
+            } catch (e: Exception) {
+                promise.reject("E_MEDIASTORE_VIDEOS", e.message, e)
+            }
+        }
+    }
+
+    @ReactMethod
+    fun getThumbnail(videoUriOrPath: String?, promise: Promise) {
+        getThumbnailWithSize(videoUriOrPath, 512, 512, promise)
+    }
+
+    @ReactMethod
+    fun getThumbnailWithSize(videoUriOrPath: String?, width: Int, height: Int, promise: Promise) {
+        if (videoUriOrPath.isNullOrBlank()) {
+            promise.resolve(null)
+            return
+        }
+
+        thumbExecutor.execute {
+            try {
+                val targetW = if (width > 0) width else 512
+                val targetH = if (height > 0) height else 512
+                val thumbUri = loadThumbnailSync(reactContext, videoUriOrPath, targetW, targetH)
+                promise.resolve(thumbUri)
+            } catch (e: Exception) {
+                promise.resolve(null)
+            }
+        }
+    }
+}

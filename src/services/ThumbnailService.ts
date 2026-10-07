@@ -1,6 +1,7 @@
 import SimpleThumbnail from '../../libs/react-native-simple-thumbnail';
 import * as RNFS from '@dr.pogodin/react-native-fs';
 import { FileService } from './FileService';
+import { MediaService } from './MediaService';
 
 const THUMBNAIL_DIR = `${RNFS.CachesDirectoryPath}/thumbnails`;
 const MAX_CONCURRENT_WORKERS = 4;
@@ -42,6 +43,18 @@ class ThumbnailServiceClass {
      */
     async getThumbnail(videoPath: string, timeMs: number = 0): Promise<string | null> {
         if (!videoPath) { return null; }
+
+        // Fast-path: try MediaStore system thumbnail (timeMs === 0)
+        if (timeMs === 0) {
+            try {
+                const sysThumb = await MediaService.getThumbnail(videoPath);
+                if (sysThumb) {
+                    return sysThumb;
+                }
+            } catch {
+                // fall through to disk cache / worker queue
+            }
+        }
 
         // Create a unique key for this request (path + time)
         const key = `${videoPath}::${timeMs}`;

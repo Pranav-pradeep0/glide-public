@@ -3,6 +3,7 @@ import type { NavigatorScreenParams } from '@react-navigation/native';
 
 
 export interface VideoFile {
+    id?: string;
     name: string;
     path: string;
     uri?: string; // Original content:// URI needed for CameraRoll.deletePhotos
@@ -13,6 +14,16 @@ export interface VideoFile {
     height?: number;
     isDirectory: boolean;
     album?: string;
+    bucketId?: string;
+}
+
+export interface VideoFolder {
+    id: string;
+    title: string;
+    count: number;
+    newestTimestamp: number;
+    firstVideoUri: string;
+    firstVideoPath: string;
 }
 
 export interface SubtitleCue {
@@ -131,6 +142,7 @@ export type RootStackParamList = {
     };
     AlbumVideos: {
         albumTitle: string;
+        bucketId?: string;
         videoCount: number;
     };
     Search: undefined;

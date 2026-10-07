@@ -1,206 +1,208 @@
-import { CameraRoll } from '@react-native-camera-roll/camera-roll';
+import { NativeModules, Platform } from 'react-native';
 import { PermissionService } from './PermissionService';
-import { FileService } from './FileService';
+import { VideoFile, VideoFolder } from '@/types';
+
+export interface MediaLibraryResult {
+    videos: VideoFile[];
+    folders: VideoFolder[];
+}
+
+export interface VideoEdge {
+    name: string;
+    path: string;
+    uri: string;
+    duration: number;
+    size: number;
+    width?: number;
+    height?: number;
+    timestamp: number;
+}
+
+export interface VideoPageResult {
+    edges: VideoEdge[];
+    page_info: {
+        has_next_page: boolean;
+        end_cursor?: string | null;
+    };
+}
 
 class MediaServiceClass {
-    private videoPageCache = new Map<string, {
-        data: {
-            edges: Array<{
-                name: string;
-                path: string;
-                uri: string;
-                duration: number;
-                size: number;
-                width?: number;
-                height?: number;
-                timestamp: number;
-            }>;
-            page_info: {
-                has_next_page: boolean;
-                end_cursor?: string | null;
-            };
-        };
-        ts: number;
-    }>();
-    private resolvedPathCache = new Map<string, { path: string; ts: number }>();
-    private static readonly PAGE_CACHE_TTL_MS = 5 * 60 * 1000;
-    private static readonly PAGE_CACHE_MAX_ENTRIES = 200;
-    private static readonly PATH_CACHE_TTL_MS = 30 * 60 * 1000;
-    private static readonly PATH_CACHE_MAX_ENTRIES = 2000;
+    private libraryCache: MediaLibraryResult | null = null;
+    private libraryCacheTimestamp = 0;
+    private static readonly CACHE_TTL_MS = 5 * 60 * 1000;
 
-    private getVideosCacheKey(albumName: string | null, limit: number, after?: string): string {
-        return `${albumName ?? '__all__'}|${limit}|${after ?? ''}`;
+    private get module() {
+        return NativeModules.MediaStoreVideoModule;
     }
 
-    getCachedVideosPage(albumName: string | null, limit = 50, after?: string) {
-        const key = this.getVideosCacheKey(albumName, limit, after);
-        const entry = this.videoPageCache.get(key);
-        if (!entry) {return null;}
-        if (Date.now() - entry.ts > MediaServiceClass.PAGE_CACHE_TTL_MS) {
-            this.videoPageCache.delete(key);
-            return null;
-        }
-        return entry.data;
+    invalidateCache() {
+        this.libraryCache = null;
+        this.libraryCacheTimestamp = 0;
     }
 
-    invalidateVideosCache(albumName?: string | null) {
-        if (!albumName) {
-            this.videoPageCache.clear();
-            return;
-        }
-        const prefix = `${albumName}|`;
-        for (const key of this.videoPageCache.keys()) {
-            if (key.startsWith(prefix)) {
-                this.videoPageCache.delete(key);
-            }
-        }
+    invalidateVideosCache(_albumName?: string | null) {
+        this.invalidateCache();
     }
+
     /**
-     * Get all albums that contain videos
+     * Scan the device media library once in a single native pass,
+     * returning all videos and pre-aggregated folder buckets.
      */
-    async getAlbums(): Promise<Array<{ title: string; count: number }>> {
+    async getLibrary(forceRefresh = false): Promise<MediaLibraryResult> {
+        if (Platform.OS !== 'android' || !this.module) {
+            return { videos: [], folders: [] };
+        }
+
         const hasPermission = await PermissionService.hasAndroidPermission();
         if (!hasPermission) {
             console.warn('[MediaService] No permission to access media');
-            return [];
+            return { videos: [], folders: [] };
+        }
+
+        const now = Date.now();
+        if (!forceRefresh && this.libraryCache && (now - this.libraryCacheTimestamp < MediaServiceClass.CACHE_TTL_MS)) {
+            return this.libraryCache;
         }
 
         try {
-            const albums = await CameraRoll.getAlbums({ assetType: 'Videos' });
-            return albums.map(a => ({ title: a.title, count: a.count }));
+            const result = await this.module.getLibrary();
+            const data: MediaLibraryResult = {
+                videos: (result?.videos || []) as VideoFile[],
+                folders: (result?.folders || []) as VideoFolder[],
+            };
+            this.libraryCache = data;
+            this.libraryCacheTimestamp = Date.now();
+            return data;
         } catch (error) {
-            console.error('[MediaService] Failed to get albums:', error);
-            return [];
+            console.error('[MediaService] Failed to load library:', error);
+            return this.libraryCache ?? { videos: [], folders: [] };
         }
     }
 
     /**
-     * Get videos from a specific album (or all videos if albumName is null)
+     * Get all folders that contain videos, pre-aggregated with counts and cover video paths.
      */
-    async getVideos(albumName: string | null, limit = 50, after?: string, forceRefresh = false): Promise<{
-        edges: Array<{
-            name: string;
-            path: string;
-            uri: string; // Original content:// URI for CameraRoll.deletePhotos
-            duration: number;
-            size: number;
-            width?: number;
-            height?: number;
-            timestamp: number;
-        }>;
-        page_info: {
-            has_next_page: boolean;
-            end_cursor?: string | null;
-        };
-    }> {
-        const cacheKey = this.getVideosCacheKey(albumName, limit, after);
-        if (!forceRefresh) {
-            const cached = this.getCachedVideosPage(albumName, limit, after);
-            if (cached) {
-                return cached;
-            }
+    async getFolders(forceRefresh = false): Promise<VideoFolder[]> {
+        const library = await this.getLibrary(forceRefresh);
+        return library.folders;
+    }
+
+    /**
+     * Get all albums (folders). Kept for backward compatibility.
+     */
+    async getAlbums(forceRefresh = false): Promise<VideoFolder[]> {
+        return this.getFolders(forceRefresh);
+    }
+
+    /**
+     * Get all videos in the library.
+     */
+    async getAllVideos(forceRefresh = false): Promise<VideoFile[]> {
+        const library = await this.getLibrary(forceRefresh);
+        return library.videos;
+    }
+
+    /**
+     * Get videos belonging to a specific album/folder.
+     */
+    async getVideosByAlbum(albumTitle: string, forceRefresh = false, bucketId?: string): Promise<VideoFile[]> {
+        if (Platform.OS !== 'android' || !this.module) {
+            return [];
         }
 
+        const hasPermission = await PermissionService.hasAndroidPermission();
+        if (!hasPermission) {
+            return [];
+        }
+
+        const filterFn = (v: VideoFile) => {
+            if (bucketId && v.bucketId) {
+                return v.bucketId === bucketId;
+            }
+            return v.album === albumTitle || v.bucketId === albumTitle;
+        };
+
+        if (!forceRefresh && this.libraryCache) {
+            return this.libraryCache.videos.filter(filterFn);
+        }
+
+        try {
+            if (typeof this.module.getVideos === 'function') {
+                const queryId = bucketId || albumTitle;
+                const videos = await this.module.getVideos(queryId);
+                return (videos || []) as VideoFile[];
+            }
+        } catch (error) {
+            console.warn('[MediaService] Failed to getVideos for bucket:', albumTitle, error);
+        }
+
+        const library = await this.getLibrary(forceRefresh);
+        return library.videos.filter(filterFn);
+    }
+
+    /**
+     * Paginated videos query compatible with CameraRoll pagination format.
+     */
+    async getVideos(
+        albumName: string | null,
+        limit = 50,
+        after?: string,
+        forceRefresh = false
+    ): Promise<VideoPageResult> {
         const hasPermission = await PermissionService.hasAndroidPermission();
         if (!hasPermission) {
             return { edges: [], page_info: { has_next_page: false } };
         }
 
+        const allVideos = albumName
+            ? await this.getVideosByAlbum(albumName, forceRefresh)
+            : (await this.getLibrary(forceRefresh)).videos;
+
+        const offset = after ? parseInt(after, 10) : 0;
+        const paged = allVideos.slice(offset, offset + limit);
+        const hasNext = offset + limit < allVideos.length;
+        const endCursor = hasNext ? (offset + limit).toString() : null;
+
+        return {
+            edges: paged.map(v => ({
+                name: v.name,
+                path: v.path,
+                uri: v.uri || v.path,
+                duration: v.duration,
+                size: v.size,
+                width: v.width,
+                height: v.height,
+                timestamp: Math.floor(v.modifiedDate / 1000),
+            })),
+            page_info: {
+                has_next_page: hasNext,
+                end_cursor: endCursor,
+            },
+        };
+    }
+
+    /**
+     * Request a fast system-cached video thumbnail from MediaStore.
+     */
+    async getThumbnail(
+        videoUriOrPath: string,
+        width?: number,
+        height?: number
+    ): Promise<string | null> {
+        if (Platform.OS !== 'android' || !this.module || !videoUriOrPath) {
+            return null;
+        }
+
         try {
-            const fetchParams: any = {
-                first: limit,
-                assetType: 'Videos',
-                include: ['filename', 'fileSize', 'playableDuration'],
-            };
-
-            if (albumName) {
-                fetchParams.groupName = albumName;
+            if (width !== undefined && height !== undefined && typeof this.module.getThumbnailWithSize === 'function') {
+                return await this.module.getThumbnailWithSize(videoUriOrPath, width, height);
             }
-
-            if (after) {
-                fetchParams.after = after;
+            if (typeof this.module.getThumbnail === 'function') {
+                return await this.module.getThumbnail(videoUriOrPath);
             }
-
-            const photos = await CameraRoll.getPhotos(fetchParams);
-
-            // Map and resolve content:// URIs to real file paths
-            const edges = await Promise.all(photos.edges.map(async (e) => {
-                const node = e.node;
-                const originalUri = node.image.uri; // Keep original URI for CameraRoll.deletePhotos
-                let videoPath = originalUri;
-
-                // Resolve content:// URIs to real file paths
-                if (videoPath.startsWith('content://')) {
-                    const cachedPath = this.resolvedPathCache.get(videoPath);
-                    if (cachedPath) {
-                        if (Date.now() - cachedPath.ts <= MediaServiceClass.PATH_CACHE_TTL_MS) {
-                            videoPath = cachedPath.path;
-                        } else {
-                            this.resolvedPathCache.delete(videoPath);
-                        }
-                    } else {
-                        try {
-                            videoPath = await FileService.resolveToRealPath(videoPath);
-                            this.resolvedPathCache.set(originalUri, { path: videoPath, ts: Date.now() });
-                            this.enforcePathCacheLimits();
-                        } catch (error) {
-                            console.error('[MediaService] Failed to resolve path:', videoPath, error);
-                            // Keep original path if resolution fails
-                        }
-                    }
-                }
-
-                return {
-                    name: node.image.filename || 'Unknown Video',
-                    path: videoPath,
-                    uri: originalUri, // Original content:// URI for deletion
-                    duration: node.image.playableDuration || 0,
-                    size: node.image.fileSize || 0,
-                    width: node.image.width,
-                    height: node.image.height,
-                    timestamp: node.timestamp,
-                };
-            }));
-
-            const result = {
-                edges,
-                page_info: photos.page_info,
-            };
-            this.videoPageCache.set(cacheKey, { data: result, ts: Date.now() });
-            this.enforcePageCacheLimits();
-            return result;
-
-        } catch (error) {
-            console.error('[MediaService] Failed to get videos:', error);
-            return { edges: [], page_info: { has_next_page: false } };
-        }
-    }
-
-    private enforcePageCacheLimits() {
-        const now = Date.now();
-        for (const [key, value] of this.videoPageCache.entries()) {
-            if (now - value.ts > MediaServiceClass.PAGE_CACHE_TTL_MS) {
-                this.videoPageCache.delete(key);
-            }
-        }
-        while (this.videoPageCache.size > MediaServiceClass.PAGE_CACHE_MAX_ENTRIES) {
-            const oldestKey = this.videoPageCache.keys().next().value;
-            if (!oldestKey) {break;}
-            this.videoPageCache.delete(oldestKey);
-        }
-    }
-
-    private enforcePathCacheLimits() {
-        const now = Date.now();
-        for (const [key, value] of this.resolvedPathCache.entries()) {
-            if (now - value.ts > MediaServiceClass.PATH_CACHE_TTL_MS) {
-                this.resolvedPathCache.delete(key);
-            }
-        }
-        while (this.resolvedPathCache.size > MediaServiceClass.PATH_CACHE_MAX_ENTRIES) {
-            const oldestKey = this.resolvedPathCache.keys().next().value;
-            if (!oldestKey) {break;}
-            this.resolvedPathCache.delete(oldestKey);
+            return null;
+        } catch {
+            return null;
         }
     }
 }

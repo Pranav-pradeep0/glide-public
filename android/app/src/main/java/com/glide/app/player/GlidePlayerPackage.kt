@@ -9,7 +9,10 @@ import com.facebook.react.uimanager.ViewManager
 @UnstableApi
 class GlidePlayerPackage : ReactPackage {
     override fun createNativeModules(context: ReactApplicationContext): List<NativeModule> =
-        listOf(SubtitleSyncModule(context))
+        listOf(
+            SubtitleSyncModule(context),
+            MediaStoreVideoModule(context)
+        )
 
     override fun createViewManagers(context: ReactApplicationContext): List<ViewManager<*, *>> =
         listOf(GlidePlayerViewManager())

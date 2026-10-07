@@ -40,8 +40,8 @@ export default function AlbumVideosScreen() {
         return map;
     }, [history]);
 
-    const { albumTitle } = route.params;
-    const { videos, loading, loadingMore, hasMore, loadMore, refetch } = useAlbumVideos(albumTitle);
+    const { albumTitle, bucketId } = route.params;
+    const { videos, loading, loadingMore, hasMore, loadMore, refetch } = useAlbumVideos(albumTitle, bucketId);
     const [viewMode, setViewMode] = useState<ViewMode>('list');
     const [selectedVideo, setSelectedVideo] = useState<VideoFile | null>(null);
     const [optionsVisible, setOptionsVisible] = useState(false);
