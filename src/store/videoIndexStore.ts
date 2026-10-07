@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { createMMKV } from 'react-native-mmkv';
 import { VideoFile } from '../types';
 import { MediaService } from '../services/MediaService';
 
@@ -20,9 +19,6 @@ interface VideoIndexState {
     forceFullSync: () => Promise<void>;
     searchVideos: (query: string) => VideoFile[];
 }
-
-// The old per-folder index. Dropped on first run of this version; the native scan replaces it.
-createMMKV({ id: 'video_index_v1' }).clearAll();
 
 let inFlight: Promise<void> | null = null;
 
