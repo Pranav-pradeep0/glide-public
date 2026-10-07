@@ -36,7 +36,6 @@ import { FloatingSyncPanel } from '@/components/FloatingSyncPanel';
 import { useSubtitleAutoSync } from '@/hooks/video-player/useSubtitleAutoSync';
 import { RecapModal } from '@/components/VideoPlayer/RecapModal';
 import { ResumeModal } from '@/components/VideoPlayer/ResumeModal';
-import { RecapService } from '@/services/RecapService';
 import { RECAP_AVAILABLE } from '@/utils/constants';
 import { getResumablePosition } from '@/utils/playbackResume';
 
@@ -49,6 +48,8 @@ import {
     usePlayerTracks,
     usePlayerBookmarks,
     usePlayerSettings,
+    usePlayerRecap,
+    useResumePlayback,
     ShakeDetector,
     formatTime,
     PLAYER_CONSTANTS,
@@ -147,6 +148,10 @@ export default function VideoPlayerScreen({ route }: Props) {
     const seekDuration = useAppStore(state => state.settings.seekDuration);
     const autoPlayNext = useAppStore(state => state.settings.autoPlayNext);
     const shakeThreshold = useAppStore(state => state.settings.shakeThreshold);
+    const shakeEnabled = useAppStore(state => state.settings.shakeEnabled ?? false);
+    const shakeAction = useAppStore(state => state.settings.shakeAction ?? 'play_pause');
+    const setShakeEnabled = useAppStore(state => state.setShakeEnabled);
+    const setShakeAction = useAppStore(state => state.setShakeAction);
     const showSeekButtons = useAppStore(state => state.settings.showSeekButtons);
     const updateSettings = useAppStore(state => state.updateSettings);
 
@@ -176,10 +181,6 @@ export default function VideoPlayerScreen({ route }: Props) {
             updateSettings({ globalBrightness: val });
         }
     }, [brightnessMode, updateSettings]);
-
-    // Inactivity tracking for Recap
-    const lastPauseTimeRef = useRef<number | null>(null);
-    const RECAP_INACTIVITY_THRESHOLD = 5 * 60 * 1000; // 5 minutes
 
     // ========================================================================
     // VIDEO SOURCE
@@ -222,18 +223,6 @@ export default function VideoPlayerScreen({ route }: Props) {
     const [syncPanelType, setSyncPanelType] = React.useState<'audio' | 'subtitle' | null>(null);
     const [basePlaybackRate, setBasePlaybackRate] = React.useState(1.0);
     const [temporaryHoldRate, setTemporaryHoldRate] = React.useState<number | null>(null);
-    const [shakeEnabled, setShakeEnabled] = React.useState(false);
-    const [shakeAction, setShakeAction] = React.useState<'play_pause' | 'next' | 'previous' | 'seek_forward' | 'seek_backward'>('play_pause');
-
-    // AI Recap State
-    const [recapVisible, setRecapVisible] = React.useState(false);
-    const [recapText, setRecapText] = React.useState<string | null>(null);
-    const [isGeneratingRecap, setIsGeneratingRecap] = React.useState(false);
-    const [recapLoadingMessage, setRecapLoadingMessage] = React.useState<string | undefined>(undefined);
-    const [isRecapEligible, setIsRecapEligible] = React.useState(false);
-    // False while the answer is still coming (subtitle tracks load a few seconds in), so the
-    // resume prompt can offer Recap straight away with a spinner instead of popping it in late.
-    const [recapChecked, setRecapChecked] = React.useState(false);
 
     const handleToggleOrientationLock = useCallback(() => {
         if (orientationLocked) {
@@ -311,34 +300,6 @@ export default function VideoPlayerScreen({ route }: Props) {
         }
         return initialVideoBrightness;
     }, [brightnessMode, globalBrightness, initialVideoBrightness]);
-
-    // Calculate resume state upfront to avoid flash
-    const shouldResume = useMemo(() => {
-        return !isNetworkStream && !!(resumePosition && resumePosition > 15);
-    }, [resumePosition, isNetworkStream]);
-
-    const [resumeModalVisible, setResumeModalVisible] = React.useState(shouldResume);
-
-    // Memoize resume modal data to prevent recalculations on every render during animations
-    const resumeModalData = useMemo(() => {
-        if (!resumePosition) {return null;}
-
-        const remaining = savedDuration ? Math.max(0, savedDuration - resumePosition) : 0;
-        // Calculate finish time once based on current time when history is loaded
-        const finishBy = savedDuration
-            ? new Date(Date.now() + remaining * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-            : undefined;
-
-        return {
-            formattedTime: formatTime(resumePosition),
-            remainingTime: savedDuration ? remaining : undefined,
-            finishByTime: finishBy,
-            // Offered while still checking; withdrawn only on a definite no.
-            showRecap: RECAP_AVAILABLE && !isNetworkStream && resumePosition > 120 && (!!imdbId || !!albumName)
-                && (isRecapEligible || !recapChecked),
-            recapChecking: !recapChecked,
-        };
-    }, [resumePosition, savedDuration, imdbId, albumName, isNetworkStream, isRecapEligible, recapChecked]);
 
     // ========================================================================
     // PLAYER HOOKS (ORDER MATTERS - dependencies flow down)
@@ -453,6 +414,88 @@ export default function VideoPlayerScreen({ route }: Props) {
         setDelay: settingsHook.setSubtitleDelay,
         showToast: bookmarksHook.showToastWithMessage,
     });
+
+    // AI Recap & Resume Setup
+    const resumeModalSetterRef = useRef<((v: boolean) => void) | null>(null);
+    const handleDismissResumeModal = useCallback(() => {
+        resumeModalSetterRef.current?.(false);
+    }, []);
+
+    // AI Recap Hook
+    const recap = usePlayerRecap({
+        videoPath,
+        videoName,
+        cleanTitle,
+        albumName,
+        imdbId,
+        isNetworkStream,
+        resumePosition: resumePosition ?? 0,
+        subtitleTracks: tracksHook.subtitleTracks,
+        subtitleTracksReady: tracksHook.subtitleTracksReady,
+        subtitleCues: tracksHook.subtitleCues,
+        onPause: player.pause,
+        onDismissResumeModal: handleDismissResumeModal,
+        showToast: bookmarksHook.showToastWithMessage,
+    });
+
+    // Resume Playback Hook
+    const resume = useResumePlayback({
+        isNetworkStream,
+        resumePosition: resumePosition ?? 0,
+        savedDuration,
+        imdbId,
+        albumName,
+        isRecapEligible: recap.isRecapEligible,
+        recapChecked: recap.recapChecked,
+        recapVisible: recap.recapVisible,
+        isPaused: player.state.paused,
+        onPlay: player.play,
+        onPause: player.pause,
+        onSeekToStart: () => {
+            player.clearResumePosition();
+            player.commitSeek(0);
+        },
+        onRecap: recap.handleRecapTrigger,
+        onRestartPersist: () => {
+            if (videoPath && videoName) {
+                const effectiveDuration =
+                    player.state.duration > 0
+                        ? player.state.duration
+                        : (savedDuration ?? 0);
+                updatePlaybackPosition(
+                    videoPath,
+                    videoName,
+                    0,
+                    effectiveDuration,
+                    tracksHook.selectedAudioTrackId,
+                    tracksHook.selectedSubtitleTrackIndex ?? undefined,
+                    settingsHook.settings.audioDelay,
+                    settingsHook.settings.subtitleDelay,
+                    brightnessMode === 'video' ? brightnessRef.current : undefined
+                );
+                persistNow();
+            }
+        },
+    });
+
+    resumeModalSetterRef.current = resume.setResumeModalVisible;
+
+    const {
+        recapVisible,
+        setRecapVisible,
+        recapText,
+        isGeneratingRecap,
+        setIsGeneratingRecap,
+        recapLoadingMessage,
+        setRecapLoadingMessage,
+    } = recap;
+
+    const {
+        resumeModalVisible,
+        setResumeModalVisible,
+        resumeModalData,
+        handleResumeModalAction,
+    } = resume;
 
     // ========================================================================
     // SAVING LOGIC (Defined after hooks to avoid circular dependencies)
@@ -844,220 +887,6 @@ export default function VideoPlayerScreen({ route }: Props) {
         }, 500);
     }, [player, autoPlayNext, hasNext, handleNext]);
 
-    // AI Recap Logic - shows modal immediately with skeleton loading
-    // Use a ref to get fresh subtitle cues during polling
-    const subtitleCuesRef = useRef(tracksHook.subtitleCues);
-    subtitleCuesRef.current = tracksHook.subtitleCues;
-
-    useEffect(() => {
-        let isActive = true;
-
-        const evaluateRecapEligibility = async () => {
-            if (!RECAP_AVAILABLE) {
-                if (isActive) {setIsRecapEligible(false); setRecapChecked(true);}
-                return;
-            }
-
-            if (
-                isNetworkStream ||
-                !resumePosition ||
-                resumePosition <= 120 ||
-                (!imdbId && !albumName)
-            ) {
-                if (isActive) {setIsRecapEligible(false); setRecapChecked(true);}
-                return;
-            }
-
-            // An empty track list before discovery finishes means "not yet", not "none".
-            if (!tracksHook.subtitleTracksReady) {
-                if (isActive) {setRecapChecked(false);}
-                return;
-            }
-
-            const result = await RecapService.getRecapEligibility(
-                videoPath,
-                tracksHook.subtitleTracks,
-                subtitleCuesRef.current,
-                resumePosition
-            );
-
-            if (isActive) {
-                setIsRecapEligible(result.eligible);
-                setRecapChecked(true);
-            }
-        };
-
-        evaluateRecapEligibility();
-
-        return () => {
-            isActive = false;
-        };
-    }, [
-        videoPath,
-        resumePosition,
-        isNetworkStream,
-        tracksHook.subtitleTracksReady,
-        imdbId,
-        albumName,
-        tracksHook.subtitleTracks,
-        tracksHook.subtitleCues,
-    ]);
-
-    const handleRecapTrigger = useCallback(async () => {
-        if (isNetworkStream) {return;}
-
-        if (!RECAP_AVAILABLE) {
-            bookmarksHook.showToastWithMessage('Recap is not available in this build');
-            return;
-        }
-        // If we already have recap text, just show it
-        if (recapText) {
-            player.pause();
-            setResumeModalVisible(false);
-            setRecapVisible(true);
-            return;
-        }
-
-        if (!resumePosition) {return;}
-
-        if (!isRecapEligible) {
-            bookmarksHook.showToastWithMessage('Recap unavailable for this title');
-            return;
-        }
-
-        // Pause player and show RecapModal immediately with loading state
-        player.pause();
-        setResumeModalVisible(false);
-        setRecapVisible(true);
-        setIsGeneratingRecap(true);
-
-        // Helper function for user feedback
-        const setFeedback = (msg: string) => {
-            if (isMounted.current) {setRecapLoadingMessage(msg);}
-        };
-
-        // Get dialogue through the centralized service
-        try {
-            setFeedback('Analyzing subtitles...');
-            const dialogue = await RecapService.getDialogueForRecap(
-                videoPath,
-                tracksHook.subtitleTracks,
-                subtitleCuesRef.current,
-                resumePosition,
-                cleanTitle || videoName
-            );
-
-            if (!isMounted.current) {return;}
-
-            if (!dialogue) {
-                setRecapText(null);
-                setRecapVisible(false);
-                setIsGeneratingRecap(false);
-                setRecapLoadingMessage(undefined);
-                bookmarksHook.showToastWithMessage('Not enough dialogue for a recap');
-                return;
-            }
-
-            setFeedback('Generating your recap...');
-            const summary = await RecapService.generateRecap(dialogue, cleanTitle || videoName);
-
-            if (!isMounted.current) {return;}
-
-            if (summary) {
-                setRecapText(summary);
-                setRecapLoadingMessage(undefined);
-            } else {
-                setRecapText(null);
-                setRecapVisible(false);
-                setRecapLoadingMessage(undefined);
-                bookmarksHook.showToastWithMessage('Recap generation failed');
-            }
-        } catch (error) {
-            console.error('[VideoPlayerScreen] Recap error:', error);
-            if (isMounted.current) {
-                setRecapText(null);
-                setRecapVisible(false);
-                setRecapLoadingMessage(undefined);
-                bookmarksHook.showToastWithMessage('Recap generation error');
-            }
-        } finally {
-            if (isMounted.current) {
-                setIsGeneratingRecap(false);
-            }
-        }
-    }, [recapText, resumePosition, isRecapEligible, bookmarksHook, player, cleanTitle, videoName, videoPath, tracksHook.subtitleTracks, isNetworkStream]);
-
-    // Inactivity Prompt Logic
-    useEffect(() => {
-        if (player.state.paused) {
-            // Only set if not already set (e.g. from a previous pause)
-            if (!lastPauseTimeRef.current) {
-                lastPauseTimeRef.current = Date.now();
-            }
-        } else {
-            // When resuming, check how long it was paused
-            if (lastPauseTimeRef.current) {
-                const pauseDuration = Date.now() - lastPauseTimeRef.current;
-                // If paused for > threshold, show the resume modal again to offer a recap
-                if (!isNetworkStream && pauseDuration > RECAP_INACTIVITY_THRESHOLD && !resumeModalVisible && !recapVisible) {
-                    setResumeModalVisible(true);
-                    player.pause();
-                }
-            }
-            lastPauseTimeRef.current = null;
-        }
-    }, [player.state.paused, resumeModalVisible, recapVisible, isNetworkStream]); // eslint-disable-line react-hooks/exhaustive-deps
-
-    const handleResumeModalAction = useCallback((action: 'resume' | 'restart' | 'recap') => {
-        if (action === 'resume') {
-            setResumeModalVisible(false);
-            player.play();
-        } else if (action === 'restart') {
-            const effectiveDuration =
-                player.state.duration > 0
-                    ? player.state.duration
-                    : (savedDuration ?? 0);
-
-            // Reset persisted resume point immediately so old history cannot reappear.
-            if (videoPath && videoName) {
-                updatePlaybackPosition(
-                    videoPath,
-                    videoName,
-                    0,
-                    effectiveDuration,
-                    tracksHook.selectedAudioTrackId,
-                    tracksHook.selectedSubtitleTrackIndex ?? undefined,
-                    settingsHook.settings.audioDelay,
-                    settingsHook.settings.subtitleDelay,
-                    brightnessMode === 'video' ? brightnessRef.current : undefined
-                );
-                persistNow();
-            }
-
-            setResumeModalVisible(false);
-            player.clearResumePosition();
-            player.commitSeek(0);
-            player.play();
-        } else if (action === 'recap') {
-            // Don't close modal yet - handleRecapTrigger will show RecapModal or toast
-            // Modal will be hidden when recap is successful or on close button
-            handleRecapTrigger();
-        }
-    }, [
-        player,
-        handleRecapTrigger,
-        savedDuration,
-        videoPath,
-        videoName,
-        updatePlaybackPosition,
-        tracksHook.selectedAudioTrackId,
-        tracksHook.selectedSubtitleTrackIndex,
-        settingsHook.settings.audioDelay,
-        settingsHook.settings.subtitleDelay,
-        brightnessMode,
-        persistNow,
-    ]);
-
     // ========================================================================
     // LIFECYCLE EFFECTS
     // ========================================================================
@@ -1402,7 +1231,7 @@ export default function VideoPlayerScreen({ route }: Props) {
                     insets={effectiveInsets}
                     enableHaptics={playMode === 'with-haptics'}
                     shakeEnabled={shakeEnabled}
-                    onToggleShake={() => setShakeEnabled(prev => !prev)}
+                    onToggleShake={() => setShakeEnabled(!shakeEnabled)}
                     shakeAction={shakeAction}
                     onSelectShakeAction={setShakeAction}
                     seekDuration={seekDuration}

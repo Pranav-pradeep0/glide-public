@@ -24,6 +24,8 @@ export { usePlayerTracks } from './usePlayerTracks';
 export { usePlayerBookmarks } from './usePlayerBookmarks';
 export { usePlayerSettings } from './usePlayerSettings';
 export { useShakeControl, ShakeDetector } from './useShakeControl';
+export { usePlayerRecap } from './usePlayerRecap';
+export { useResumePlayback } from './useResumePlayback';
 
 // Types and utilities
 export * from './types';
