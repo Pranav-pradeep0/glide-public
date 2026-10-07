@@ -205,7 +205,7 @@ export const FloatingSyncPanel: React.FC<FloatingSyncPanelProps> = ({
                             <View style={styles.actionRow}>
                                 {onAutoSync && (
                                     <Button
-                                        label={!cuesReady ? 'Reading subtitles…' : autoSyncRunning ? 'Syncing…' : 'Auto sync'}
+                                        label={autoSyncRunning ? 'Syncing…' : 'Auto sync'}
                                         variant="primary"
                                         icon="zap"
                                         loading={autoSyncRunning || !cuesReady}
