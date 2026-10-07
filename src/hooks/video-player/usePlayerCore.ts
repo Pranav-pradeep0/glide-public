@@ -150,7 +150,7 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
 
     /**
      * applySeekToVLC — the single exit point for all seeks to native.
-     * Simplified: no JS-side dedup (native bridge handles dedup).
+     * Every call reaches native as a seek command; nothing is deduplicated.
      */
     const applySeekToVLC = useCallback((timeInSeconds: number, isPreview: boolean = false) => {
         if (!state.isVideoLoaded || !state.duration || state.duration === 0) {
@@ -159,14 +159,13 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
         }
 
         const clamped = Math.max(0, Math.min(state.duration, timeInSeconds));
-        const fraction = Math.max(0, Math.min(1, clamped / state.duration));
 
         const player = videoRef.current;
-        if (player && typeof player.seek === 'function') {
-            if (isPreview && typeof player.previewSeek === 'function') {
-                player.previewSeek(fraction);
+        if (player) {
+            if (isPreview) {
+                player.previewSeek(clamped);
             } else {
-                player.seek(fraction);
+                player.seek(clamped);
             }
         } else if (__DEV__) {
             console.warn('[SEEK] applySeekToVLC — no player instance');
@@ -295,7 +294,7 @@ export function usePlayerCore(options: UsePlayerCoreOptions): UsePlayerCoreRetur
         playerStoppedRef.current = false;
         isPlayingShared.value = true;
 
-        // Always reset to 0 when playerStopped (video ended), regardless of currentTime drift
+        // Native restarts an ended video on play (GlidePlayerView.setPaused); match it here.
         if (state.playerStopped) {
             currentTimeRef.current = 0;
             currentTimeShared.value = 0;

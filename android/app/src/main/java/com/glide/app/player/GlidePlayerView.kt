@@ -107,12 +107,6 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
     private var audioDelayMs = 0
     private var audioDelayProcessor: AudioDelayProcessor? = null
 
-    // Bridge-level duplicate filter, matching ReactVlcPlayerView.shouldSkipSeek: JS sets the
-    // prop to a fraction and then back to -1, and React re-sends an unchanged prop on
-    // remount. Neither is a seek request.
-    private var lastSeekFraction = Float.NaN
-    private var lastPreviewFraction = Float.NaN
-
     // The one thing ExoPlayer will not answer: whether onVideoLoad has already gone out for
     // this media. Duration is unknown until READY, and JS must see exactly one load.
     private var loadEmitted = false
@@ -282,7 +276,13 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
 
     fun setPaused(paused: Boolean) {
         pausedProp = paused
-        player?.playWhenReady = !paused
+        val p = player ?: return
+        // ExoPlayer ignores play in STATE_ENDED. Playing a finished video restarts it, as
+        // Media3's own play button does (Util.handlePlayButtonAction).
+        if (!paused && p.playbackState == Player.STATE_ENDED) {
+            p.seekToDefaultPosition()
+        }
+        p.playWhenReady = !paused
     }
 
     fun setRate(rate: Float) {
@@ -587,27 +587,17 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
         }
     }
 
-    /** Fraction in [0, 1], or negative as the JS-side reset sentinel. */
-    fun setSeek(fraction: Float) {
-        if (fraction < 0 || fraction == lastSeekFraction) return
-        lastSeekFraction = fraction
-        seekToFraction(fraction, SeekParameters.EXACT)
-    }
-
-    /** Fraction in [0, 1]. Fired continuously while the scrubber is dragged. */
-    fun setPreviewSeek(fraction: Float) {
-        if (fraction < 0 || fraction == lastPreviewFraction) return
-        lastPreviewFraction = fraction
-        // A drag issues one of these every 40 ms. CLOSEST_SYNC keeps each one cheap; the
-        // committed seek that follows is EXACT, so where it finally lands is still precise.
-        seekToFraction(fraction, SeekParameters.CLOSEST_SYNC)
-    }
-
-    private fun seekToFraction(fraction: Float, params: SeekParameters) {
+    /**
+     * Seeks are view commands, not props: every call is a request, so seeking to the same
+     * spot twice (two jumps back that both clamp to 0:00) works. `exact = false` is the
+     * scrubber's live preview, issued every 40 ms; CLOSEST_SYNC keeps each one cheap and
+     * the committed seek that follows is EXACT.
+     */
+    fun seekTo(positionMs: Long, exact: Boolean) {
         val p = player ?: return
         val duration = p.duration
         if (duration == C.TIME_UNSET || duration <= 0) {
-            Log.w(TAG, "seek dropped fraction=$fraction - duration unknown")
+            Log.w(TAG, "seek dropped position=${positionMs}ms - duration unknown")
             return
         }
         // stopPlayer() leaves the player idle. Seeking one is the revive path, and the media
@@ -615,9 +605,9 @@ class GlidePlayerView(private val reactContext: ThemedReactContext) :
         if (p.playbackState == Player.STATE_IDLE) {
             p.prepare()
         }
-        p.setSeekParameters(params)
-        val target = (fraction.coerceIn(0f, 1f) * duration).roundToLong()
-        Log.w(TAG, "seek to ${target}ms of ${duration}ms exact=${params == SeekParameters.EXACT}")
+        p.setSeekParameters(if (exact) SeekParameters.EXACT else SeekParameters.CLOSEST_SYNC)
+        val target = positionMs.coerceIn(0L, duration)
+        Log.w(TAG, "seek to ${target}ms of ${duration}ms exact=$exact")
         p.seekTo(target)
     }
 

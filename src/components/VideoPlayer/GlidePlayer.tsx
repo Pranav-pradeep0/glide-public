@@ -43,8 +43,10 @@ export interface PlayerSource {
 }
 
 export interface GlidePlayerRef {
-    seek: (fraction: number) => void;
-    previewSeek: (fraction: number) => void;
+    /** Seconds. A command, so repeating the same target still seeks. */
+    seek: (seconds: number) => void;
+    /** Seconds. Cheap keyframe seek for live scrubbing. */
+    previewSeek: (seconds: number) => void;
     stopPlayer: () => void;
     enterPictureInPicture: () => void;
     /** 100..200. Above 100 is gain on top of a maxed system stream; set imperatively so gestures stay smooth. */
@@ -93,27 +95,19 @@ const GlidePlayer = forwardRef<GlidePlayerRef, GlidePlayerProps>((props, ref) =>
         nativeRef.current?.setNativeProps(nativeProps);
     }, []);
 
-    const dispatchCommand = useCallback((command: string) => {
+    const dispatchCommand = useCallback((command: string, args: unknown[] = []) => {
         if (!nativeRef.current) { return; }
         const handle = findNodeHandle(nativeRef.current);
         if (handle == null) { return; }
         const config = UIManager.getViewManagerConfig(NATIVE_NAME) as {
             Commands: Record<string, number>;
         };
-        UIManager.dispatchViewManagerCommand(handle, config.Commands[command], []);
+        UIManager.dispatchViewManagerCommand(handle, config.Commands[command], args);
     }, []);
 
     useImperativeHandle(ref, () => ({
-        // The -1 that follows is the reset sentinel: native ignores a negative value, and
-        // without it React would not re-send an identical fraction on the next seek.
-        seek: (fraction: number) => {
-            setNativeProps({ seek: fraction });
-            setTimeout(() => setNativeProps({ seek: -1 }), 0);
-        },
-        previewSeek: (fraction: number) => {
-            setNativeProps({ previewSeek: fraction });
-            setTimeout(() => setNativeProps({ previewSeek: -1 }), 0);
-        },
+        seek: (seconds: number) => dispatchCommand('seek', [Math.round(seconds * 1000)]),
+        previewSeek: (seconds: number) => dispatchCommand('previewSeek', [Math.round(seconds * 1000)]),
         setVolume: (percent: number) => setNativeProps({ volumeBoost: Math.round(percent) }),
         stopPlayer: () => dispatchCommand('stopPlayer'),
         enterPictureInPicture: () => dispatchCommand('enterPictureInPicture'),
@@ -139,8 +133,6 @@ const GlidePlayer = forwardRef<GlidePlayerRef, GlidePlayerProps>((props, ref) =>
             {...forwarded}
             style={[styles.base, props.style]}
             source={{ ...resolved, uri }}
-            seek={-1}
-            previewSeek={-1}
             progressUpdateInterval={onProgress ? 250 : 0}
             onVideoLoadStart={unwrap(onLoadStart)}
             onVideoLoad={unwrap(onLoad)}

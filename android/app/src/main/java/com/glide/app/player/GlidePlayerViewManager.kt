@@ -40,12 +40,6 @@ class GlidePlayerViewManager : SimpleViewManager<GlidePlayerView>() {
     @ReactProp(name = "paused", defaultBoolean = false)
     fun setPaused(view: GlidePlayerView, paused: Boolean) = view.setPaused(paused)
 
-    @ReactProp(name = "seek", defaultFloat = -1f)
-    fun setSeek(view: GlidePlayerView, seek: Float) = view.setSeek(seek)
-
-    @ReactProp(name = "previewSeek", defaultFloat = -1f)
-    fun setPreviewSeek(view: GlidePlayerView, seek: Float) = view.setPreviewSeek(seek)
-
     @ReactProp(name = "rate", defaultFloat = 1f)
     fun setRate(view: GlidePlayerView, rate: Float) = view.setRate(rate)
 
@@ -109,7 +103,9 @@ class GlidePlayerViewManager : SimpleViewManager<GlidePlayerView>() {
     override fun getCommandsMap(): Map<String, Int> = mapOf(
         "pausePlayer" to 4,
         "stopPlayer" to 5,
-        "enterPictureInPicture" to 6
+        "enterPictureInPicture" to 6,
+        "seek" to 7,
+        "previewSeek" to 8
     )
 
     override fun receiveCommand(view: GlidePlayerView, commandId: Int, args: ReadableArray?) {
@@ -117,6 +113,8 @@ class GlidePlayerViewManager : SimpleViewManager<GlidePlayerView>() {
             4 -> view.pausePlayer()
             5 -> view.stopPlayer()
             6 -> view.enterPictureInPicture()
+            7 -> args?.let { view.seekTo(it.getDouble(0).toLong(), exact = true) }
+            8 -> args?.let { view.seekTo(it.getDouble(0).toLong(), exact = false) }
             else -> Unit
         }
     }
