@@ -13,7 +13,7 @@ import com.glide.app.pip.PipModule
 
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 
-class MainActivity : ReactActivity() {
+class MainActivity : GlideBaseActivity() {
   private var isReactReady = false
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -73,16 +73,12 @@ class MainActivity : ReactActivity() {
     try {
       val reactApplication = application as? com.facebook.react.ReactApplication
       val reactContext = reactApplication?.reactHost?.currentReactContext
-      reactContext?.getNativeModule(PipModule::class.java)
-          ?.onPictureInPictureModeChanged(isInPictureInPictureMode)
+      val pipModule = reactContext?.getNativeModule(PipModule::class.java)
+          ?: (reactContext?.getNativeModule(PipModule.NAME) as? PipModule)
+      pipModule?.onPictureInPictureModeChanged(isInPictureInPictureMode)
     } catch (e: Exception) {
       android.util.Log.w("MainActivity", "Failed to notify PIP state change: ${e.message}")
     }
   }
-
-  /** Hardware volume keys drive the player's own HUD while it is open. */
-  override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean =
-      AudioControlModule.getInstance()?.handleVolumeKey(keyCode) == true ||
-          super.onKeyDown(keyCode, event)
 
 }

@@ -12,7 +12,7 @@ import android.os.Bundle
 import android.content.Intent
 import com.glide.app.pip.PipModule
 
-class VideoPlayerActivity : ReactActivity() {
+class VideoPlayerActivity : GlideBaseActivity() {
 
   private companion object {
     const val TAG = "VideoPlayerActivity"
@@ -142,15 +142,12 @@ class VideoPlayerActivity : ReactActivity() {
     try {
       val reactApplication = application as? com.facebook.react.ReactApplication
       val reactContext = reactApplication?.reactHost?.currentReactContext
-      reactContext?.getNativeModule(PipModule::class.java)
-          ?.onPictureInPictureModeChanged(isInPictureInPictureMode)
+      val pipModule = reactContext?.getNativeModule(PipModule::class.java)
+          ?: (reactContext?.getNativeModule(PipModule.NAME) as? PipModule)
+      pipModule?.onPictureInPictureModeChanged(isInPictureInPictureMode)
     } catch (e: Exception) {
       android.util.Log.w("VideoPlayerActivity", "Failed to notify PIP state change: ${e.message}")
     }
   }
 
-  /** Hardware volume keys drive the player's own HUD, same as in MainActivity. */
-  override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean =
-      AudioControlModule.getInstance()?.handleVolumeKey(keyCode) == true ||
-          super.onKeyDown(keyCode, event)
 }

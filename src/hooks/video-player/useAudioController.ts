@@ -3,7 +3,8 @@ import { NativeModules, DeviceEventEmitter, EmitterSubscription } from 'react-na
 import { SharedValue, useSharedValue } from 'react-native-reanimated';
 import type { GlidePlayerRef } from '@/components/VideoPlayer/GlidePlayer';
 
-const { AudioControlModule } = NativeModules;
+const { AudioVolumeModule, AudioControlModule } = NativeModules;
+const AudioModule = AudioVolumeModule || AudioControlModule;
 
 export type AudioRouteType = 'speaker' | 'bluetooth' | 'wired' | 'usb' | 'unknown';
 
@@ -96,29 +97,29 @@ export function useAudioController(
 
     // Initialize and start listening
     useEffect(() => {
-        if (!AudioControlModule) {
-            if (__DEV__) {console.warn('[AudioController] AudioControlModule not available');}
+        if (!AudioModule) {
+            if (__DEV__) {console.warn('[AudioController] AudioVolumeModule not available');}
             return;
         }
 
-        AudioControlModule.getCurrentRoute().then((result: any) => {
+        AudioModule.getCurrentRoute().then((result: any) => {
             setAudioRoute({
                 type: result.route as AudioRouteType,
                 maxVolume: result.maxVolume,
             });
         });
 
-        AudioControlModule.getVolume().then((result: any) => {
+        AudioModule.getVolume().then((result: any) => {
             const percentage = result.volume;
             currentVolumeShared.value = percentage / 100;
             setVolumeState(percentage);
             lastSetVolumeRef.current = percentage;
         });
 
-        AudioControlModule.startListening();
+        AudioModule.startListening();
 
         return () => {
-            AudioControlModule.stopListening();
+            AudioModule.stopListening();
         };
     }, [currentVolumeShared]);
 
@@ -182,7 +183,7 @@ export function useAudioController(
                     adoptSystemVolume(deviceVolume);
                 } else {
                     setBoost(100);
-                    AudioControlModule.getVolume().then((result: any) => adoptSystemVolume(result.volume));
+                    AudioModule.getVolume().then((result: any) => adoptSystemVolume(result.volume));
                 }
             }
         );
@@ -195,7 +196,7 @@ export function useAudioController(
     // Apply volume (called during gestures and manual sets)
     // STABLE CALLBACK: Uses refs to avoid recreation and stale closures
     const applyVolume = useCallback((normalizedValue: number, fromGesture: boolean = false) => {
-        if (!AudioControlModule) {return;}
+        if (!AudioModule) {return;}
 
         if (fromGesture) {
             isGestureActiveRef.current = true;
@@ -222,10 +223,10 @@ export function useAudioController(
 
         // Use sync method during gestures for better performance (no promise overhead)
         try {
-            if (fromGesture && AudioControlModule.setVolumeSync) {
-                AudioControlModule.setVolumeSync(systemPercentage);
+            if (fromGesture && AudioModule.setVolumeSync) {
+                AudioModule.setVolumeSync(systemPercentage);
             } else {
-                AudioControlModule.setVolume(systemPercentage).catch((err: any) => {
+                AudioModule.setVolume(systemPercentage).catch((err: any) => {
                     if (__DEV__) {console.warn('[AudioController] setVolume error:', err);}
                 });
             }

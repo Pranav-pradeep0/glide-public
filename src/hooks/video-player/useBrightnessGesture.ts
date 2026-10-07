@@ -6,9 +6,17 @@
  */
 
 import { useMemo } from 'react';
+import { NativeModules } from 'react-native';
 import { Gesture } from 'react-native-gesture-handler';
 import { SharedValue, runOnJS, useSharedValue } from 'react-native-reanimated';
 import { PLAYER_CONSTANTS } from './types';
+
+const { DisplayBrightnessModule, AudioControlModule } = NativeModules;
+const BrightnessModule = DisplayBrightnessModule || AudioControlModule;
+
+const applyBrightnessDefault = (value: number) => {
+    BrightnessModule?.setBrightness?.(value);
+};
 
 // ============================================================================
 // TYPES
@@ -24,9 +32,8 @@ interface UseBrightnessGestureOptions {
     currentBrightness: SharedValue<number>;
     brightnessStart: SharedValue<number>;
 
-    // Callbacks
     onBrightnessChange: (value: number) => void;
-    onBrightnessApply: (value: number, isFinal?: boolean) => void;
+    onBrightnessApply?: (value: number, isFinal?: boolean) => void;
     onBrightnessWait?: () => void;
     onGestureStart: () => void;
     onGestureEnd: () => void;
@@ -56,6 +63,7 @@ export function useBrightnessGesture(options: UseBrightnessGestureOptions) {
     } = options;
 
     const isGestureActive = useSharedValue(false);
+    const effectiveBrightnessApply = onBrightnessApply || applyBrightnessDefault;
 
     const gesture = useMemo(() => {
         return Gesture.Pan()
@@ -111,13 +119,13 @@ export function useBrightnessGesture(options: UseBrightnessGestureOptions) {
                 // Update every 3rd pixel roughly (sensitivity 0.008 -> 125px full range)
                 // Just use frame throttle
                 if (Math.floor(Math.abs(event.translationY)) % 5 === 0) {
-                    runOnJS(onBrightnessApply)(newValue);
+                    runOnJS(effectiveBrightnessApply)(newValue);
                 }
             })
             .onEnd(() => {
                 'worklet';
                 if (!isGestureActive.value) {return;}
-                runOnJS(onBrightnessApply)(currentBrightness.value, true);
+                runOnJS(effectiveBrightnessApply)(currentBrightness.value, true);
             })
             .onFinalize(() => {
                 'worklet';
@@ -136,7 +144,7 @@ export function useBrightnessGesture(options: UseBrightnessGestureOptions) {
         currentBrightness,
         brightnessStart,
         onBrightnessChange,
-        onBrightnessApply,
+        effectiveBrightnessApply,
         onGestureStart,
         onGestureEnd,
         onLockTap,

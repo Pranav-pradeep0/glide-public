@@ -1,0 +1,625 @@
+package com.glide.app.audio
+
+import android.content.ContentResolver
+import android.content.Context
+import android.database.ContentObserver
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.net.Uri
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
+import android.util.Log
+import android.view.KeyEvent
+import androidx.annotation.RequiresApi
+import com.facebook.react.bridge.Arguments
+import com.facebook.react.bridge.LifecycleEventListener
+import com.facebook.react.bridge.Promise
+import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.bridge.ReactContextBaseJavaModule
+import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.WritableMap
+import com.facebook.react.modules.core.DeviceEventManagerModule
+import com.facebook.react.module.annotations.ReactModule
+import java.util.Locale
+
+/**
+ * AudioVolumeModule manages audio volume, hardware button events, and audio routing.
+ *
+ * <p>
+ * Handles music stream volume adjustments, volume queries, audio device/routing changes,
+ * and route-aware limits (speaker capped at 100%, external routes allowing boost up to 200%).
+ * </p>
+ */
+@ReactModule(name = AudioVolumeModule.NAME)
+class AudioVolumeModule(private val reactContext: ReactApplicationContext) :
+    ReactContextBaseJavaModule(reactContext), LifecycleEventListener {
+
+    companion object {
+        const val NAME = "AudioVolumeModule"
+        private const val TAG = "AudioVolumeModule"
+
+        // Route type constants
+        const val ROUTE_SPEAKER = "speaker"
+        const val ROUTE_BLUETOOTH = "bluetooth"
+        const val ROUTE_WIRED = "wired"
+        const val ROUTE_USB = "usb"
+        const val ROUTE_UNKNOWN = "unknown"
+
+        // Event names
+        private const val EVENT_VOLUME_CHANGE = "onVolumeChange"
+        private const val EVENT_ROUTE_CHANGE = "onAudioRouteChange"
+        private const val EVENT_VOLUME_KEY = "onVolumeKey"
+
+        // Timing constants
+        private const val APP_CHANGE_DEBOUNCE_MS = 200L
+        private const val VOLUME_FLAG_CLEAR_DELAY_MS = 50L
+        private const val ROUTE_CHANGE_DEBOUNCE_MS = 100L
+        private const val DUPLICATE_VOLUME_EVENT_DEBOUNCE_MS = 400L
+    }
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var audioManager: AudioManager? = null
+    private var contentResolver: ContentResolver? = null
+
+    // Audio routing state
+    @Volatile
+    var currentRoute: String = ROUTE_SPEAKER
+        private set
+
+    @Volatile
+    var currentMaxVolume: Int = 100
+        private set
+
+    // Lifecycle state
+    @Volatile
+    var isListening: Boolean = false
+        private set
+
+    // Volume change detection (prevents feedback loops)
+    @Volatile
+    private var isAppChangingVolume: Boolean = false
+
+    private var pendingVolumeFlagClear: Runnable? = null
+    private var pendingRouteChange: Runnable? = null
+
+    @Volatile
+    private var lastAppVolumeChangeTime: Long = 0
+
+    @Volatile
+    private var lastEmittedVolumePercentage: Int = -1
+
+    @Volatile
+    private var lastEmittedVolumeEventTime: Long = 0
+
+    // Observers and callbacks
+    private var volumeObserver: ContentObserver? = null
+    private var audioDeviceCallback: AudioDeviceCallback? = null
+
+    init {
+        reactContext.addLifecycleEventListener(this)
+        try {
+            audioManager = reactContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            contentResolver = reactContext.contentResolver
+            if (audioManager == null) {
+                Log.e(TAG, "AudioManager is null - audio features will be disabled")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error initializing audio services", e)
+        }
+        Log.d(TAG, "AudioVolumeModule initialized (API ${Build.VERSION.SDK_INT})")
+    }
+
+    override fun getName(): String = NAME
+
+    // =========================================================================
+    // VOLUME CONTROL
+    // =========================================================================
+
+    /**
+     * Sets system volume with route-aware limits.
+     *
+     * @param percentage Volume level (0-200)
+     * @param promise React Native promise for result callback
+     */
+    @ReactMethod
+    fun setVolume(percentage: Int, promise: Promise) {
+        val am = audioManager
+        if (am == null) {
+            promise.reject("ERROR", "AudioManager not available")
+            return
+        }
+
+        try {
+            synchronized(this) {
+                isAppChangingVolume = true
+                lastAppVolumeChangeTime = System.currentTimeMillis()
+            }
+
+            var effectivePercentage = percentage.coerceIn(0, currentMaxVolume)
+            if (ROUTE_SPEAKER == currentRoute && effectivePercentage > 100) {
+                effectivePercentage = 100
+            }
+
+            val systemPercentage = effectivePercentage.coerceAtMost(100)
+            val maxSystemVolume = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            val targetVolume = Math.round((systemPercentage / 100f) * maxSystemVolume)
+
+            am.setStreamVolume(AudioManager.STREAM_MUSIC, targetVolume, 0)
+
+            scheduleVolumeFlagClear()
+
+            val result = Arguments.createMap().apply {
+                putInt("volume", effectivePercentage)
+                putInt("maxVolume", currentMaxVolume)
+                putString("route", currentRoute)
+            }
+            promise.resolve(result)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error setting volume", e)
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    /**
+     * Fast synchronous volume setter for gesture performance.
+     *
+     * @param percentage Volume level (0-200)
+     */
+    @ReactMethod
+    fun setVolumeSync(percentage: Int) {
+        val am = audioManager ?: return
+
+        try {
+            synchronized(this) {
+                isAppChangingVolume = true
+                lastAppVolumeChangeTime = System.currentTimeMillis()
+            }
+
+            var effectivePercentage = percentage.coerceIn(0, currentMaxVolume)
+            if (ROUTE_SPEAKER == currentRoute && effectivePercentage > 100) {
+                effectivePercentage = 100
+            }
+
+            val systemPercentage = effectivePercentage.coerceAtMost(100)
+            val maxSystemVolume = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            val targetVolume = Math.round((systemPercentage / 100f) * maxSystemVolume)
+
+            am.setStreamVolume(AudioManager.STREAM_MUSIC, targetVolume, 0)
+
+            scheduleVolumeFlagClear()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in setVolumeSync", e)
+        }
+    }
+
+    /**
+     * Gets current system volume as percentage.
+     */
+    @ReactMethod
+    fun getVolume(promise: Promise) {
+        val am = audioManager
+        if (am == null) {
+            promise.reject("ERROR", "AudioManager not available")
+            return
+        }
+
+        try {
+            val currentVolume = am.getStreamVolume(AudioManager.STREAM_MUSIC)
+            val maxVolume = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            val percentage = if (maxVolume > 0) Math.round((currentVolume / maxVolume.toFloat()) * 100) else 0
+
+            val result = Arguments.createMap().apply {
+                putInt("volume", percentage)
+                putInt("maxVolume", currentMaxVolume)
+                putString("route", currentRoute)
+            }
+            promise.resolve(result)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting volume", e)
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    // =========================================================================
+    // AUDIO ROUTE DETECTION
+    // =========================================================================
+
+    /**
+     * Gets current audio route and its volume limit.
+     */
+    @ReactMethod
+    fun getCurrentRoute(promise: Promise) {
+        try {
+            val route = detectCurrentRoute()
+            val maxVol = getMaxVolumeForRoute(route)
+
+            currentRoute = route
+            currentMaxVolume = maxVol
+
+            val result = Arguments.createMap().apply {
+                putString("route", route)
+                putInt("maxVolume", maxVol)
+            }
+            promise.resolve(result)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting route", e)
+            promise.reject("ERROR", e.message)
+        }
+    }
+
+    fun detectCurrentRoute(): String {
+        val am = audioManager ?: return ROUTE_SPEAKER
+
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            detectCurrentRouteModern(am)
+        } else {
+            detectCurrentRouteLegacy(am)
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.M)
+    private fun detectCurrentRouteModern(am: AudioManager): String {
+        val devices = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+        var detectedRoute = ROUTE_SPEAKER
+        var foundExternal = false
+
+        for (device in devices) {
+            val classified = classifyDevice(device)
+            if (classified == ROUTE_BLUETOOTH) {
+                return ROUTE_BLUETOOTH
+            } else if (classified == ROUTE_USB) {
+                detectedRoute = ROUTE_USB
+                foundExternal = true
+            } else if (classified == ROUTE_WIRED) {
+                if (detectedRoute != ROUTE_USB) {
+                    detectedRoute = ROUTE_WIRED
+                }
+                foundExternal = true
+            } else if (classified == ROUTE_UNKNOWN && !device.isSource) {
+                if (!foundExternal) {
+                    detectedRoute = ROUTE_WIRED
+                    foundExternal = true
+                }
+            }
+        }
+
+        return detectedRoute
+    }
+
+    @Suppress("DEPRECATION")
+    private fun detectCurrentRouteLegacy(am: AudioManager): String {
+        return when {
+            am.isBluetoothA2dpOn -> ROUTE_BLUETOOTH
+            am.isWiredHeadsetOn -> ROUTE_WIRED
+            else -> ROUTE_SPEAKER
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.M)
+    private fun classifyDevice(device: AudioDeviceInfo): String {
+        return when (device.type) {
+            AudioDeviceInfo.TYPE_BUILTIN_SPEAKER,
+            AudioDeviceInfo.TYPE_BUILTIN_EARPIECE,
+            AudioDeviceInfo.TYPE_TELEPHONY -> ROUTE_SPEAKER
+
+            AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+            AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> ROUTE_BLUETOOTH
+
+            AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+            AudioDeviceInfo.TYPE_WIRED_HEADSET,
+            AudioDeviceInfo.TYPE_LINE_ANALOG,
+            AudioDeviceInfo.TYPE_LINE_DIGITAL,
+            AudioDeviceInfo.TYPE_AUX_LINE,
+            AudioDeviceInfo.TYPE_HDMI,
+            AudioDeviceInfo.TYPE_DOCK,
+            AudioDeviceInfo.TYPE_FM,
+            AudioDeviceInfo.TYPE_FM_TUNER,
+            AudioDeviceInfo.TYPE_TV_TUNER -> ROUTE_WIRED
+
+            AudioDeviceInfo.TYPE_USB_HEADSET,
+            AudioDeviceInfo.TYPE_USB_ACCESSORY,
+            AudioDeviceInfo.TYPE_USB_DEVICE -> ROUTE_USB
+
+            else -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val type = device.type
+                    if (type == 26 || type == 27) { // BLE_HEADSET, BLE_SPEAKER
+                        return ROUTE_BLUETOOTH
+                    }
+                }
+                ROUTE_UNKNOWN
+            }
+        }
+    }
+
+    fun getMaxVolumeForRoute(route: String): Int {
+        return if (ROUTE_SPEAKER == route) 100 else 200
+    }
+
+    fun isOnSpeaker(): Boolean = ROUTE_SPEAKER == detectCurrentRoute()
+
+    // =========================================================================
+    // LISTENERS & EVENT HANDLING
+    // =========================================================================
+
+    @ReactMethod
+    fun startListening() {
+        if (isListening) {
+            Log.d(TAG, "Already listening, ignoring startListening call")
+            return
+        }
+
+        Log.i(TAG, "Starting audio volume listeners")
+        isListening = true
+
+        currentRoute = detectCurrentRoute()
+        currentMaxVolume = getMaxVolumeForRoute(currentRoute)
+        Log.d(TAG, "Initial route: $currentRoute, maxVolume: $currentMaxVolume")
+
+        registerVolumeObserver()
+        registerAudioDeviceCallback()
+    }
+
+    @ReactMethod
+    fun stopListening() {
+        if (!isListening) {
+            Log.d(TAG, "Not listening, ignoring stopListening call")
+            return
+        }
+
+        Log.i(TAG, "Stopping audio volume listeners")
+        isListening = false
+
+        cancelPendingAudioCallbacks()
+        unregisterVolumeObserver()
+        unregisterAudioDeviceCallback()
+    }
+
+    private fun registerVolumeObserver() {
+        if (volumeObserver != null || contentResolver == null) {
+            return
+        }
+
+        try {
+            volumeObserver = object : ContentObserver(mainHandler) {
+                override fun onChange(selfChange: Boolean) {
+                    handleVolumeObserverChange(null)
+                }
+
+                override fun onChange(selfChange: Boolean, uri: Uri?) {
+                    handleVolumeObserverChange(uri)
+                }
+            }
+
+            contentResolver?.registerContentObserver(
+                Settings.System.CONTENT_URI,
+                true,
+                volumeObserver!!
+            )
+            Log.d(TAG, "Volume observer registered")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error registering volume observer", e)
+        }
+    }
+
+    private fun handleVolumeObserverChange(uri: Uri?) {
+        if (uri != null && !isVolumeRelatedSettingsUri(uri)) {
+            return
+        }
+
+        synchronized(this) {
+            val now = System.currentTimeMillis()
+            if (isAppChangingVolume || (now - lastAppVolumeChangeTime < APP_CHANGE_DEBOUNCE_MS)) {
+                return
+            }
+        }
+
+        handleHardwareVolumeChange()
+    }
+
+    private fun unregisterVolumeObserver() {
+        val observer = volumeObserver
+        if (observer != null && contentResolver != null) {
+            try {
+                contentResolver?.unregisterContentObserver(observer)
+                volumeObserver = null
+                Log.d(TAG, "Volume observer unregistered")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error unregistering volume observer", e)
+            }
+        }
+    }
+
+    private fun getSystemVolumePercentage(): Int {
+        val am = audioManager ?: return 0
+        val currentVolume = am.getStreamVolume(AudioManager.STREAM_MUSIC)
+        val maxVolume = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        return if (maxVolume > 0) Math.round((currentVolume / maxVolume.toFloat()) * 100) else 0
+    }
+
+    private fun handleHardwareVolumeChange() {
+        val am = audioManager ?: return
+
+        try {
+            val now = System.currentTimeMillis()
+            val percentage = getSystemVolumePercentage()
+
+            if (percentage == lastEmittedVolumePercentage &&
+                (now - lastEmittedVolumeEventTime) < DUPLICATE_VOLUME_EVENT_DEBOUNCE_MS) {
+                return
+            }
+
+            lastEmittedVolumePercentage = percentage
+            lastEmittedVolumeEventTime = now
+
+            Log.d(TAG, "Hardware volume change detected: $percentage%")
+
+            val params = Arguments.createMap().apply {
+                putInt("volume", percentage)
+                putInt("maxVolume", currentMaxVolume)
+                putString("route", currentRoute)
+                putBoolean("fromHardware", true)
+            }
+            sendEvent(EVENT_VOLUME_CHANGE, params)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error handling hardware volume change", e)
+        }
+    }
+
+    private fun registerAudioDeviceCallback() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || audioManager == null) {
+            return
+        }
+
+        try {
+            audioDeviceCallback = object : AudioDeviceCallback() {
+                override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
+                    Log.d(TAG, "Audio devices added: ${addedDevices?.size ?: 0}")
+                    handleRouteChange()
+                }
+
+                override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
+                    Log.d(TAG, "Audio devices removed: ${removedDevices?.size ?: 0}")
+                    handleRouteChange()
+                }
+            }
+
+            audioManager?.registerAudioDeviceCallback(audioDeviceCallback, mainHandler)
+            Log.d(TAG, "Audio device callback registered")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error registering audio device callback", e)
+        }
+    }
+
+    private fun unregisterAudioDeviceCallback() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || audioManager == null || audioDeviceCallback == null) {
+            return
+        }
+
+        try {
+            audioManager?.unregisterAudioDeviceCallback(audioDeviceCallback)
+            audioDeviceCallback = null
+            Log.d(TAG, "Audio device callback unregistered")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error unregistering audio device callback", e)
+        }
+    }
+
+    private fun scheduleVolumeFlagClear() {
+        pendingVolumeFlagClear?.let { mainHandler.removeCallbacks(it) }
+        val clearRunnable = Runnable {
+            pendingVolumeFlagClear = null
+            synchronized(this) {
+                isAppChangingVolume = false
+            }
+        }
+        pendingVolumeFlagClear = clearRunnable
+        mainHandler.postDelayed(clearRunnable, VOLUME_FLAG_CLEAR_DELAY_MS)
+    }
+
+    private fun cancelPendingAudioCallbacks() {
+        pendingVolumeFlagClear?.let {
+            mainHandler.removeCallbacks(it)
+            pendingVolumeFlagClear = null
+        }
+        pendingRouteChange?.let {
+            mainHandler.removeCallbacks(it)
+            pendingRouteChange = null
+        }
+    }
+
+    private fun handleRouteChange() {
+        pendingRouteChange?.let { mainHandler.removeCallbacks(it) }
+        val routeRunnable = Runnable {
+            pendingRouteChange = null
+            val previousRoute = currentRoute
+            val newRoute = detectCurrentRoute()
+            val newMaxVolume = getMaxVolumeForRoute(newRoute)
+
+            if (newRoute != previousRoute) {
+                currentRoute = newRoute
+                currentMaxVolume = newMaxVolume
+
+                Log.i(TAG, "Route changed: $previousRoute -> $newRoute")
+
+                val params = Arguments.createMap().apply {
+                    putString("route", newRoute)
+                    putString("previousRoute", previousRoute)
+                    putInt("maxVolume", newMaxVolume)
+                    putInt("volume", getSystemVolumePercentage())
+                }
+                sendEvent(EVENT_ROUTE_CHANGE, params)
+            }
+        }
+        pendingRouteChange = routeRunnable
+        mainHandler.postDelayed(routeRunnable, ROUTE_CHANGE_DEBOUNCE_MS)
+    }
+
+    private fun sendEvent(eventName: String, params: WritableMap?) {
+        if (reactContext.hasActiveReactInstance()) {
+            try {
+                reactContext
+                    .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                    ?.emit(eventName, params)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error sending event: $eventName", e)
+            }
+        }
+    }
+
+    /**
+     * Hands a volume key press to JS instead of the system.
+     *
+     * @return true if the key was consumed
+     */
+    fun handleVolumeKey(keyCode: Int): Boolean {
+        if (keyCode != KeyEvent.KEYCODE_VOLUME_UP && keyCode != KeyEvent.KEYCODE_VOLUME_DOWN) {
+            return false
+        }
+        val am = audioManager
+        if (!isListening || am == null || !reactContext.hasActiveReactInstance()) {
+            return false
+        }
+        val maxVolume = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        if (maxVolume <= 0) {
+            return false
+        }
+        val step = maxOf(1, maxVolume / 15)
+        val params = Arguments.createMap().apply {
+            putInt("direction", if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) 1 else -1)
+            putDouble("stepPercent", step * 100.0 / maxVolume)
+        }
+        sendEvent(EVENT_VOLUME_KEY, params)
+        return true
+    }
+
+    // =========================================================================
+    // LIFECYCLE CALLBACKS
+    // =========================================================================
+
+    override fun onHostResume() {
+        Log.d(TAG, "onHostResume")
+    }
+
+    override fun onHostPause() {
+        Log.d(TAG, "onHostPause")
+    }
+
+    override fun onHostDestroy() {
+        Log.i(TAG, "onHostDestroy - cleaning up")
+        cancelPendingAudioCallbacks()
+        stopListening()
+    }
+
+    private fun isVolumeRelatedSettingsUri(uri: Uri): Boolean {
+        val uriString = uri.toString().lowercase(Locale.US)
+        return uriString.contains("volume_music") ||
+            uriString.contains("volume_ring") ||
+            uriString.contains("volume_alarm") ||
+            uriString.contains("stream_volume") ||
+            uriString.contains("/volume")
+    }
+}
