@@ -1,7 +1,9 @@
 package com.glide.app.player
 
+import android.app.Activity
 import android.content.ContentUris
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
@@ -9,10 +11,12 @@ import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
 import com.facebook.react.bridge.Arguments
+import com.facebook.react.bridge.BaseActivityEventListener
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.module.annotations.ReactModule
 import java.io.File
 import java.io.FileOutputStream
@@ -23,6 +27,50 @@ class MediaStoreVideoModule(private val reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 
     override fun getName(): String = NAME
+
+    private var deletePromise: Promise? = null
+    private var pendingDeleteUris: List<Uri>? = null
+
+    init {
+        reactContext.addActivityEventListener(object : BaseActivityEventListener() {
+            override fun onActivityResult(
+                activity: Activity,
+                requestCode: Int,
+                resultCode: Int,
+                data: Intent?
+            ) {
+                if (requestCode == DELETE_REQUEST_CODE) {
+                    val p = deletePromise
+                    val urisToRetry = pendingDeleteUris
+                    deletePromise = null
+                    pendingDeleteUris = null
+                    if (p != null) {
+                        if (resultCode == Activity.RESULT_OK) {
+                            if (urisToRetry != null && Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
+                                // On Android 10, user approval only grants permission. Re-run deletion.
+                                try {
+                                    for (uri in urisToRetry) {
+                                        if (uri.scheme == "content") {
+                                            reactContext.contentResolver.delete(uri, null, null)
+                                        } else if (uri.scheme == "file") {
+                                            File(uri.path ?: "").delete()
+                                        }
+                                    }
+                                    p.resolve(true)
+                                } catch (e: Exception) {
+                                    p.reject("E_DELETE_FAILED", e.message, e)
+                                }
+                            } else {
+                                p.resolve(true)
+                            }
+                        } else {
+                            p.reject("E_DELETE_CANCELLED", "Deletion was cancelled or not completed")
+                        }
+                    }
+                }
+            }
+        })
+    }
 
     private data class FolderBucketData(
         val id: String,
@@ -36,6 +84,7 @@ class MediaStoreVideoModule(private val reactContext: ReactApplicationContext) :
     companion object {
         const val NAME = "MediaStoreVideoModule"
         private const val TAG = "MediaStoreVideoModule"
+        private const val DELETE_REQUEST_CODE = 42001
         private val thumbExecutor = java.util.concurrent.Executors.newFixedThreadPool(4)
 
         private val VIDEO_PROJECTION = arrayOf(
@@ -452,6 +501,114 @@ class MediaStoreVideoModule(private val reactContext: ReactApplicationContext) :
             } catch (e: Exception) {
                 promise.resolve(null)
             }
+        }
+    }
+
+    @ReactMethod
+    fun deleteVideos(uriStrings: ReadableArray, promise: Promise) {
+        if (deletePromise != null) {
+            promise.reject("E_BUSY", "Another delete operation is in progress")
+            return
+        }
+
+        if (uriStrings.size() == 0) {
+            promise.resolve(true)
+            return
+        }
+
+        val urisToDelete = ArrayList<Uri>()
+        for (i in 0 until uriStrings.size()) {
+            val s = uriStrings.getString(i) ?: continue
+            val uri = if (s.startsWith("content://") || s.startsWith("file://")) {
+                Uri.parse(s)
+            } else {
+                Uri.fromFile(File(s))
+            }
+            urisToDelete.add(uri)
+        }
+
+        if (urisToDelete.isEmpty()) {
+            promise.resolve(true)
+            return
+        }
+
+        val contentResolver = reactContext.contentResolver
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val contentUris = urisToDelete.filter { it.scheme == "content" }
+            val fileUris = urisToDelete.filter { it.scheme != "content" }
+
+            for (fileUri in fileUris) {
+                try {
+                    File(fileUri.path ?: "").delete()
+                } catch (_: Throwable) {}
+            }
+
+            if (contentUris.isNotEmpty()) {
+                val activity = reactContext.currentActivity
+                if (activity == null) {
+                    promise.reject("E_NO_ACTIVITY", "Cannot show delete dialog without an active window")
+                    return
+                }
+                try {
+                    val pendingIntent = MediaStore.createDeleteRequest(contentResolver, contentUris)
+                    pendingDeleteUris = null
+                    deletePromise = promise
+                    activity.startIntentSenderForResult(
+                        pendingIntent.intentSender,
+                        DELETE_REQUEST_CODE,
+                        null,
+                        0,
+                        0,
+                        0
+                    )
+                } catch (e: Exception) {
+                    deletePromise = null
+                    pendingDeleteUris = null
+                    promise.reject("E_DELETE_REQUEST_FAILED", e.message, e)
+                }
+            } else {
+                promise.resolve(true)
+            }
+        } else {
+            for (i in 0 until urisToDelete.size) {
+                val uri = urisToDelete[i]
+                try {
+                    if (uri.scheme == "content") {
+                        contentResolver.delete(uri, null, null)
+                    } else if (uri.scheme == "file") {
+                        File(uri.path ?: "").delete()
+                    }
+                } catch (e: Exception) {
+                    // ponytail: Android 10 RecoverableSecurityException only prompts for one URI at a time; bulk deletes would need chained prompts.
+                    if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q && e is android.app.RecoverableSecurityException) {
+                        val activity = reactContext.currentActivity
+                        if (activity != null) {
+                            try {
+                                pendingDeleteUris = urisToDelete.subList(i, urisToDelete.size)
+                                deletePromise = promise
+                                activity.startIntentSenderForResult(
+                                    e.userAction.actionIntent.intentSender,
+                                    DELETE_REQUEST_CODE,
+                                    null,
+                                    0,
+                                    0,
+                                    0
+                                )
+                                return
+                            } catch (t: Throwable) {
+                                deletePromise = null
+                                pendingDeleteUris = null
+                                promise.reject("E_DELETE_FAILED", t.message, t)
+                                return
+                            }
+                        }
+                    }
+                    promise.reject("E_DELETE_FAILED", e.message, e)
+                    return
+                }
+            }
+            promise.resolve(true)
         }
     }
 }

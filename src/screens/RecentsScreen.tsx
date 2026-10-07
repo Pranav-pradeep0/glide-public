@@ -4,12 +4,12 @@ import { View, StyleSheet, RefreshControl, Alert } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useNavigation } from '@react-navigation/native';
-import { CameraRoll } from '@react-native-camera-roll/camera-roll';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RootStackParamList, VideoHistoryEntry } from '@/types';
 import { Loader } from '@/components/Loader';
 import { useVideoHistoryStore } from '@/store/videoHistoryStore';
 import { useTheme } from '@/hooks/useTheme';
+import { MediaService } from '@/services/MediaService';
 import { NavigationService } from '@/services/NavigationService';
 import { VideoOptionsBottomSheet } from '@/components/VideoOptionsBottomSheet';
 import { Chip, IconButton, SortButton } from '@/components/ui';
@@ -103,7 +103,7 @@ export default function RecentsScreen() {
         const contentUri = video.contentUri;
         confirmDelete(video.videoName, async () => {
             try {
-                await CameraRoll.deletePhotos([contentUri]);
+                await MediaService.deleteVideos([contentUri]);
                 clearVideoHistory(video.videoPath);
             } catch (error) {
                 console.error('[RecentsScreen] Delete failed:', error);

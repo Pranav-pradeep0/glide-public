@@ -74,7 +74,7 @@ export async function shareVideo(path: string) {
 }
 
 /**
- * Android 11+ shows its own system dialog inside CameraRoll.deletePhotos,
+ * Android 11+ shows its own system dialog inside MediaService.deleteVideos,
  * so only older versions get an in-app confirm.
  */
 export function confirmDelete(name: string, run: () => void) {

@@ -13,7 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useNavigation } from '@react-navigation/native';
 import Feather from '@react-native-vector-icons/feather';
-import { CameraRoll } from '@react-native-camera-roll/camera-roll';
+import { MediaService } from '@/services/MediaService';
 
 import { useTheme } from '@/hooks/useTheme';
 import { useVideoSearch } from '@/hooks/useVideoSearch';
@@ -94,7 +94,7 @@ export default function SearchScreen() {
         }
         confirmDelete(video.name, async () => {
             try {
-                await CameraRoll.deletePhotos([videoUri]);
+                await MediaService.deleteVideos([videoUri]);
                 clearHistoryForPath(video.path);
                 if (video.album) {markAlbumCoverDirty(video.album);}
                 setDeleted(prev => new Set(prev).add(video.path));

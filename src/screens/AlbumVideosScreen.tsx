@@ -4,11 +4,10 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { FlashList } from '@shopify/flash-list';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { CameraRoll } from '@react-native-camera-roll/camera-roll';
-
 import { RootStackParamList, VideoFile, VideoHistoryEntry } from '@/types';
 import { useTheme } from '@/hooks/useTheme';
 import { markAlbumCoverDirty, useAlbumVideos } from '@/hooks/useMediaService';
+import { MediaService } from '@/services/MediaService';
 import { formatFileSize } from '@/utils/formatUtils';
 import { NavigationService } from '@/services/NavigationService';
 import { VideoOptionsBottomSheet } from '@/components/VideoOptionsBottomSheet';
@@ -69,7 +68,7 @@ export default function AlbumVideosScreen() {
         }
         confirmDelete(video.name, async () => {
             try {
-                await CameraRoll.deletePhotos([videoUri]);
+                await MediaService.deleteVideos([videoUri]);
                 clearHistoryForPath(video.path);
                 markAlbumCoverDirty(albumTitle);
                 refetch();

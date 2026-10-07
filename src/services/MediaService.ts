@@ -45,6 +45,19 @@ class MediaServiceClass {
     }
 
     /**
+     * Delete videos by their URIs (content:// or file://).
+     * Prompts the user via the system delete confirmation dialog on Android 11+.
+     */
+    async deleteVideos(uris: string[]): Promise<boolean> {
+        if (Platform.OS !== 'android' || !this.module?.deleteVideos) {
+            return false;
+        }
+        await this.module.deleteVideos(uris);
+        this.invalidateCache();
+        return true;
+    }
+
+    /**
      * Scan the device media library once in a single native pass,
      * returning all videos and pre-aggregated folder buckets.
      */
